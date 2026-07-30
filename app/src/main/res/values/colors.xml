@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <color name="motosos_primary_dark">#0D1B2A</color>
+    <color name="motosos_primary_blue">#1E3A8A</color>
+    <color name="motosos_success">#16A34A</color>
+    <color name="motosos_alert">#EF4444</color>
+    <color name="motosos_background">#F1F5F9</color>
+    <color name="motosos_surface">#FFFFFF</color>
     <color name="purple_200">#FFBB86FC</color>
     <color name="purple_500">#FF6200EE</color>
     <color name="purple_700">#FF3700B3</color>
