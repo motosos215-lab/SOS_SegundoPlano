@@ -14,6 +14,7 @@
     <string name="active_trip">Viaje activo</string>
     <string name="session_started">Sesión iniciada</string>
     <string name="pending_permissions">Pendiente de permisos</string>
+    <string name="background_location_authorized">Ubicación en segundo plano autorizada</string>
     <string name="trip_time">Tiempo de viaje</string>
     <string name="speed">Velocidad</string>
     <string name="gps_accuracy">Precisión GPS</string>
@@ -36,4 +37,13 @@
     <string name="cd_device_icon">Icono de dispositivo</string>
     <string name="cd_unavailable_navigation">Elemento no disponible en esta historia</string>
     <string name="cd_monitoring_indicator">Indicador visual de sesión iniciada</string>
+    <string name="location_permission_required_title">Permiso de ubicación requerido</string>
+    <string name="location_permission_foreground_explanation">MotoSOS necesita acceso a la ubicación para validar el monitoreo durante el viaje.</string>
+    <string name="location_permission_settings_help">Revisa los permisos de MotoSOS en la configuración del dispositivo.</string>
+    <string name="background_location_required_title">Ubicación en segundo plano requerida</string>
+    <string name="background_location_explanation">MotoSOS necesita que la ubicación esté permitida en segundo plano para continuar el viaje cuando la app esté minimizada.</string>
+    <string name="background_location_settings_help">En los permisos de ubicación de MotoSOS, selecciona la opción disponible para permitir el acceso todo el tiempo.</string>
+    <string name="open_app_settings">Abrir configuración</string>
+    <string name="recheck_permissions">Revisar permisos</string>
+    <string name="not_now">Ahora no</string>
 </resources>
