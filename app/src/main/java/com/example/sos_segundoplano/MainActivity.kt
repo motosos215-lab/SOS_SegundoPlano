@@ -23,10 +23,14 @@ import com.example.sos_segundoplano.core.permissions.AppNotificationStatusProvid
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionChecker
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatus
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatusProvider
+import com.example.sos_segundoplano.core.permissions.BluetoothRequirementChecker
+import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatus
+import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatusProvider
 import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.domain.usecase.StartTripUseCase
 import com.example.sos_segundoplano.features.background.MonitoringScreen
 import com.example.sos_segundoplano.features.permissions.BackgroundLocationPermissionDialog
+import com.example.sos_segundoplano.features.permissions.BluetoothRequirementDialog
 import com.example.sos_segundoplano.features.permissions.NotificationPermissionDialog
 import com.example.sos_segundoplano.features.trip.HomeScreen
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
@@ -44,8 +48,10 @@ class MainActivity : ComponentActivity() {
                 MotoSosApp(
                     locationPermissionStatusProvider = BackgroundLocationPermissionChecker(applicationContext),
                     notificationStatusProvider = AppNotificationStatusChecker(applicationContext),
+                    bluetoothRequirementStatusProvider = BluetoothRequirementChecker(applicationContext),
                     onOpenAppSettings = ::openAppSettings,
-                    onOpenNotificationSettings = ::openNotificationSettings
+                    onOpenNotificationSettings = ::openNotificationSettings,
+                    onOpenBluetoothSettings = ::openBluetoothSettings
                 )
             }
         }
@@ -73,6 +79,18 @@ class MainActivity : ComponentActivity() {
             startActivity(fallbackIntent)
         }
     }
+
+    private fun openBluetoothSettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+        } catch (_: ActivityNotFoundException) {
+            try {
+                startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
+            } catch (_: ActivityNotFoundException) {
+                openAppSettings()
+            }
+        }
+    }
 }
 
 @Composable
@@ -83,8 +101,11 @@ fun MotoSosApp(
         BackgroundLocationPermissionStatusProvider { BackgroundLocationPermissionStatus.Granted },
     notificationStatusProvider: AppNotificationStatusProvider =
         AppNotificationStatusProvider { AppNotificationStatus.Enabled },
+    bluetoothRequirementStatusProvider: BluetoothRequirementStatusProvider =
+        BluetoothRequirementStatusProvider { BluetoothRequirementStatus.Enabled },
     onOpenAppSettings: () -> Unit = {},
-    onOpenNotificationSettings: () -> Unit = {}
+    onOpenNotificationSettings: () -> Unit = {},
+    onOpenBluetoothSettings: () -> Unit = {}
 ) {
     var isTripActive by rememberSaveable { mutableStateOf(false) }
     var isTripStartPending by remember { mutableStateOf(false) }
@@ -92,6 +113,9 @@ fun MotoSosApp(
         mutableStateOf<BackgroundLocationPermissionStatus?>(null)
     }
     var isNotificationDialogVisible by remember { mutableStateOf(false) }
+    var bluetoothDialogStatus by remember {
+        mutableStateOf<BluetoothRequirementStatus?>(null)
+    }
     val currentState = if (isTripActive) {
         TripSessionState.Active
     } else {
@@ -103,18 +127,32 @@ fun MotoSosApp(
             BackgroundLocationPermissionStatus.Granted -> {
                 when (notificationStatusProvider.getStatus()) {
                     AppNotificationStatus.Enabled -> {
-                        if (isTripStartPending && currentState == TripSessionState.Idle) {
-                            val nextState = startTripUseCase(currentState)
-                            isTripActive = nextState == TripSessionState.Active
+                        when (val bluetoothStatus = bluetoothRequirementStatusProvider.getStatus()) {
+                            BluetoothRequirementStatus.Enabled -> {
+                                if (isTripStartPending && currentState == TripSessionState.Idle) {
+                                    val nextState = startTripUseCase(currentState)
+                                    isTripActive = nextState == TripSessionState.Active
+                                }
+                                isTripStartPending = false
+                                permissionDialogStatus = null
+                                isNotificationDialogVisible = false
+                                bluetoothDialogStatus = null
+                            }
+
+                            BluetoothRequirementStatus.PermissionMissing,
+                            BluetoothRequirementStatus.Disabled,
+                            BluetoothRequirementStatus.Unsupported -> {
+                                permissionDialogStatus = null
+                                isNotificationDialogVisible = false
+                                bluetoothDialogStatus = bluetoothStatus
+                            }
                         }
-                        isTripStartPending = false
-                        permissionDialogStatus = null
-                        isNotificationDialogVisible = false
                     }
 
                     AppNotificationStatus.Disabled -> {
                         permissionDialogStatus = null
                         isNotificationDialogVisible = true
+                        bluetoothDialogStatus = null
                     }
                 }
             }
@@ -123,6 +161,7 @@ fun MotoSosApp(
             BackgroundLocationPermissionStatus.BackgroundMissing -> {
                 permissionDialogStatus = locationStatus
                 isNotificationDialogVisible = false
+                bluetoothDialogStatus = null
             }
         }
     }
@@ -152,6 +191,7 @@ fun MotoSosApp(
                 isTripStartPending = false
                 permissionDialogStatus = null
                 isNotificationDialogVisible = false
+                bluetoothDialogStatus = null
             }
         )
     }
@@ -163,6 +203,23 @@ fun MotoSosApp(
             },
             onDismiss = {
                 isTripStartPending = false
+                isNotificationDialogVisible = false
+                permissionDialogStatus = null
+                bluetoothDialogStatus = null
+            }
+        )
+    }
+    bluetoothDialogStatus?.let { status ->
+        BluetoothRequirementDialog(
+            status = status,
+            onOpenAppSettings = onOpenAppSettings,
+            onOpenBluetoothSettings = onOpenBluetoothSettings,
+            onRecheckRequirements = {
+                validateTripStartRequirements()
+            },
+            onDismiss = {
+                isTripStartPending = false
+                bluetoothDialogStatus = null
                 isNotificationDialogVisible = false
                 permissionDialogStatus = null
             }
