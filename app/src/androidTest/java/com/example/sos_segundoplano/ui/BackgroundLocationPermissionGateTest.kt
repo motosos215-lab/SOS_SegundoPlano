@@ -9,6 +9,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.example.sos_segundoplano.MotoSosApp
+import com.example.sos_segundoplano.core.permissions.AppNotificationStatus
+import com.example.sos_segundoplano.core.permissions.AppNotificationStatusProvider
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatus
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatusProvider
 import com.example.sos_segundoplano.domain.model.TripSessionState
@@ -153,6 +155,9 @@ class BackgroundLocationPermissionGateTest {
                 MotoSosApp(
                     startTripUseCase = startTrip,
                     locationPermissionStatusProvider = provider,
+                    notificationStatusProvider = AppNotificationStatusProvider {
+                        AppNotificationStatus.Enabled
+                    },
                     onOpenAppSettings = onOpenAppSettings
                 )
             }

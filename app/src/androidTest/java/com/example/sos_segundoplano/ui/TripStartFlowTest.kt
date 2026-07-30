@@ -9,6 +9,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.example.sos_segundoplano.MotoSosApp
+import com.example.sos_segundoplano.core.permissions.AppNotificationStatus
+import com.example.sos_segundoplano.core.permissions.AppNotificationStatusProvider
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatus
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatusProvider
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
@@ -26,6 +28,9 @@ class TripStartFlowTest {
                 MotoSosApp(
                     locationPermissionStatusProvider = BackgroundLocationPermissionStatusProvider {
                         BackgroundLocationPermissionStatus.Granted
+                    },
+                    notificationStatusProvider = AppNotificationStatusProvider {
+                        AppNotificationStatus.Enabled
                     }
                 )
             }
@@ -47,7 +52,7 @@ class TripStartFlowTest {
         composeRule.onNodeWithText("Monitoreo").assertIsDisplayed()
         composeRule.onNodeWithText("Viaje activo").assertIsDisplayed()
         composeRule.onNodeWithText("Sesión iniciada").assertIsDisplayed()
-        composeRule.onNodeWithText("Ubicación en segundo plano autorizada").assertIsDisplayed()
+        composeRule.onNodeWithText("Ubicación y notificaciones habilitadas").assertIsDisplayed()
         composeRule.onAllNodesWithText("--").assertCountEquals(2)
         composeRule.onNodeWithText("km/h").assertIsDisplayed()
         composeRule.onAllNodesWithText("Pendiente").assertCountEquals(2)
