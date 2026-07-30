@@ -13,6 +13,8 @@ import com.example.sos_segundoplano.core.permissions.AppNotificationStatus
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatusProvider
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatus
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatusProvider
+import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatus
+import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatusProvider
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
 import org.junit.Rule
 import org.junit.Test
@@ -31,6 +33,9 @@ class TripStartFlowTest {
                     },
                     notificationStatusProvider = AppNotificationStatusProvider {
                         AppNotificationStatus.Enabled
+                    },
+                    bluetoothRequirementStatusProvider = BluetoothRequirementStatusProvider {
+                        BluetoothRequirementStatus.Enabled
                     }
                 )
             }
@@ -52,7 +57,7 @@ class TripStartFlowTest {
         composeRule.onNodeWithText("Monitoreo").assertIsDisplayed()
         composeRule.onNodeWithText("Viaje activo").assertIsDisplayed()
         composeRule.onNodeWithText("Sesión iniciada").assertIsDisplayed()
-        composeRule.onNodeWithText("Ubicación y notificaciones habilitadas").assertIsDisplayed()
+        composeRule.onNodeWithText("Ubicación, notificaciones y Bluetooth habilitados").assertIsDisplayed()
         composeRule.onAllNodesWithText("--").assertCountEquals(2)
         composeRule.onNodeWithText("km/h").assertIsDisplayed()
         composeRule.onAllNodesWithText("Pendiente").assertCountEquals(2)

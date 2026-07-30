@@ -13,6 +13,8 @@ import com.example.sos_segundoplano.core.permissions.AppNotificationStatus
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatusProvider
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatus
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatusProvider
+import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatus
+import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatusProvider
 import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
 import org.junit.Assert.assertEquals
@@ -45,6 +47,9 @@ class NotificationPermissionGateTest {
 
     @Test
     fun disabledNotificationsShowDialogAndDoNotStartTrip() {
+        val bluetoothProvider = FakeNotificationGateBluetoothRequirementStatusProvider(
+            BluetoothRequirementStatus.Enabled
+        )
         var startTripCallCount = 0
 
         setAppContent(
@@ -52,6 +57,7 @@ class NotificationPermissionGateTest {
                 BackgroundLocationPermissionStatus.Granted
             ),
             notificationProvider = FakeAppNotificationStatusProvider(AppNotificationStatus.Disabled),
+            bluetoothProvider = bluetoothProvider,
             startTrip = { currentState ->
                 startTripCallCount++
                 when (currentState) {
@@ -67,6 +73,7 @@ class NotificationPermissionGateTest {
         composeRule.onNodeWithText("Notificaciones requeridas").assertIsDisplayed()
         composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
         composeRule.onAllNodesWithText("Monitoreo").assertCountEquals(0)
+        assertEquals(0, bluetoothProvider.invocationCount)
         assertEquals(0, startTripCallCount)
     }
 
@@ -253,6 +260,8 @@ class NotificationPermissionGateTest {
     private fun setAppContent(
         locationProvider: BackgroundLocationPermissionStatusProvider,
         notificationProvider: AppNotificationStatusProvider,
+        bluetoothProvider: BluetoothRequirementStatusProvider =
+            FakeNotificationGateBluetoothRequirementStatusProvider(BluetoothRequirementStatus.Enabled),
         onOpenNotificationSettings: () -> Unit = {},
         startTrip: (TripSessionState) -> TripSessionState = { currentState ->
             when (currentState) {
@@ -267,10 +276,25 @@ class NotificationPermissionGateTest {
                     startTripUseCase = startTrip,
                     locationPermissionStatusProvider = locationProvider,
                     notificationStatusProvider = notificationProvider,
+                    bluetoothRequirementStatusProvider = bluetoothProvider,
                     onOpenNotificationSettings = onOpenNotificationSettings
                 )
             }
         }
+    }
+}
+
+private class FakeNotificationGateBluetoothRequirementStatusProvider(
+    initialStatus: BluetoothRequirementStatus
+) : BluetoothRequirementStatusProvider {
+    private var currentStatus = initialStatus
+
+    var invocationCount: Int = 0
+        private set
+
+    override fun getStatus(): BluetoothRequirementStatus {
+        invocationCount++
+        return currentStatus
     }
 }
 

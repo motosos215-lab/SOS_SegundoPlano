@@ -15,7 +15,7 @@
     <string name="session_started">Sesión iniciada</string>
     <string name="pending_permissions">Pendiente de permisos</string>
     <string name="background_location_authorized">Ubicación en segundo plano autorizada</string>
-    <string name="location_and_notifications_enabled">Ubicación y notificaciones habilitadas</string>
+    <string name="location_notifications_bluetooth_enabled">Ubicación, notificaciones y Bluetooth habilitados</string>
     <string name="trip_time">Tiempo de viaje</string>
     <string name="speed">Velocidad</string>
     <string name="gps_accuracy">Precisión GPS</string>
@@ -51,4 +51,16 @@
     <string name="notification_permission_required_title">Notificaciones requeridas</string>
     <string name="notification_permission_explanation">MotoSOS necesita que las notificaciones estén habilitadas para mostrar el estado del monitoreo durante un viaje.</string>
     <string name="notification_permission_settings_help">Activa las notificaciones de MotoSOS en la configuración del dispositivo y vuelve a revisar.</string>
+    <string name="bluetooth_permission_required_title">Permiso de Bluetooth requerido</string>
+    <string name="bluetooth_permission_explanation">MotoSOS necesita acceso a dispositivos cercanos para comprobar el estado de Bluetooth antes de iniciar el viaje.</string>
+    <string name="bluetooth_permission_settings_help">Autoriza el permiso de dispositivos cercanos desde la configuración de MotoSOS y vuelve a revisar.</string>
+    <string name="bluetooth_disabled_title">Bluetooth desactivado</string>
+    <string name="bluetooth_disabled_explanation">Activa Bluetooth para que MotoSOS pueda preparar la comunicación con el smartwatch durante el viaje.</string>
+    <string name="bluetooth_disabled_help">La vinculación y sincronización con el reloj se implementan en historias separadas.</string>
+    <string name="bluetooth_unsupported_title">Bluetooth no disponible</string>
+    <string name="bluetooth_unsupported_explanation">Este dispositivo no informa un adaptador Bluetooth disponible.</string>
+    <string name="bluetooth_unsupported_help">MotoSOS no puede preparar la comunicación con el smartwatch en este dispositivo.</string>
+    <string name="open_motosos_settings">Abrir configuración de MotoSOS</string>
+    <string name="open_bluetooth_settings">Abrir Bluetooth</string>
+    <string name="recheck_requirements">Revisar requisitos</string>
 </resources>

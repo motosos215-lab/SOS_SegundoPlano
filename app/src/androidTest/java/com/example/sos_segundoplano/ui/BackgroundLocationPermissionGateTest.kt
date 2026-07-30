@@ -13,6 +13,8 @@ import com.example.sos_segundoplano.core.permissions.AppNotificationStatus
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatusProvider
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatus
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatusProvider
+import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatus
+import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatusProvider
 import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
 import org.junit.Assert.assertEquals
@@ -157,6 +159,9 @@ class BackgroundLocationPermissionGateTest {
                     locationPermissionStatusProvider = provider,
                     notificationStatusProvider = AppNotificationStatusProvider {
                         AppNotificationStatus.Enabled
+                    },
+                    bluetoothRequirementStatusProvider = BluetoothRequirementStatusProvider {
+                        BluetoothRequirementStatus.Enabled
                     },
                     onOpenAppSettings = onOpenAppSettings
                 )
