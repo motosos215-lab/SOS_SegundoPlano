@@ -76,7 +76,7 @@ fun MonitoringScreen(modifier: Modifier = Modifier) {
             ) {
                 MotoMonitoringIndicator()
                 Text(
-                    text = stringResource(R.string.pending_permissions),
+                    text = stringResource(R.string.background_location_authorized),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MotoSuccess,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
