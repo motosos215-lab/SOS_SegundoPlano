@@ -1,8 +1,8 @@
 package com.example.sos_segundoplano.ui
 
 import androidx.compose.ui.test.assertCountEquals
-import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -11,6 +11,8 @@ import androidx.compose.ui.test.performClick
 import com.example.sos_segundoplano.MotoSosApp
 import com.example.sos_segundoplano.core.background.MonitoringServiceStartResult
 import com.example.sos_segundoplano.core.background.MonitoringServiceStarter
+import com.example.sos_segundoplano.core.background.MonitoringServiceStopResult
+import com.example.sos_segundoplano.core.background.MonitoringServiceStopper
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatus
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatusProvider
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatus
@@ -30,6 +32,7 @@ class TripStartFlowTest {
     @Test
     fun startsIdleAndShowsMonitoringOnlyAfterStartTripClick() {
         var monitoringStarterCallCount = 0
+        var monitoringStopperCallCount = 0
         var startTripCallCount = 0
 
         composeRule.setContent {
@@ -54,6 +57,10 @@ class TripStartFlowTest {
                     monitoringServiceStarter = MonitoringServiceStarter {
                         monitoringStarterCallCount++
                         MonitoringServiceStartResult.Started
+                    },
+                    monitoringServiceStopper = MonitoringServiceStopper {
+                        monitoringStopperCallCount++
+                        MonitoringServiceStopResult.Stopped
                     }
                 )
             }
@@ -83,8 +90,9 @@ class TripStartFlowTest {
         composeRule.onAllNodesWithText("78%").assertCountEquals(0)
         composeRule.onAllNodesWithText("Excelente").assertCountEquals(0)
         composeRule.onAllNodesWithText("Fuerte").assertCountEquals(0)
-        composeRule.onNodeWithTag("finish_trip_disabled_button").assertIsNotEnabled()
+        composeRule.onNodeWithTag("finish_trip_button").assertIsEnabled()
         assertEquals(1, monitoringStarterCallCount)
+        assertEquals(0, monitoringStopperCallCount)
         assertEquals(1, startTripCallCount)
     }
 }

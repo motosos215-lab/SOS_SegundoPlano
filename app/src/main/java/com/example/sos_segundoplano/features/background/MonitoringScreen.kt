@@ -32,12 +32,15 @@ import com.example.sos_segundoplano.ui.components.MotoTopBar
 import com.example.sos_segundoplano.ui.components.MotoTopBarIcon
 import com.example.sos_segundoplano.ui.theme.MotoAlert
 import com.example.sos_segundoplano.ui.theme.MotoBackground
-import com.example.sos_segundoplano.ui.theme.MotoDisabled
 import com.example.sos_segundoplano.ui.theme.MotoSurface
 import com.example.sos_segundoplano.ui.theme.MotoSuccess
 
 @Composable
-fun MonitoringScreen(modifier: Modifier = Modifier) {
+fun MonitoringScreen(
+    modifier: Modifier = Modifier,
+    onFinishTrip: () -> Unit = {},
+    isFinishTripEnabled: Boolean = true
+) {
     Scaffold(
         modifier = modifier
             .fillMaxSize()
@@ -91,17 +94,16 @@ fun MonitoringScreen(modifier: Modifier = Modifier) {
                     Spacer(modifier = Modifier.height(8.dp))
                 }
                 OutlinedButton(
-                    onClick = {},
-                    enabled = false,
+                    onClick = onFinishTrip,
+                    enabled = isFinishTripEnabled,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(50.dp)
-                        .testTag("finish_trip_disabled_button"),
+                        .testTag("finish_trip_button"),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
                         containerColor = MotoSurface,
-                        disabledContainerColor = MotoSurface,
-                        disabledContentColor = MotoDisabled
+                        disabledContainerColor = MotoSurface
                     ),
                     border = BorderStroke(1.5.dp, MotoAlert)
                 ) {
