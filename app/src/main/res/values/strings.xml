@@ -71,5 +71,9 @@
     <string name="monitoring_start_failure_title">No se pudo iniciar el monitoreo</string>
     <string name="monitoring_start_failure_description">MotoSOS no pudo iniciar la notificación persistente del viaje.</string>
     <string name="monitoring_start_failure_help">Comprueba que las notificaciones de MotoSOS estén habilitadas y vuelve a intentar.</string>
+    <string name="monitoring_stop_failure_title">No se pudo finalizar el monitoreo</string>
+    <string name="monitoring_stop_failure_description">MotoSOS no pudo detener el servicio de monitoreo del viaje.</string>
+    <string name="monitoring_stop_failure_help">El viaje continúa activo. Vuelve a intentarlo.</string>
+    <string name="continue_trip">Continuar viaje</string>
     <string name="retry">Reintentar</string>
 </resources>
