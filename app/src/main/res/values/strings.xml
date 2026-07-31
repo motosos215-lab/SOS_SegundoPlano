@@ -16,6 +16,7 @@
     <string name="pending_permissions">Pendiente de permisos</string>
     <string name="background_location_authorized">Ubicación en segundo plano autorizada</string>
     <string name="location_notifications_bluetooth_enabled">Ubicación, notificaciones y Bluetooth habilitados</string>
+    <string name="background_monitoring_active">Monitoreo en segundo plano activo</string>
     <string name="trip_time">Tiempo de viaje</string>
     <string name="speed">Velocidad</string>
     <string name="gps_accuracy">Precisión GPS</string>
@@ -63,4 +64,12 @@
     <string name="open_motosos_settings">Abrir configuración de MotoSOS</string>
     <string name="open_bluetooth_settings">Abrir Bluetooth</string>
     <string name="recheck_requirements">Revisar requisitos</string>
+    <string name="monitoring_notification_channel_name">Monitoreo de viaje activo</string>
+    <string name="monitoring_notification_channel_description">Notificación persistente del monitoreo activo durante un viaje.</string>
+    <string name="monitoring_notification_title">Viaje monitoreado en curso</string>
+    <string name="monitoring_notification_content">MotoSOS mantiene activo el monitoreo en segundo plano.</string>
+    <string name="monitoring_start_failure_title">No se pudo iniciar el monitoreo</string>
+    <string name="monitoring_start_failure_description">MotoSOS no pudo iniciar la notificación persistente del viaje.</string>
+    <string name="monitoring_start_failure_help">Comprueba que las notificaciones de MotoSOS estén habilitadas y vuelve a intentar.</string>
+    <string name="retry">Reintentar</string>
 </resources>

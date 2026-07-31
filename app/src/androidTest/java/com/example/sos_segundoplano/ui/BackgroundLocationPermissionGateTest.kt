@@ -9,6 +9,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.example.sos_segundoplano.MotoSosApp
+import com.example.sos_segundoplano.core.background.MonitoringServiceStartResult
+import com.example.sos_segundoplano.core.background.MonitoringServiceStarter
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatus
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatusProvider
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatus
@@ -44,10 +46,16 @@ class BackgroundLocationPermissionGateTest {
 
     @Test
     fun foregroundMissingShowsDialogAndDismissKeepsHomeVisible() {
+        var monitoringStarterCallCount = 0
+
         setAppContent(
             provider = FakeBackgroundLocationPermissionStatusProvider(
                 BackgroundLocationPermissionStatus.ForegroundMissing
-            )
+            ),
+            monitoringServiceStarter = MonitoringServiceStarter {
+                monitoringStarterCallCount++
+                MonitoringServiceStartResult.Started
+            }
         )
 
         composeRule.onNodeWithTag("start_trip_button").performClick()
@@ -56,6 +64,7 @@ class BackgroundLocationPermissionGateTest {
         composeRule.onNodeWithText("Permiso de ubicación requerido").assertIsDisplayed()
         composeRule.onAllNodesWithText("Monitoreo").assertCountEquals(0)
         composeRule.onAllNodesWithText("Viaje activo").assertCountEquals(0)
+        assertEquals(0, monitoringStarterCallCount)
 
         composeRule.onNodeWithTag("dismiss_location_permission_button").performClick()
 
@@ -145,6 +154,9 @@ class BackgroundLocationPermissionGateTest {
     private fun setAppContent(
         provider: BackgroundLocationPermissionStatusProvider,
         onOpenAppSettings: () -> Unit = {},
+        monitoringServiceStarter: MonitoringServiceStarter = MonitoringServiceStarter {
+            MonitoringServiceStartResult.Started
+        },
         startTrip: (TripSessionState) -> TripSessionState = { currentState ->
             when (currentState) {
                 TripSessionState.Idle -> TripSessionState.Active
@@ -163,6 +175,7 @@ class BackgroundLocationPermissionGateTest {
                     bluetoothRequirementStatusProvider = BluetoothRequirementStatusProvider {
                         BluetoothRequirementStatus.Enabled
                     },
+                    monitoringServiceStarter = monitoringServiceStarter,
                     onOpenAppSettings = onOpenAppSettings
                 )
             }

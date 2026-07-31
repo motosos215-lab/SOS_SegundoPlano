@@ -9,13 +9,17 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.example.sos_segundoplano.MotoSosApp
+import com.example.sos_segundoplano.core.background.MonitoringServiceStartResult
+import com.example.sos_segundoplano.core.background.MonitoringServiceStarter
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatus
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatusProvider
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatus
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatusProvider
 import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatus
 import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatusProvider
+import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 
@@ -25,9 +29,19 @@ class TripStartFlowTest {
 
     @Test
     fun startsIdleAndShowsMonitoringOnlyAfterStartTripClick() {
+        var monitoringStarterCallCount = 0
+        var startTripCallCount = 0
+
         composeRule.setContent {
             SOS_SegundoPlanoTheme {
                 MotoSosApp(
+                    startTripUseCase = { currentState ->
+                        startTripCallCount++
+                        when (currentState) {
+                            TripSessionState.Idle -> TripSessionState.Active
+                            TripSessionState.Active -> TripSessionState.Active
+                        }
+                    },
                     locationPermissionStatusProvider = BackgroundLocationPermissionStatusProvider {
                         BackgroundLocationPermissionStatus.Granted
                     },
@@ -36,6 +50,10 @@ class TripStartFlowTest {
                     },
                     bluetoothRequirementStatusProvider = BluetoothRequirementStatusProvider {
                         BluetoothRequirementStatus.Enabled
+                    },
+                    monitoringServiceStarter = MonitoringServiceStarter {
+                        monitoringStarterCallCount++
+                        MonitoringServiceStartResult.Started
                     }
                 )
             }
@@ -57,7 +75,7 @@ class TripStartFlowTest {
         composeRule.onNodeWithText("Monitoreo").assertIsDisplayed()
         composeRule.onNodeWithText("Viaje activo").assertIsDisplayed()
         composeRule.onNodeWithText("Sesión iniciada").assertIsDisplayed()
-        composeRule.onNodeWithText("Ubicación, notificaciones y Bluetooth habilitados").assertIsDisplayed()
+        composeRule.onNodeWithText("Monitoreo en segundo plano activo").assertIsDisplayed()
         composeRule.onAllNodesWithText("--").assertCountEquals(2)
         composeRule.onNodeWithText("km/h").assertIsDisplayed()
         composeRule.onAllNodesWithText("Pendiente").assertCountEquals(2)
@@ -66,5 +84,7 @@ class TripStartFlowTest {
         composeRule.onAllNodesWithText("Excelente").assertCountEquals(0)
         composeRule.onAllNodesWithText("Fuerte").assertCountEquals(0)
         composeRule.onNodeWithTag("finish_trip_disabled_button").assertIsNotEnabled()
+        assertEquals(1, monitoringStarterCallCount)
+        assertEquals(1, startTripCallCount)
     }
 }

@@ -17,6 +17,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
+import com.example.sos_segundoplano.core.background.AndroidMonitoringServiceStarter
+import com.example.sos_segundoplano.core.background.MonitoringServiceStartResult
+import com.example.sos_segundoplano.core.background.MonitoringServiceStarter
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatus
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatusChecker
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatusProvider
@@ -31,6 +34,7 @@ import com.example.sos_segundoplano.domain.usecase.StartTripUseCase
 import com.example.sos_segundoplano.features.background.MonitoringScreen
 import com.example.sos_segundoplano.features.permissions.BackgroundLocationPermissionDialog
 import com.example.sos_segundoplano.features.permissions.BluetoothRequirementDialog
+import com.example.sos_segundoplano.features.permissions.MonitoringStartFailureDialog
 import com.example.sos_segundoplano.features.permissions.NotificationPermissionDialog
 import com.example.sos_segundoplano.features.trip.HomeScreen
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
@@ -49,6 +53,7 @@ class MainActivity : ComponentActivity() {
                     locationPermissionStatusProvider = BackgroundLocationPermissionChecker(applicationContext),
                     notificationStatusProvider = AppNotificationStatusChecker(applicationContext),
                     bluetoothRequirementStatusProvider = BluetoothRequirementChecker(applicationContext),
+                    monitoringServiceStarter = AndroidMonitoringServiceStarter(applicationContext),
                     onOpenAppSettings = ::openAppSettings,
                     onOpenNotificationSettings = ::openNotificationSettings,
                     onOpenBluetoothSettings = ::openBluetoothSettings
@@ -103,6 +108,8 @@ fun MotoSosApp(
         AppNotificationStatusProvider { AppNotificationStatus.Enabled },
     bluetoothRequirementStatusProvider: BluetoothRequirementStatusProvider =
         BluetoothRequirementStatusProvider { BluetoothRequirementStatus.Enabled },
+    monitoringServiceStarter: MonitoringServiceStarter =
+        MonitoringServiceStarter { MonitoringServiceStartResult.Started },
     onOpenAppSettings: () -> Unit = {},
     onOpenNotificationSettings: () -> Unit = {},
     onOpenBluetoothSettings: () -> Unit = {}
@@ -116,6 +123,7 @@ fun MotoSosApp(
     var bluetoothDialogStatus by remember {
         mutableStateOf<BluetoothRequirementStatus?>(null)
     }
+    var monitoringStartFailureVisible by remember { mutableStateOf(false) }
     val currentState = if (isTripActive) {
         TripSessionState.Active
     } else {
@@ -130,13 +138,30 @@ fun MotoSosApp(
                         when (val bluetoothStatus = bluetoothRequirementStatusProvider.getStatus()) {
                             BluetoothRequirementStatus.Enabled -> {
                                 if (isTripStartPending && currentState == TripSessionState.Idle) {
-                                    val nextState = startTripUseCase(currentState)
-                                    isTripActive = nextState == TripSessionState.Active
+                                    when (monitoringServiceStarter.start()) {
+                                        MonitoringServiceStartResult.Started -> {
+                                            val nextState = startTripUseCase(currentState)
+                                            isTripActive = nextState == TripSessionState.Active
+                                            isTripStartPending = false
+                                            permissionDialogStatus = null
+                                            isNotificationDialogVisible = false
+                                            bluetoothDialogStatus = null
+                                            monitoringStartFailureVisible = false
+                                        }
+
+                                        MonitoringServiceStartResult.Failed -> {
+                                            permissionDialogStatus = null
+                                            isNotificationDialogVisible = false
+                                            bluetoothDialogStatus = null
+                                            monitoringStartFailureVisible = true
+                                        }
+                                    }
+                                } else {
+                                    permissionDialogStatus = null
+                                    isNotificationDialogVisible = false
+                                    bluetoothDialogStatus = null
+                                    monitoringStartFailureVisible = false
                                 }
-                                isTripStartPending = false
-                                permissionDialogStatus = null
-                                isNotificationDialogVisible = false
-                                bluetoothDialogStatus = null
                             }
 
                             BluetoothRequirementStatus.PermissionMissing,
@@ -145,6 +170,7 @@ fun MotoSosApp(
                                 permissionDialogStatus = null
                                 isNotificationDialogVisible = false
                                 bluetoothDialogStatus = bluetoothStatus
+                                monitoringStartFailureVisible = false
                             }
                         }
                     }
@@ -153,6 +179,7 @@ fun MotoSosApp(
                         permissionDialogStatus = null
                         isNotificationDialogVisible = true
                         bluetoothDialogStatus = null
+                        monitoringStartFailureVisible = false
                     }
                 }
             }
@@ -162,6 +189,7 @@ fun MotoSosApp(
                 permissionDialogStatus = locationStatus
                 isNotificationDialogVisible = false
                 bluetoothDialogStatus = null
+                monitoringStartFailureVisible = false
             }
         }
     }
@@ -192,6 +220,7 @@ fun MotoSosApp(
                 permissionDialogStatus = null
                 isNotificationDialogVisible = false
                 bluetoothDialogStatus = null
+                monitoringStartFailureVisible = false
             }
         )
     }
@@ -206,6 +235,7 @@ fun MotoSosApp(
                 isNotificationDialogVisible = false
                 permissionDialogStatus = null
                 bluetoothDialogStatus = null
+                monitoringStartFailureVisible = false
             }
         )
     }
@@ -219,6 +249,22 @@ fun MotoSosApp(
             },
             onDismiss = {
                 isTripStartPending = false
+                bluetoothDialogStatus = null
+                isNotificationDialogVisible = false
+                permissionDialogStatus = null
+                monitoringStartFailureVisible = false
+            }
+        )
+    }
+    if (monitoringStartFailureVisible) {
+        MonitoringStartFailureDialog(
+            onOpenNotificationSettings = onOpenNotificationSettings,
+            onRetry = {
+                validateTripStartRequirements()
+            },
+            onDismiss = {
+                isTripStartPending = false
+                monitoringStartFailureVisible = false
                 bluetoothDialogStatus = null
                 isNotificationDialogVisible = false
                 permissionDialogStatus = null

@@ -9,6 +9,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.example.sos_segundoplano.MotoSosApp
+import com.example.sos_segundoplano.core.background.MonitoringServiceStartResult
+import com.example.sos_segundoplano.core.background.MonitoringServiceStarter
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatus
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatusProvider
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatus
@@ -91,10 +93,15 @@ class BluetoothRequirementGateTest {
 
     @Test
     fun missingBluetoothPermissionShowsDialogAndDoesNotStartTrip() {
+        var monitoringStarterCallCount = 0
         var startTripCallCount = 0
 
         setAppContent(
             bluetoothProvider = FakeBluetoothRequirementStatusProvider(BluetoothRequirementStatus.PermissionMissing),
+            monitoringServiceStarter = MonitoringServiceStarter {
+                monitoringStarterCallCount++
+                MonitoringServiceStartResult.Started
+            },
             startTrip = { currentState ->
                 startTripCallCount++
                 when (currentState) {
@@ -112,6 +119,7 @@ class BluetoothRequirementGateTest {
         composeRule.onAllNodesWithTag("open_bluetooth_settings_button").assertCountEquals(0)
         composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
         composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
+        assertEquals(0, monitoringStarterCallCount)
         assertEquals(0, startTripCallCount)
     }
 
@@ -142,10 +150,15 @@ class BluetoothRequirementGateTest {
 
     @Test
     fun disabledBluetoothShowsDialogAndDoesNotStartTrip() {
+        var monitoringStarterCallCount = 0
         var startTripCallCount = 0
 
         setAppContent(
             bluetoothProvider = FakeBluetoothRequirementStatusProvider(BluetoothRequirementStatus.Disabled),
+            monitoringServiceStarter = MonitoringServiceStarter {
+                monitoringStarterCallCount++
+                MonitoringServiceStartResult.Started
+            },
             startTrip = { currentState ->
                 startTripCallCount++
                 when (currentState) {
@@ -161,6 +174,7 @@ class BluetoothRequirementGateTest {
         composeRule.onNodeWithTag("open_bluetooth_settings_button").assertIsDisplayed()
         composeRule.onAllNodesWithTag("open_bluetooth_permission_settings_button").assertCountEquals(0)
         composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
+        assertEquals(0, monitoringStarterCallCount)
         assertEquals(0, startTripCallCount)
     }
 
@@ -332,6 +346,9 @@ class BluetoothRequirementGateTest {
         notificationProvider: AppNotificationStatusProvider =
             FakeBluetoothGateNotificationStatusProvider(AppNotificationStatus.Enabled),
         bluetoothProvider: BluetoothRequirementStatusProvider,
+        monitoringServiceStarter: MonitoringServiceStarter = MonitoringServiceStarter {
+            MonitoringServiceStartResult.Started
+        },
         onOpenAppSettings: () -> Unit = {},
         onOpenBluetoothSettings: () -> Unit = {},
         startTrip: (TripSessionState) -> TripSessionState = { currentState ->
@@ -348,6 +365,7 @@ class BluetoothRequirementGateTest {
                     locationPermissionStatusProvider = locationProvider,
                     notificationStatusProvider = notificationProvider,
                     bluetoothRequirementStatusProvider = bluetoothProvider,
+                    monitoringServiceStarter = monitoringServiceStarter,
                     onOpenAppSettings = onOpenAppSettings,
                     onOpenBluetoothSettings = onOpenBluetoothSettings
                 )
