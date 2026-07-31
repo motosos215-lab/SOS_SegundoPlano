@@ -76,7 +76,7 @@ fun MonitoringScreen(modifier: Modifier = Modifier) {
             ) {
                 MotoMonitoringIndicator()
                 Text(
-                    text = stringResource(R.string.location_notifications_bluetooth_enabled),
+                    text = stringResource(R.string.background_monitoring_active),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MotoSuccess,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
