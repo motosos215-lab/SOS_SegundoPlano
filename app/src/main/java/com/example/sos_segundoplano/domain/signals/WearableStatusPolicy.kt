@@ -12,11 +12,23 @@ object WearableStatusPolicy {
 
     fun applyFreshness(status: WearableStatus, lastUpdatedMillis: Long, nowMillis: Long): WearableStatus {
         if (lastUpdatedMillis <= 0L) return status
-        if (status is WearableStatus.Error || status == WearableStatus.Disconnected) return status
+        if (status is WearableStatus.Error || status in terminalStatuses) return status
         return if (nowMillis - lastUpdatedMillis > STALE_THRESHOLD_MILLIS) {
             WearableStatus.Stale
         } else {
             status
         }
     }
+
+    private val terminalStatuses = setOf(
+        WearableStatus.Disconnected,
+        WearableStatus.PermissionMissing,
+        WearableStatus.PermissionRequired,
+        WearableStatus.PermanentlyDenied,
+        WearableStatus.SensorUnavailable,
+        WearableStatus.HealthServicesUnavailable,
+        WearableStatus.StartFailed,
+        WearableStatus.UserActionRequired,
+        WearableStatus.Stopped
+    )
 }

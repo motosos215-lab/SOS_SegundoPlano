@@ -40,11 +40,15 @@ class AndroidMotionSensorSignalSource(
             update(SignalReading(SignalAvailability.Unsupported))
             return
         }
-        val registered = sensorManager.registerListener(
-            listener,
-            currentSensor,
-            SENSOR_DELAY_MICROS
-        )
+        val registered = try {
+            sensorManager.registerListener(
+                listener,
+                currentSensor,
+                SENSOR_DELAY_MICROS
+            )
+        } catch (_: RuntimeException) {
+            false
+        }
         if (registered) {
             started = true
             update(SignalReading(SignalAvailability.Waiting))

@@ -24,11 +24,16 @@ sealed interface WearableStatus {
     data object ConnectedNearby : WearableStatus
     data object ConnectedRemote : WearableStatus
     data object PermissionMissing : WearableStatus
+    data object PermissionRequired : WearableStatus
+    data object PermanentlyDenied : WearableStatus
     data object SensorUnavailable : WearableStatus
+    data object HealthServicesUnavailable : WearableStatus
+    data object StartFailed : WearableStatus
     data object Capturing : WearableStatus
     data object Stale : WearableStatus
     data class Error(val reason: String? = null) : WearableStatus
     data object UserActionRequired : WearableStatus
+    data object Stopped : WearableStatus
 }
 
 data class SignalReading<out T>(

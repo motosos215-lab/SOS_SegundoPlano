@@ -39,7 +39,11 @@ class WearSignalForegroundService : Service() {
             publishThrottled()
         }
         heartRate = WearHeartRateSource(this) { status, bpm ->
-            snapshot = snapshot.copy(heartRateStatus = status, heartRateBpm = bpm)
+            snapshot = snapshot.copy(
+                heartRateStatus = status,
+                heartRateBpm = bpm,
+                status = status.toCaptureStatus(snapshot.status)
+            )
             publishThrottled()
         }
     }
@@ -79,16 +83,17 @@ class WearSignalForegroundService : Service() {
 
     private fun stopCapture() {
         if (!started) return
+        started = false
         accelerometer.stop()
         gyroscope.stop()
         battery.stop()
-        heartRate.stop()
         heartRate.release()
-        started = false
         limiter.reset()
         snapshot = snapshot.copy(
             captureActive = false,
-            status = WearCaptureStatus.Disconnected,
+            status = WearCaptureStatus.Stopped,
+            heartRateBpm = null,
+            heartRateStatus = WearSignalAvailability.Stopped,
             lastUpdatedMillis = System.currentTimeMillis()
         )
         publishNow()
@@ -140,6 +145,18 @@ class WearSignalForegroundService : Service() {
         .setPriority(NotificationCompat.PRIORITY_LOW)
         .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
         .build()
+
+    private fun WearSignalAvailability.toCaptureStatus(current: WearCaptureStatus): WearCaptureStatus = when (this) {
+        WearSignalAvailability.Available,
+        WearSignalAvailability.Waiting -> WearCaptureStatus.Capturing
+        WearSignalAvailability.PermissionRequired -> WearCaptureStatus.PermissionRequired
+        WearSignalAvailability.PermanentlyDenied -> WearCaptureStatus.PermanentlyDenied
+        WearSignalAvailability.Unsupported -> WearCaptureStatus.SensorUnavailable
+        WearSignalAvailability.HealthServicesUnavailable -> WearCaptureStatus.HealthServicesUnavailable
+        WearSignalAvailability.StartFailed -> WearCaptureStatus.StartFailed
+        WearSignalAvailability.Error -> WearCaptureStatus.Error
+        WearSignalAvailability.Stopped -> WearCaptureStatus.Stopped
+    }.takeUnless { current == WearCaptureStatus.Stopped } ?: WearCaptureStatus.Stopped
 
     companion object {
         private const val ACTION_START = "com.example.sos_segundoplano.wear.action.START_CAPTURE"

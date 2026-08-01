@@ -1,7 +1,29 @@
 package com.example.sos_segundoplano.wear
 
-enum class WearSignalAvailability { Available, Waiting, PermissionMissing, Unsupported, Error }
-enum class WearCaptureStatus { Disconnected, Capturing, PermissionMissing, SensorUnavailable, Error, UserActionRequired }
+enum class WearSignalAvailability {
+    Available,
+    Waiting,
+    PermissionRequired,
+    PermanentlyDenied,
+    Unsupported,
+    HealthServicesUnavailable,
+    StartFailed,
+    Error,
+    Stopped
+}
+
+enum class WearCaptureStatus {
+    Disconnected,
+    Capturing,
+    PermissionRequired,
+    PermanentlyDenied,
+    SensorUnavailable,
+    HealthServicesUnavailable,
+    StartFailed,
+    Error,
+    UserActionRequired,
+    Stopped
+}
 
 data class WearVectorSample(
     val x: Float,

@@ -1,11 +1,7 @@
 package com.example.sos_segundoplano.wear
 
-import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
-import android.os.Build
 import androidx.concurrent.futures.await
-import androidx.core.content.ContextCompat
 import androidx.health.services.client.ExerciseUpdateCallback
 import androidx.health.services.client.HealthServices
 import androidx.health.services.client.data.Availability
@@ -22,59 +18,77 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 
-class WearHeartRateSource(
-    context: Context,
-    private val onUpdate: (WearSignalAvailability, Double?) -> Unit
+class WearHeartRateSource internal constructor(
+    private val onUpdate: (WearSignalAvailability, Double?) -> Unit,
+    private val permissionStatus: () -> WearPermissionStatus,
+    private val heartRateClient: WearHeartRateClient
 ) {
-    private val appContext = context.applicationContext
-    private val exerciseClient = HealthServices.getClient(appContext).exerciseClient
+    constructor(
+        context: Context,
+        onUpdate: (WearSignalAvailability, Double?) -> Unit
+    ) : this(
+        onUpdate = onUpdate,
+        permissionStatus = { AndroidWearHealthPermissionChecker(context).status() },
+        heartRateClient = AndroidWearHeartRateClient(context)
+    )
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val callback = object : ExerciseUpdateCallback {
-        override fun onExerciseUpdateReceived(update: ExerciseUpdate) {
-            val latest = update.latestMetrics.getData(DataType.HEART_RATE_BPM).lastOrNull()?.value
-            updateLatest(latest)
-        }
-
-        override fun onLapSummaryReceived(lapSummary: ExerciseLapSummary) = Unit
-        override fun onRegistered() = Unit
-        override fun onRegistrationFailed(throwable: Throwable) {
-            onUpdate(WearSignalAvailability.Error, null)
-        }
-
-        override fun onAvailabilityChanged(dataType: DataType<*, *>, availability: Availability) {
-            if (dataType == DataType.HEART_RATE_BPM && availability.toString().contains("UNAVAILABLE")) {
-                onUpdate(WearSignalAvailability.Unsupported, null)
-            }
-        }
-    }
     private var started = false
     private var exerciseActive = false
+    private var released = false
 
     @Synchronized
     fun start() {
-        if (started) return
-        if (!hasForegroundPermission()) {
-            onUpdate(WearSignalAvailability.PermissionMissing, null)
+        if (started || released) return
+        when (permissionStatus()) {
+            WearPermissionStatus.Granted -> Unit
+            WearPermissionStatus.PermissionRequired -> {
+                onUpdate(WearSignalAvailability.PermissionRequired, null)
+                return
+            }
+            WearPermissionStatus.PermanentlyDenied -> {
+                onUpdate(WearSignalAvailability.PermanentlyDenied, null)
+                return
+            }
+        }
+        if (!heartRateClient.isAvailable()) {
+            onUpdate(WearSignalAvailability.HealthServicesUnavailable, null)
             return
         }
-        val config = ExerciseConfig.builder(ExerciseType.BIKING)
-            .setDataTypes(setOf(DataType.HEART_RATE_BPM))
-            .build()
         started = true
         scope.launch {
             try {
-                if (!supportsHeartRate()) {
+                if (!heartRateClient.supportsHeartRate()) {
                     markStartFailed(WearSignalAvailability.Unsupported)
                     return@launch
                 }
-                exerciseClient.setUpdateCallback(callback)
-                exerciseClient.startExerciseAsync(config).await()
+                val startReturned = AtomicBoolean(false)
+                val registrationFailedDuringStart = AtomicBoolean(false)
+                heartRateClient.start(
+                    onHeartRate = ::updateLatest,
+                    onSensorUnavailable = { onUpdate(WearSignalAvailability.Unsupported, null) },
+                    onRegistrationFailed = {
+                        if (startReturned.get()) {
+                            markRegistrationFailed()
+                        } else {
+                            registrationFailedDuringStart.set(true)
+                        }
+                    }
+                )
+                startReturned.set(true)
+                if (registrationFailedDuringStart.get()) {
+                    markStartFailed(WearSignalAvailability.StartFailed)
+                    return@launch
+                }
                 markExerciseStarted()
             } catch (_: SecurityException) {
-                markStartFailed(WearSignalAvailability.PermissionMissing)
+                markStartFailed(WearSignalAvailability.PermissionRequired)
+            } catch (_: UnsupportedOperationException) {
+                markStartFailed(WearSignalAvailability.HealthServicesUnavailable)
             } catch (_: IllegalStateException) {
-                markStartFailed(WearSignalAvailability.Error)
+                markStartFailed(WearSignalAvailability.StartFailed)
             } catch (cancellation: CancellationException) {
                 throw cancellation
             }
@@ -82,6 +96,17 @@ class WearHeartRateSource(
     }
 
     fun updateLatest(value: Double?) {
+        when (permissionStatus()) {
+            WearPermissionStatus.Granted -> Unit
+            WearPermissionStatus.PermissionRequired -> {
+                scope.launch { markStartFailed(WearSignalAvailability.PermissionRequired) }
+                return
+            }
+            WearPermissionStatus.PermanentlyDenied -> {
+                scope.launch { markStartFailed(WearSignalAvailability.PermanentlyDenied) }
+                return
+            }
+        }
         if (value != null && value.isFinite() && value > 0.0) {
             onUpdate(WearSignalAvailability.Available, value)
         }
@@ -89,17 +114,28 @@ class WearHeartRateSource(
 
     @Synchronized
     fun stop() {
-        if (!started) return
+        stopInternal(cancelAfterStop = false)
+    }
+
+    fun release() {
+        stopInternal(cancelAfterStop = true)
+    }
+
+    @Synchronized
+    private fun stopInternal(cancelAfterStop: Boolean) {
+        if (released && cancelAfterStop) return
         val shouldEndExercise = exerciseActive
+        val shouldClearCallback = started || cancelAfterStop
+        if (!started && !cancelAfterStop) return
+        if (cancelAfterStop) released = true
         started = false
         exerciseActive = false
         scope.launch {
             try {
                 if (shouldEndExercise) {
-                    exerciseClient.endExerciseAsync().await()
-                } else {
-                    clearCallback()
-                    return@launch
+                    heartRateClient.stop()
+                } else if (shouldClearCallback) {
+                    heartRateClient.clearCallback()
                 }
             } catch (_: IllegalStateException) {
             } catch (_: SecurityException) {
@@ -107,14 +143,14 @@ class WearHeartRateSource(
                 throw cancellation
             } finally {
                 withContext(NonCancellable) {
-                    clearCallback()
+                    heartRateClient.clearCallback()
+                }
+                if (cancelAfterStop) {
+                    heartRateClient.release()
+                    scope.cancel()
                 }
             }
         }
-    }
-
-    fun release() {
-        scope.cancel()
     }
 
     private suspend fun markExerciseStarted() {
@@ -127,7 +163,7 @@ class WearHeartRateSource(
             }
         }
         if (shouldClear) {
-            clearCallback()
+            heartRateClient.clearCallback()
             return
         }
         onUpdate(WearSignalAvailability.Waiting, null)
@@ -138,30 +174,80 @@ class WearHeartRateSource(
             started = false
             exerciseActive = false
         }
-        clearCallback()
+        heartRateClient.clearCallback()
         onUpdate(status, null)
     }
 
-    private suspend fun clearCallback() {
-        try {
-            exerciseClient.clearUpdateCallbackAsync(callback).await()
-        } catch (_: IllegalStateException) {
-        } catch (_: SecurityException) {
+    private fun markRegistrationFailed() {
+        scope.launch {
+            markStartFailed(WearSignalAvailability.StartFailed)
         }
     }
+}
 
-    private suspend fun supportsHeartRate(): Boolean {
+internal interface WearHeartRateClient {
+    fun isAvailable(): Boolean = true
+    suspend fun supportsHeartRate(): Boolean
+    suspend fun start(
+        onHeartRate: (Double?) -> Unit,
+        onSensorUnavailable: () -> Unit,
+        onRegistrationFailed: () -> Unit
+    )
+    suspend fun stop()
+    suspend fun clearCallback()
+    fun release() = Unit
+}
+
+internal class AndroidWearHeartRateClient(context: Context) : WearHeartRateClient {
+    private val exerciseClient = HealthServices.getClient(context.applicationContext).exerciseClient
+    private var callback: ExerciseUpdateCallback? = null
+
+    override suspend fun supportsHeartRate(): Boolean {
         val capabilities = exerciseClient.getCapabilitiesAsync().await()
         val exerciseCapabilities = capabilities.getExerciseTypeCapabilities(ExerciseType.BIKING)
         return DataType.HEART_RATE_BPM in exerciseCapabilities.supportedDataTypes
     }
 
-    private fun hasForegroundPermission(): Boolean {
-        val permission = if (Build.VERSION.SDK_INT >= 36) {
-            "android.permission.health.READ_HEART_RATE"
-        } else {
-            Manifest.permission.BODY_SENSORS
+    override suspend fun start(
+        onHeartRate: (Double?) -> Unit,
+        onSensorUnavailable: () -> Unit,
+        onRegistrationFailed: () -> Unit
+    ) {
+        val nextCallback = object : ExerciseUpdateCallback {
+            override fun onExerciseUpdateReceived(update: ExerciseUpdate) {
+                onHeartRate(update.latestMetrics.getData(DataType.HEART_RATE_BPM).lastOrNull()?.value)
+            }
+
+            override fun onLapSummaryReceived(lapSummary: ExerciseLapSummary) = Unit
+            override fun onRegistered() = Unit
+            override fun onRegistrationFailed(throwable: Throwable) = onRegistrationFailed()
+
+            override fun onAvailabilityChanged(dataType: DataType<*, *>, availability: Availability) {
+                if (dataType == DataType.HEART_RATE_BPM && availability.toString().contains("UNAVAILABLE")) {
+                    onSensorUnavailable()
+                }
+            }
         }
-        return ContextCompat.checkSelfPermission(appContext, permission) == PackageManager.PERMISSION_GRANTED
+        callback = nextCallback
+        val config = ExerciseConfig.builder(ExerciseType.BIKING)
+            .setDataTypes(setOf(DataType.HEART_RATE_BPM))
+            .build()
+        exerciseClient.setUpdateCallback(nextCallback)
+        exerciseClient.startExerciseAsync(config).await()
+    }
+
+    override suspend fun stop() {
+        exerciseClient.endExerciseAsync().await()
+    }
+
+    override suspend fun clearCallback() {
+        val currentCallback = callback ?: return
+        try {
+            exerciseClient.clearUpdateCallbackAsync(currentCallback).await()
+        } catch (_: IllegalStateException) {
+        } catch (_: SecurityException) {
+        } finally {
+            callback = null
+        }
     }
 }
