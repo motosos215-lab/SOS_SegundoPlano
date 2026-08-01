@@ -79,4 +79,15 @@
     <string name="monitoring_stop_failure_help">El viaje continúa activo. Vuelve a intentarlo.</string>
     <string name="continue_trip">Continuar viaje</string>
     <string name="retry">Reintentar</string>
+    <string name="validation_countdown_title">Posible accidente detectado</string>
+    <string name="validation_countdown_seconds">Confirma que estás bien en %1$d s o se preparará una alerta.</string>
+    <string name="validation_confirm_safe">Estoy bien</string>
+    <string name="validation_request_help">Necesito ayuda</string>
+    <string name="validation_help_requested">Ayuda solicitada. Alerta local pendiente.</string>
+    <string name="validation_timeout_escalated">Tiempo agotado. Alerta local pendiente.</string>
+    <string name="validation_cancelled_safe">Validación cancelada: se marcó como falsa alarma.</string>
+    <string name="validation_minor_event_recorded">Evento menor registrado. El monitoreo continúa.</string>
+    <string name="validation_braking_suppressed">Frenado brusco con movimiento continuo: alerta suprimida.</string>
+    <string name="validation_incident_generated">Incidente local generado. Solicitud pendiente.</string>
+    <string name="validation_immediate_alert_requested">Evento crítico detectado. Solicitud inmediata pendiente.</string>
 </resources>

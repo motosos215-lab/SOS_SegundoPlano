@@ -21,6 +21,10 @@ class MotoSosWearableListenerService : WearableListenerService() {
             WearDataLayerProtocol.PATH_TRIP_STOP -> {
                 stopService(WearSignalForegroundService.createStopIntent(this))
             }
+            WearDataLayerProtocol.PATH_VALIDATION_STATUS -> {
+                val status = WearDataLayerProtocol.decodeValidationStatus(messageEvent.data)
+                startService(WearSignalForegroundService.createValidationStatusIntent(this, status))
+            }
         }
     }
 }

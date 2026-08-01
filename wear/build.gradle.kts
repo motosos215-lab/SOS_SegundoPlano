@@ -50,4 +50,5 @@ dependencies {
     implementation(libs.guava.listenablefuture)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.androidx.junit)
 }

@@ -85,9 +85,13 @@ class MobileWearableSignalSource(
 
     private fun sendCommand(path: String) {
         val node = latestNode ?: return
-        messageClient.sendMessage(node.id, path, ByteArray(0))
+        messageClient.sendMessage(node.id, path, COMMAND_PAYLOAD)
     }
 
     private fun isWearableApiAvailable(): Boolean =
         GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(appContext) == ConnectionResult.SUCCESS
+
+    private companion object {
+        val COMMAND_PAYLOAD = byteArrayOf(1)
+    }
 }

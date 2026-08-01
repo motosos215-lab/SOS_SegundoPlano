@@ -33,9 +33,13 @@ import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissio
 import com.example.sos_segundoplano.core.permissions.BluetoothRequirementChecker
 import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatus
 import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatusProvider
+import com.example.sos_segundoplano.data.validation.FalsePositiveValidationCoordinatorProvider
+import com.example.sos_segundoplano.data.validation.FalsePositiveValidationStoreProvider
 import com.example.sos_segundoplano.data.signals.TripSignalStoreProvider
 import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.domain.signals.TripSignalSnapshot
+import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
+import com.example.sos_segundoplano.domain.validation.UserResponseSource
 import com.example.sos_segundoplano.domain.usecase.FinishTripUseCase
 import com.example.sos_segundoplano.domain.usecase.StartTripUseCase
 import com.example.sos_segundoplano.features.background.MonitoringScreen
@@ -124,6 +128,13 @@ fun MotoSosApp(
     monitoringServiceStopper: MonitoringServiceStopper =
         MonitoringServiceStopper { MonitoringServiceStopResult.Stopped },
     signalSnapshots: StateFlow<TripSignalSnapshot> = TripSignalStoreProvider.store.snapshots,
+    validationStates: StateFlow<FalsePositiveValidationState> = FalsePositiveValidationStoreProvider.store.states,
+    onConfirmSafe: (Long, Long, String) -> Unit = { sessionId, assessmentId, responseId ->
+        FalsePositiveValidationCoordinatorProvider.coordinator.confirmSafe(sessionId, assessmentId, UserResponseSource.Mobile, responseId)
+    },
+    onRequestHelp: (Long, Long, String) -> Unit = { sessionId, assessmentId, responseId ->
+        FalsePositiveValidationCoordinatorProvider.coordinator.requestHelp(sessionId, assessmentId, UserResponseSource.Mobile, responseId)
+    },
     onOpenAppSettings: () -> Unit = {},
     onOpenNotificationSettings: () -> Unit = {},
     onOpenBluetoothSettings: () -> Unit = {}
@@ -257,6 +268,9 @@ fun MotoSosApp(
         TripSessionState.Active -> MonitoringScreen(
             modifier = modifier,
             snapshot = signalSnapshots.collectAsState().value,
+            validationState = validationStates.collectAsState().value,
+            onConfirmSafe = onConfirmSafe,
+            onRequestHelp = onRequestHelp,
             onFinishTrip = {
                 finishActiveTrip()
             },
