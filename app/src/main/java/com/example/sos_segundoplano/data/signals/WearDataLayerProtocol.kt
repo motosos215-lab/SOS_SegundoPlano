@@ -15,10 +15,11 @@ object WearDataLayerProtocol {
 
     fun decodeWearable(map: DataMap, nodeId: String?, isNearby: Boolean): WearableSample {
         val now = map.getLong("lastUpdatedMillis", System.currentTimeMillis())
+        val heartRateStatus = map.getString("heartRateStatus")
         return WearableSample(
             accelerometer = decodeVector(map, "accelerometer"),
             gyroscope = decodeVector(map, "gyroscope"),
-            heartRateBpm = if (map.containsKey("heartRateBpm")) map.getDouble("heartRateBpm") else null,
+            heartRateBpm = decodeHeartRateBpm(map, heartRateStatus),
             watchBatteryPercentage = if (map.containsKey("watchBatteryPercentage")) map.getInt("watchBatteryPercentage") else null,
             nodeId = nodeId,
             isNearby = isNearby,
@@ -26,6 +27,12 @@ object WearDataLayerProtocol {
             lastUpdatedMillis = now,
             status = decodeStatus(map.getString("status"), map.getBoolean("captureActive", false), isNearby)
         )
+    }
+
+    private fun decodeHeartRateBpm(map: DataMap, heartRateStatus: String?): Double? {
+        if (!map.containsKey("heartRateBpm")) return null
+        if (heartRateStatus != null && heartRateStatus != "available") return null
+        return map.getDouble("heartRateBpm")
     }
 
     private fun decodeVector(map: DataMap, prefix: String): SignalReading<Vector3Sample>? {
@@ -47,23 +54,34 @@ object WearDataLayerProtocol {
     private fun decodeAvailability(value: String): SignalAvailability = when (value) {
         "available" -> SignalAvailability.Available
         "permission_missing" -> SignalAvailability.PermissionMissing
+        "permission_required" -> SignalAvailability.PermissionMissing
+        "permanently_denied" -> SignalAvailability.PermissionMissing
         "disabled" -> SignalAvailability.Disabled
         "unsupported" -> SignalAvailability.Unsupported
         "stale" -> SignalAvailability.Stale
+        "health_services_unavailable" -> SignalAvailability.Unsupported
+        "start_failed" -> SignalAvailability.Error("start_failed")
         "error" -> SignalAvailability.Error()
+        "stopped" -> SignalAvailability.Stale
         else -> SignalAvailability.Waiting
     }
 
     private fun decodeStatus(value: String?, captureActive: Boolean, isNearby: Boolean): WearableStatus = when (value) {
         "not_installed_or_unavailable" -> WearableStatus.NotInstalledOrUnavailable
         "permission_missing" -> WearableStatus.PermissionMissing
+        "permission_required" -> WearableStatus.PermissionRequired
+        "permanently_denied" -> WearableStatus.PermanentlyDenied
         "sensor_unavailable" -> WearableStatus.SensorUnavailable
+        "health_services_unavailable" -> WearableStatus.HealthServicesUnavailable
+        "start_failed" -> WearableStatus.StartFailed
         "capturing" -> WearableStatus.Capturing
         "stale" -> WearableStatus.Stale
         "error" -> WearableStatus.Error()
         "user_action_required" -> WearableStatus.UserActionRequired
         "connected_remote" -> WearableStatus.ConnectedRemote
         "connected_nearby" -> WearableStatus.ConnectedNearby
+        "disconnected" -> WearableStatus.Disconnected
+        "stopped" -> WearableStatus.Stopped
         else -> when {
             captureActive -> WearableStatus.Capturing
             isNearby -> WearableStatus.ConnectedNearby

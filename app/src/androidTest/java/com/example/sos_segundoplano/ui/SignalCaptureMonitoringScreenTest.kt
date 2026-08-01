@@ -85,6 +85,21 @@ class SignalCaptureMonitoringScreenTest {
         composeRule.onNodeWithText("Smartwatch desconectado").assertIsDisplayed()
     }
 
+    @Test fun requiredWatchPermissionIsShownWithoutBlockingMobileTrip() {
+        val starter = CountingStarter()
+        setContent(
+            starter = starter,
+            snapshot = TripSignalSnapshot(
+                wearable = WearableSample(status = WearableStatus.PermissionRequired)
+            )
+        )
+
+        composeRule.onNodeWithTag("start_trip_button").performClick()
+
+        composeRule.onNodeWithText("Permiso requerido en el reloj").assertIsDisplayed()
+        assertEquals(1, starter.starts)
+    }
+
     @Test fun monitoringScreenContainsLongResponsiveTexts() {
         composeRule.setContent {
             SOS_SegundoPlanoTheme {

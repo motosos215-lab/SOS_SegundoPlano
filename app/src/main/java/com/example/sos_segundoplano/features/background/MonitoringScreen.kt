@@ -232,11 +232,16 @@ private fun wearableValue(snapshot: com.example.sos_segundoplano.domain.signals.
     com.example.sos_segundoplano.domain.signals.WearableStatus.ConnectedNearby -> "Reloj cercano"
     com.example.sos_segundoplano.domain.signals.WearableStatus.ConnectedRemote -> "Reloj remoto"
     com.example.sos_segundoplano.domain.signals.WearableStatus.PermissionMissing -> "Permiso faltante"
+    com.example.sos_segundoplano.domain.signals.WearableStatus.PermissionRequired -> "Permiso requerido en el reloj"
+    com.example.sos_segundoplano.domain.signals.WearableStatus.PermanentlyDenied -> "Permiso denegado en el reloj"
     com.example.sos_segundoplano.domain.signals.WearableStatus.SensorUnavailable -> "Sensor no disponible"
+    com.example.sos_segundoplano.domain.signals.WearableStatus.HealthServicesUnavailable -> "Health Services no disponible"
+    com.example.sos_segundoplano.domain.signals.WearableStatus.StartFailed -> "No se pudo iniciar el reloj"
     com.example.sos_segundoplano.domain.signals.WearableStatus.Capturing -> "Activo"
     com.example.sos_segundoplano.domain.signals.WearableStatus.Stale -> "Datos del reloj desactualizados"
     is com.example.sos_segundoplano.domain.signals.WearableStatus.Error -> "Error de reloj"
     com.example.sos_segundoplano.domain.signals.WearableStatus.UserActionRequired -> "Requiere acción"
+    com.example.sos_segundoplano.domain.signals.WearableStatus.Stopped -> "Reloj detenido"
 }
 
 private fun heartRateValue(snapshot: com.example.sos_segundoplano.domain.signals.TripSignalSnapshot): String =

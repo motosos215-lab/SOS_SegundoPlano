@@ -32,17 +32,25 @@ object WearDataLayerProtocol {
     private fun WearSignalAvailability.toProtocol(): String = when (this) {
         WearSignalAvailability.Available -> "available"
         WearSignalAvailability.Waiting -> "waiting"
-        WearSignalAvailability.PermissionMissing -> "permission_missing"
+        WearSignalAvailability.PermissionRequired -> "permission_required"
+        WearSignalAvailability.PermanentlyDenied -> "permanently_denied"
         WearSignalAvailability.Unsupported -> "unsupported"
+        WearSignalAvailability.HealthServicesUnavailable -> "health_services_unavailable"
+        WearSignalAvailability.StartFailed -> "start_failed"
         WearSignalAvailability.Error -> "error"
+        WearSignalAvailability.Stopped -> "stopped"
     }
 
     private fun WearCaptureStatus.toProtocol(): String = when (this) {
         WearCaptureStatus.Disconnected -> "disconnected"
         WearCaptureStatus.Capturing -> "capturing"
-        WearCaptureStatus.PermissionMissing -> "permission_missing"
+        WearCaptureStatus.PermissionRequired -> "permission_required"
+        WearCaptureStatus.PermanentlyDenied -> "permanently_denied"
         WearCaptureStatus.SensorUnavailable -> "sensor_unavailable"
+        WearCaptureStatus.HealthServicesUnavailable -> "health_services_unavailable"
+        WearCaptureStatus.StartFailed -> "start_failed"
         WearCaptureStatus.Error -> "error"
         WearCaptureStatus.UserActionRequired -> "user_action_required"
+        WearCaptureStatus.Stopped -> "stopped"
     }
 }

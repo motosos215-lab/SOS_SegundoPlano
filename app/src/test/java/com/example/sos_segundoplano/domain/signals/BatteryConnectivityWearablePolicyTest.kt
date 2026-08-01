@@ -33,4 +33,11 @@ class BatteryConnectivityWearablePolicyTest {
         assertSame(WearableStatus.Disconnected, WearableStatusPolicy.fromNodes(true, false, false))
         assertSame(WearableStatus.Stale, WearableStatusPolicy.applyFreshness(WearableStatus.Capturing, 1L, 10_000L))
     }
+
+    @Test fun actionableWearPermissionStatusDoesNotBecomeStale() {
+        assertSame(
+            WearableStatus.PermissionRequired,
+            WearableStatusPolicy.applyFreshness(WearableStatus.PermissionRequired, 1L, 10_000L)
+        )
+    }
 }
