@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
@@ -25,6 +26,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.sos_segundoplano.R
+import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
+import com.example.sos_segundoplano.domain.validation.IncidentCause
 import com.example.sos_segundoplano.ui.components.MotoBottomBar
 import com.example.sos_segundoplano.ui.components.MotoBottomBarItem
 import com.example.sos_segundoplano.ui.components.MotoMetricCard
@@ -40,6 +43,9 @@ import com.example.sos_segundoplano.ui.theme.MotoSuccess
 fun MonitoringScreen(
     modifier: Modifier = Modifier,
     snapshot: com.example.sos_segundoplano.domain.signals.TripSignalSnapshot = com.example.sos_segundoplano.domain.signals.TripSignalSnapshot(),
+    validationState: FalsePositiveValidationState = FalsePositiveValidationState.Idle,
+    onConfirmSafe: (Long, Long, String) -> Unit = { _, _, _ -> },
+    onRequestHelp: (Long, Long, String) -> Unit = { _, _, _ -> },
     onFinishTrip: () -> Unit = {},
     isFinishTripEnabled: Boolean = true
 ) {
@@ -89,6 +95,11 @@ fun MonitoringScreen(
                     softWrap = true
                 )
                 Spacer(modifier = Modifier.height(8.dp))
+                ValidationPanel(
+                    state = validationState,
+                    onConfirmSafe = onConfirmSafe,
+                    onRequestHelp = onRequestHelp
+                )
                 MetricsGrid(snapshot)
                 if (useFlexibleBottomSpace) {
                     Spacer(modifier = Modifier.weight(1f))
@@ -121,6 +132,136 @@ fun MonitoringScreen(
         }
     }
 }
+
+@Composable
+private fun ValidationPanel(
+    state: FalsePositiveValidationState,
+    onConfirmSafe: (Long, Long, String) -> Unit,
+    onRequestHelp: (Long, Long, String) -> Unit
+) {
+    when (state) {
+        is FalsePositiveValidationState.CountdownActive -> {
+            val remainingSeconds = ((state.remainingNanos + NANOS_PER_SECOND - 1L) / NANOS_PER_SECOND).coerceAtLeast(0L)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("false_positive_validation_panel"),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = stringResource(R.string.validation_countdown_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MotoAlert,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Text(
+                    text = stringResource(R.string.validation_countdown_seconds, remainingSeconds),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { onConfirmSafe(state.metadata.sessionId, state.metadata.assessmentId, "mobile-confirm-${state.metadata.sessionId}-${state.metadata.assessmentId}") },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("confirm_safe_button")
+                    ) {
+                        Text(stringResource(R.string.validation_confirm_safe))
+                    }
+                    Button(
+                        onClick = { onRequestHelp(state.metadata.sessionId, state.metadata.assessmentId, "mobile-help-${state.metadata.sessionId}-${state.metadata.assessmentId}") },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("request_help_button"),
+                        colors = ButtonDefaults.buttonColors(containerColor = MotoAlert)
+                    ) {
+                        Text(stringResource(R.string.validation_request_help))
+                    }
+                }
+            }
+        }
+
+        is FalsePositiveValidationState.IncidentGenerated -> {
+            val text = when (state.incident.cause) {
+                IncidentCause.UserRequestedHelp -> stringResource(R.string.validation_help_requested)
+                IncidentCause.Timeout -> stringResource(R.string.validation_timeout_escalated)
+                IncidentCause.CriticalPhysicalEvent -> stringResource(R.string.validation_immediate_alert_requested)
+            }
+            Text(
+                text = text,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("false_positive_escalated_status"),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MotoAlert,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+        }
+
+        is FalsePositiveValidationState.ImmediateAlertRequested -> Text(
+            text = stringResource(R.string.validation_immediate_alert_requested),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("false_positive_immediate_alert_status"),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MotoAlert,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+
+        is FalsePositiveValidationState.SafeConfirmed -> Text(
+            text = stringResource(R.string.validation_cancelled_safe),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("false_positive_safe_confirmed_status"),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MotoSuccess,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+
+        is FalsePositiveValidationState.MinorEventRecorded -> Text(
+            text = stringResource(R.string.validation_minor_event_recorded),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("false_positive_minor_event_status"),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MotoSuccess,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+
+        is FalsePositiveValidationState.SuppressedFalsePositive -> Text(
+            text = stringResource(R.string.validation_braking_suppressed),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("false_positive_braking_suppressed_status"),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MotoSuccess,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+
+        is FalsePositiveValidationState.HelpRequested -> Text(
+            text = stringResource(R.string.validation_help_requested),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("false_positive_help_requested_status"),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MotoAlert,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+
+        FalsePositiveValidationState.Idle,
+        is FalsePositiveValidationState.Monitoring,
+        is FalsePositiveValidationState.CandidateDetected,
+        is FalsePositiveValidationState.Error,
+        is FalsePositiveValidationState.Stopped -> Unit
+    }
+}
+
+private const val NANOS_PER_SECOND = 1_000_000_000L
 
 @Composable
 private fun MetricsGrid(snapshot: com.example.sos_segundoplano.domain.signals.TripSignalSnapshot) {

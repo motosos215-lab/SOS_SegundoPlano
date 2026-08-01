@@ -35,6 +35,7 @@
             android:exported="false"
             android:foregroundServiceType="health" />
 
+        <!-- Exported so Google Play Services Wear can deliver phone trip and validation messages. -->
         <service
             android:name=".MotoSosWearableListenerService"
             android:exported="true">
@@ -43,6 +44,13 @@
                 <data
                     android:host="*"
                     android:pathPrefix="/motosos/trip"
+                    android:scheme="wear" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data
+                    android:host="*"
+                    android:pathPrefix="/motosos/validation"
                     android:scheme="wear" />
             </intent-filter>
         </service>
