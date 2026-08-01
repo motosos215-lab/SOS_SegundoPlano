@@ -7,10 +7,14 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import com.example.sos_segundoplano.data.signals.TripSignalCaptureCoordinator
 
 class MonitoringForegroundService : Service() {
     private val notificationFactory: MonitoringNotificationFactory by lazy {
         MonitoringNotificationFactory(this)
+    }
+    private val captureCoordinator: TripSignalCaptureCoordinator by lazy {
+        TripSignalCaptureCoordinator(applicationContext)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -29,11 +33,17 @@ class MonitoringForegroundService : Service() {
 
         return try {
             promoteToForeground(notificationFactory.buildNotification())
+            captureCoordinator.start()
             START_NOT_STICKY
         } catch (_: SecurityException) {
             stopSelf(startId)
             START_NOT_STICKY
         }
+    }
+
+    override fun onDestroy() {
+        captureCoordinator.stop()
+        super.onDestroy()
     }
 
     private fun promoteToForeground(notification: Notification) {

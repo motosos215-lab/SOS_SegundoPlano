@@ -4,9 +4,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -42,7 +44,7 @@ fun MotoHeroTripCard(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .height(280.dp)
+            .height(292.dp)
             .background(MotoPrimaryBlue, RoundedCornerShape(18.dp))
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -65,13 +67,14 @@ fun MotoHeroTripCard(
         Button(
             onClick = onStartTrip,
             modifier = Modifier
-                .height(48.dp)
+                .heightIn(min = 56.dp)
                 .fillMaxWidth()
-                .widthIn(max = 310.dp)
+                .widthIn(max = 326.dp)
                 .testTag("start_trip_button")
                 .semantics { contentDescription = startTripContentDescription },
             shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = MotoSuccess)
+            colors = ButtonDefaults.buttonColors(containerColor = MotoSuccess),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
         ) {
             Icon(
                 painter = painterResource(R.drawable.ic_action_play),

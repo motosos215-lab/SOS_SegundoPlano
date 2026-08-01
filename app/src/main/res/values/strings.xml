@@ -22,6 +22,9 @@
     <string name="gps_accuracy">Precisión GPS</string>
     <string name="mobile_battery">Batería móvil</string>
     <string name="signal">Señal</string>
+    <string name="connectivity">Conectividad</string>
+    <string name="smartwatch">Estado del smartwatch</string>
+    <string name="heart_rate">Frecuencia cardiaca</string>
     <string name="pending">Pendiente</string>
     <string name="not_available_value">--</string>
     <string name="time_placeholder">--:--:--</string>

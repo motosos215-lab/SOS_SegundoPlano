@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">MotoSOS</string>
+    <string name="wear_monitoring_title">MotoSOS monitoreando viaje</string>
+    <string name="wear_monitoring_content">Captura de sensores del smartwatch activa</string>
+    <string name="wear_permission_title">Frecuencia cardiaca</string>
+    <string name="wear_permission_explanation">MotoSOS usa la frecuencia cardiaca como dato contextual durante un viaje activo.</string>
+    <string name="wear_permission_button">Permitir frecuencia cardiaca</string>
+    <string name="wear_background_permission_help">Para capturas prolongadas, revisa el permiso de fondo en Ajustes.</string>
+</resources>
