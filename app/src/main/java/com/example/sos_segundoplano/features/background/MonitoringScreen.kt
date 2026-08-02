@@ -26,6 +26,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.sos_segundoplano.R
+import com.example.sos_segundoplano.domain.offline.OfflineQueueSummary
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
 import com.example.sos_segundoplano.domain.validation.IncidentCause
 import com.example.sos_segundoplano.ui.components.MotoBottomBar
@@ -44,6 +45,7 @@ fun MonitoringScreen(
     modifier: Modifier = Modifier,
     snapshot: com.example.sos_segundoplano.domain.signals.TripSignalSnapshot = com.example.sos_segundoplano.domain.signals.TripSignalSnapshot(),
     validationState: FalsePositiveValidationState = FalsePositiveValidationState.Idle,
+    offlineQueueSummary: OfflineQueueSummary = OfflineQueueSummary(),
     onConfirmSafe: (Long, Long, String) -> Unit = { _, _, _ -> },
     onRequestHelp: (Long, Long, String) -> Unit = { _, _, _ -> },
     onFinishTrip: () -> Unit = {},
@@ -100,6 +102,7 @@ fun MonitoringScreen(
                     onConfirmSafe = onConfirmSafe,
                     onRequestHelp = onRequestHelp
                 )
+                OfflineQueuePanel(offlineQueueSummary)
                 MetricsGrid(snapshot)
                 if (useFlexibleBottomSpace) {
                     Spacer(modifier = Modifier.weight(1f))
@@ -131,6 +134,27 @@ fun MonitoringScreen(
             }
         }
     }
+}
+
+@Composable
+private fun OfflineQueuePanel(summary: OfflineQueueSummary) {
+    if (summary.unsentCount == 0 && summary.sentCount == 0 && summary.permanentFailureCount == 0 && summary.syncErrorCount == 0) return
+    val status = when {
+        summary.permanentFailureCount > 0 -> stringResource(R.string.offline_queue_sync_error, summary.permanentFailureCount)
+        summary.notConfiguredCount > 0 -> stringResource(R.string.offline_queue_not_configured, summary.notConfiguredCount)
+        summary.retryPendingCount > 0 -> stringResource(R.string.offline_queue_waiting_connection, summary.retryPendingCount)
+        summary.pendingCount > 0 || summary.inFlightCount > 0 -> stringResource(R.string.offline_queue_pending, summary.unsentCount)
+        else -> stringResource(R.string.offline_queue_confirmed)
+    }
+    Text(
+        text = status,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("offline_queue_status"),
+        style = MaterialTheme.typography.bodySmall,
+        color = if (summary.permanentFailureCount > 0) MotoAlert else MaterialTheme.colorScheme.onSurface,
+        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+    )
 }
 
 @Composable

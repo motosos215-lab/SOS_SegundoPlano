@@ -1,6 +1,11 @@
 package com.example.sos_segundoplano.data.validation
 
 import com.example.sos_segundoplano.data.rules.InMemoryRiskAssessmentStore
+import com.example.sos_segundoplano.domain.offline.OfflineEventSink
+import com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult
+import com.example.sos_segundoplano.domain.offline.OfflineSyncErrorCategory
+import com.example.sos_segundoplano.domain.offline.idempotencyKey
+import com.example.sos_segundoplano.domain.offline.OfflineEventType
 import com.example.sos_segundoplano.domain.rules.BatteryReadinessStatus
 import com.example.sos_segundoplano.domain.rules.ConnectivityReadinessStatus
 import com.example.sos_segundoplano.domain.rules.DeviceReadinessEvaluation
@@ -15,10 +20,13 @@ import com.example.sos_segundoplano.domain.rules.RuleEvidence
 import com.example.sos_segundoplano.domain.rules.RuleId
 import com.example.sos_segundoplano.domain.rules.RuleOutcome
 import com.example.sos_segundoplano.domain.validation.AlertDeliveryStatus
+import com.example.sos_segundoplano.domain.validation.AlertDispatchRequest
 import com.example.sos_segundoplano.domain.validation.AlertRetryState
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationConfig
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
 import com.example.sos_segundoplano.domain.validation.IncidentCause
+import com.example.sos_segundoplano.domain.validation.LocalIncident
+import com.example.sos_segundoplano.domain.validation.MinorEvent
 import com.example.sos_segundoplano.domain.validation.MinorEventType
 import com.example.sos_segundoplano.domain.validation.MonotonicClock
 import com.example.sos_segundoplano.domain.validation.UserResponseSource
@@ -353,6 +361,95 @@ class FalsePositiveValidationCoordinatorTest {
         }
     }
 
+    @Test fun validationEventsAreOfferedToOfflineSinkOnceByIdempotencyKey() = runTest {
+        val sink = FakeOfflineEventSink()
+        val fixture = fixture(sink)
+        try {
+            start(fixture)
+            fixture.risk.publish(assessment(score = 30, riskLevel = RiskLevel.Low, continuity = MovementContinuityState.Continuing, outcomes = listOf(triggered(RuleId.Impact, 0.5), notTriggered(RuleId.Fall), notTriggered(RuleId.Immobility), notTriggered(RuleId.OrientationChange))))
+            runCurrent()
+
+            assertEquals(listOf("minor-event:1:v1"), sink.keys)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun minorPersistenceFailurePublishesErrorAndDoesNotUpdateStore() = runTest {
+        val sink = FakeOfflineEventSink(failMinor = true)
+        val fixture = fixture(sink)
+        try {
+            start(fixture)
+            fixture.risk.publish(assessment(score = 30, riskLevel = RiskLevel.Low, continuity = MovementContinuityState.Continuing, outcomes = listOf(triggered(RuleId.Impact, 0.5), notTriggered(RuleId.Fall), notTriggered(RuleId.Immobility), notTriggered(RuleId.OrientationChange))))
+            runCurrent()
+
+            assertTrue(fixture.minor.items.value.isEmpty())
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun bundlePersistenceFailureDoesNotUpdateStores() = runTest {
+        val sink = FakeOfflineEventSink(failBundle = true)
+        val fixture = fixture(sink)
+        try {
+            start(fixture)
+            fixture.risk.publish(assessment(score = 95, riskLevel = RiskLevel.High, confidence = 0.95, outcomes = listOf(triggered(RuleId.Impact, 0.95), triggered(RuleId.Fall, 0.95))))
+            runCurrent()
+
+            assertTrue(fixture.incidents.items.value.isEmpty())
+            assertTrue(fixture.requests.items.value.isEmpty())
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun bundleSuccessUpdatesBothStoresAfterSinkCall() = runTest {
+        val sink = FakeOfflineEventSink()
+        val fixture = fixture(sink)
+        sink.onBeforeBundleReturn = {
+            assertTrue(fixture.incidents.items.value.isEmpty())
+            assertTrue(fixture.requests.items.value.isEmpty())
+        }
+        try {
+            start(fixture)
+            fixture.risk.publish(assessment(score = 95, riskLevel = RiskLevel.High, confidence = 0.95, outcomes = listOf(triggered(RuleId.Impact, 0.95), triggered(RuleId.Fall, 0.95))))
+            runCurrent()
+
+            assertEquals(listOf("bundle"), sink.order)
+            assertEquals(1, fixture.incidents.items.value.size)
+            assertEquals(1, fixture.requests.items.value.size)
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.ImmediateAlertRequested)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun minorSuccessUpdatesStoreAfterSinkCall() = runTest {
+        val sink = FakeOfflineEventSink()
+        val fixture = fixture(sink)
+        sink.onBeforeMinorReturn = {
+            assertTrue(fixture.minor.items.value.isEmpty())
+        }
+        try {
+            start(fixture)
+            fixture.risk.publish(assessment(score = 30, riskLevel = RiskLevel.Low, continuity = MovementContinuityState.Continuing, outcomes = listOf(triggered(RuleId.Impact, 0.5), notTriggered(RuleId.Fall), notTriggered(RuleId.Immobility), notTriggered(RuleId.OrientationChange))))
+            runCurrent()
+
+            assertEquals(1, fixture.minor.items.value.size)
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.MinorEventRecorded)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
     @Test fun resetAndJoinCancelsCollectorCountdownAndDeferredTransition() = runTest {
         val fixture = fixture()
         try {
@@ -389,7 +486,7 @@ class FalsePositiveValidationCoordinatorTest {
         }
     }
 
-    private fun TestScope.fixture(): Fixture {
+    private fun TestScope.fixture(offlineEventSink: OfflineEventSink? = null): Fixture {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val fixtureJob = SupervisorJob()
         val fixtureScope = CoroutineScope(fixtureJob + dispatcher)
@@ -413,6 +510,7 @@ class FalsePositiveValidationCoordinatorTest {
             { 1L },
             externalScope = fixtureScope
         )
+        coordinator.setOfflineEventSink(offlineEventSink ?: FakeOfflineEventSink())
         return Fixture(clock, risk, validation, minor, incidents, requests, coordinator, fixtureJob)
     }
 
@@ -445,6 +543,47 @@ class FalsePositiveValidationCoordinatorTest {
 
     private class FakeClock(var now: Long = 0L) : MonotonicClock {
         override fun elapsedRealtimeNanos(): Long = now
+    }
+
+    private class FakeOfflineEventSink(
+        private val failMinor: Boolean = false,
+        private val failBundle: Boolean = false
+    ) : OfflineEventSink {
+        val keys = mutableListOf<String>()
+        val order = mutableListOf<String>()
+        var onBeforeMinorReturn: () -> Unit = {}
+        var onBeforeBundleReturn: () -> Unit = {}
+
+        override suspend fun enqueueMinorEvent(event: MinorEvent): OfflineQueueEnqueueResult {
+            order.add("minor")
+            if (failMinor) return OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.Serialization, "offline_queue_storage_failed")
+            val result = enqueue(idempotencyKey(OfflineEventType.MinorEvent, event.eventId.toString(), 1))
+            onBeforeMinorReturn()
+            return result
+        }
+
+        override suspend fun enqueueIncident(incident: LocalIncident): OfflineQueueEnqueueResult = enqueue(
+            idempotencyKey(OfflineEventType.LocalIncident, incident.incidentId.toString(), 1)
+        )
+
+        override suspend fun enqueueAlertRequest(request: AlertDispatchRequest): OfflineQueueEnqueueResult = enqueue(
+            idempotencyKey(OfflineEventType.AlertDispatchRequest, request.requestId.toString(), 1)
+        )
+
+        override suspend fun enqueueIncidentBundle(incident: LocalIncident, request: AlertDispatchRequest): OfflineQueueEnqueueResult {
+            order.add("bundle")
+            if (failBundle) return OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.Serialization, "offline_queue_storage_failed")
+            enqueueIncident(incident)
+            val result = enqueueAlertRequest(request)
+            onBeforeBundleReturn()
+            return result
+        }
+
+        private fun enqueue(key: String): OfflineQueueEnqueueResult {
+            if (key in keys) return OfflineQueueEnqueueResult.AlreadyExists(key)
+            keys.add(key)
+            return OfflineQueueEnqueueResult.PersistedAndScheduled(keys.size.toLong(), key)
+        }
     }
 
     private fun rejects(block: () -> Unit) {

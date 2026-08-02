@@ -33,10 +33,12 @@ import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissio
 import com.example.sos_segundoplano.core.permissions.BluetoothRequirementChecker
 import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatus
 import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatusProvider
+import com.example.sos_segundoplano.data.offline.OfflineQueueProvider
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationCoordinatorProvider
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationStoreProvider
 import com.example.sos_segundoplano.data.signals.TripSignalStoreProvider
 import com.example.sos_segundoplano.domain.model.TripSessionState
+import com.example.sos_segundoplano.domain.offline.OfflineQueueSummary
 import com.example.sos_segundoplano.domain.signals.TripSignalSnapshot
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
 import com.example.sos_segundoplano.domain.validation.UserResponseSource
@@ -68,6 +70,7 @@ class MainActivity : ComponentActivity() {
                     bluetoothRequirementStatusProvider = BluetoothRequirementChecker(applicationContext),
                     monitoringServiceStarter = AndroidMonitoringServiceStarter(applicationContext),
                     monitoringServiceStopper = AndroidMonitoringServiceStopper(applicationContext),
+                    offlineQueueSummaries = OfflineQueueProvider.get(applicationContext).repository.observeSummary(),
                     onOpenAppSettings = ::openAppSettings,
                     onOpenNotificationSettings = ::openNotificationSettings,
                     onOpenBluetoothSettings = ::openBluetoothSettings
@@ -129,6 +132,7 @@ fun MotoSosApp(
         MonitoringServiceStopper { MonitoringServiceStopResult.Stopped },
     signalSnapshots: StateFlow<TripSignalSnapshot> = TripSignalStoreProvider.store.snapshots,
     validationStates: StateFlow<FalsePositiveValidationState> = FalsePositiveValidationStoreProvider.store.states,
+    offlineQueueSummaries: kotlinx.coroutines.flow.Flow<OfflineQueueSummary>? = null,
     onConfirmSafe: (Long, Long, String) -> Unit = { sessionId, assessmentId, responseId ->
         FalsePositiveValidationCoordinatorProvider.coordinator.confirmSafe(sessionId, assessmentId, UserResponseSource.Mobile, responseId)
     },
@@ -156,6 +160,9 @@ fun MotoSosApp(
     } else {
         TripSessionState.Idle
     }
+    val offlineQueueSummary = (offlineQueueSummaries ?: kotlinx.coroutines.flow.flowOf(OfflineQueueSummary()))
+        .collectAsState(OfflineQueueSummary())
+        .value
 
     fun validateTripStartRequirements() {
         when (val locationStatus = locationPermissionStatusProvider.getStatus()) {
@@ -269,6 +276,7 @@ fun MotoSosApp(
             modifier = modifier,
             snapshot = signalSnapshots.collectAsState().value,
             validationState = validationStates.collectAsState().value,
+            offlineQueueSummary = offlineQueueSummary,
             onConfirmSafe = onConfirmSafe,
             onRequestHelp = onRequestHelp,
             onFinishTrip = {

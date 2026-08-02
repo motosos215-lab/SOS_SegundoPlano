@@ -90,4 +90,9 @@
     <string name="validation_braking_suppressed">Frenado brusco con movimiento continuo: alerta suprimida.</string>
     <string name="validation_incident_generated">Incidente local generado. Solicitud pendiente.</string>
     <string name="validation_immediate_alert_requested">Evento crítico detectado. Solicitud inmediata pendiente.</string>
+    <string name="offline_queue_pending">%1$d evento(s) guardado(s) localmente. Pendiente de sincronización.</string>
+    <string name="offline_queue_waiting_connection">%1$d evento(s) esperando conexión para reintento.</string>
+    <string name="offline_queue_not_configured">%1$d evento(s) guardado(s). Sincronización remota aún no configurada.</string>
+    <string name="offline_queue_confirmed">Sincronización confirmada.</string>
+    <string name="offline_queue_sync_error">%1$d error(es) de sincronización.</string>
 </resources>
