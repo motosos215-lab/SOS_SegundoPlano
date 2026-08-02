@@ -2,6 +2,9 @@ package com.example.sos_segundoplano.data.validation
 
 import com.example.sos_segundoplano.data.rules.RiskAssessmentStore
 import com.example.sos_segundoplano.data.rules.RiskAssessmentStoreProvider
+import com.example.sos_segundoplano.domain.offline.NoOpOfflineEventSink
+import com.example.sos_segundoplano.domain.offline.OfflineEventSink
+import com.example.sos_segundoplano.domain.offline.isPersisted
 import com.example.sos_segundoplano.domain.rules.MovementContinuityState
 import com.example.sos_segundoplano.domain.rules.RiskAssessment
 import com.example.sos_segundoplano.domain.rules.RiskAssessmentState
@@ -10,6 +13,7 @@ import com.example.sos_segundoplano.domain.rules.RuleId
 import com.example.sos_segundoplano.domain.validation.AlertDispatchRequest
 import com.example.sos_segundoplano.domain.validation.AlertPayloadSummary
 import com.example.sos_segundoplano.domain.validation.AlertPriority
+import com.example.sos_segundoplano.domain.validation.AssessmentIdentifier
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationConfig
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
 import com.example.sos_segundoplano.domain.validation.IncidentCause
@@ -65,6 +69,7 @@ class FalsePositiveValidationCoordinator(
     private val nextIncidentId: () -> Long = { IncidentStoreProvider.incidentIds.incrementAndGet() },
     private val nextDispatchRequestId: () -> Long = { IncidentStoreProvider.dispatchRequestIds.incrementAndGet() },
     private var notifier: FalsePositiveValidationNotifier = NoOpFalsePositiveValidationNotifier,
+    private var offlineEventSink: OfflineEventSink = NoOpOfflineEventSink,
     private val externalScope: CoroutineScope? = null
 ) {
     private var scope: CoroutineScope? = null
@@ -79,6 +84,10 @@ class FalsePositiveValidationCoordinator(
     private val mutex = Mutex()
     private val processedAssessments = BoundedIdSet(config.assessmentBufferCapacity)
     private val terminalAssessments = BoundedIdSet(config.assessmentBufferCapacity)
+    private val pendingPersistenceAssessments = BoundedIdSet(config.assessmentBufferCapacity)
+    private val persistenceDecisions = BoundedDecisionMap(config.assessmentBufferCapacity)
+    private val persistenceRetryJobs = LinkedHashMap<AssessmentIdentifier, Job>()
+    private val persistenceRetryAttempts = LinkedHashMap<AssessmentIdentifier, Int>()
     private val processedResponses = BoundedStringSet(config.assessmentBufferCapacity)
 
     val validationCounters: ValidationCounters get() = counters
@@ -86,6 +95,10 @@ class FalsePositiveValidationCoordinator(
     fun setNotifier(nextNotifier: FalsePositiveValidationNotifier) {
         notifier = nextNotifier
         notifier.onValidationStateChanged(validationStore.states.value)
+    }
+
+    fun setOfflineEventSink(nextSink: OfflineEventSink) {
+        offlineEventSink = nextSink
     }
 
     fun start(expectedSessionId: Long? = null) {
@@ -149,6 +162,7 @@ class FalsePositiveValidationCoordinator(
         }
         countdownJob?.cancelAndJoin()
         transitionJob?.cancelAndJoin()
+        cancelPersistenceRetries()
         collectorJob?.cancelAndJoin()
         if (ownsScope) currentScope?.cancel()
         ownsScope = false
@@ -157,11 +171,14 @@ class FalsePositiveValidationCoordinator(
     fun reset() {
         countdown?.cancel()
         deferredTransition?.cancel()
+        persistenceRetryJobs.values.forEach { it.cancel() }
         collector?.cancel()
         if (ownsScope) scope?.cancel()
         countdown = null
         deferredTransition = null
         collector = null
+        persistenceRetryJobs.clear()
+        persistenceRetryAttempts.clear()
         scope = null
         ownsScope = false
         started = false
@@ -185,76 +202,92 @@ class FalsePositiveValidationCoordinator(
         validationStore.clear()
         countdownJob?.cancelAndJoin()
         transitionJob?.cancelAndJoin()
+        cancelPersistenceRetries()
         collectorJob?.cancelAndJoin()
         if (ownsScope) currentScope?.cancel()
         ownsScope = false
     }
 
-    private suspend fun handleAssessment(assessment: RiskAssessment, allowEscalation: Boolean = true) = mutex.withLock {
-        if (!started) return@withLock
-        if (activeSessionId == null) activeSessionId = assessment.sessionId
-        if (activeSessionId != assessment.sessionId) return@withLock
-        val key = assessment.identifier()
-        if (!processedAssessments.add(key)) {
-            counters = counters.copy(duplicateAssessments = counters.duplicateAssessments + 1)
-            return@withLock
-        }
-        if (isLate(assessment)) {
-            counters = counters.copy(lateAssessments = counters.lateAssessments + 1)
-            return@withLock
-        }
-        lastEndNanos = maxOf(lastEndNanos ?: assessment.endNanos, assessment.endNanos)
-        if (terminalAssessments.contains(key)) return@withLock
-        val currentCountdown = validationStore.states.value.activeCountdown
-        if (currentCountdown != null) return@withLock
+    private suspend fun handleAssessment(assessment: RiskAssessment, allowEscalation: Boolean = true) {
+        val offlineEvents: List<PendingOfflineEvent> = mutex.withLock {
+            if (!started) return@withLock emptyList()
+            if (activeSessionId == null) activeSessionId = assessment.sessionId
+            if (activeSessionId != assessment.sessionId) return@withLock emptyList()
+            val key = assessment.identifier()
+            persistenceDecisions.get(key)?.let { retry ->
+                pendingPersistenceAssessments.add(key)
+                return@withLock listOf(retry)
+            }
+            if (processedAssessments.contains(key)) {
+                counters = counters.copy(duplicateAssessments = counters.duplicateAssessments + 1)
+                return@withLock emptyList()
+            }
+            if (pendingPersistenceAssessments.contains(key)) return@withLock emptyList()
+            if (isLate(assessment)) {
+                counters = counters.copy(lateAssessments = counters.lateAssessments + 1)
+                return@withLock emptyList()
+            }
+            lastEndNanos = maxOf(lastEndNanos ?: assessment.endNanos, assessment.endNanos)
+            if (terminalAssessments.contains(key)) return@withLock emptyList()
+            val currentCountdown = validationStore.states.value.activeCountdown
+            if (currentCountdown != null) return@withLock emptyList()
 
-        val evidence = assessment.validationEvidence()
-        if (allowEscalation && isCritical(assessment, explicitHelp = false)) {
-            createIncidentLocked(assessment, IncidentCause.CriticalPhysicalEvent, ValidationDecisionReason.CriticalPhysicalEvent, ValidationOrigin.System, immediate = true)
-            return@withLock
+            val evidence = assessment.validationEvidence()
+            if (allowEscalation && isCritical(assessment, explicitHelp = false)) {
+                return@withLock createIncidentLocked(assessment, IncidentCause.CriticalPhysicalEvent, ValidationDecisionReason.CriticalPhysicalEvent, ValidationOrigin.System, immediate = true).toOfflineEvents(key)
+            }
+            if (isIsolatedBump(assessment, evidence)) {
+                return@withLock listOf(recordMinorEventLocked(assessment, evidence, key))
+            }
+            if (isHarshBrakingSuppressed(assessment, evidence)) {
+                processedAssessments.add(key)
+                publish(FalsePositiveValidationState.SuppressedFalsePositive(assessment, metadata(assessment, ValidationDecisionReason.HarshBrakingWithContinuedMovement, ValidationOrigin.System), evidence))
+                return@withLock emptyList()
+            }
+            if (allowEscalation && requiresCountdown(assessment, evidence)) {
+                processedAssessments.add(key)
+                publish(FalsePositiveValidationState.CandidateDetected(assessment, metadata(assessment, ValidationDecisionReason.CandidatePhysicalRisk, ValidationOrigin.System), evidence))
+                startCountdownLocked(assessment, evidence)
+            }
+            if (!allowEscalation) processedAssessments.add(key)
+            emptyList()
         }
-        if (isIsolatedBump(assessment, evidence)) {
-            recordMinorEventLocked(assessment, evidence)
-            return@withLock
-        }
-        if (isHarshBrakingSuppressed(assessment, evidence)) {
-            publish(FalsePositiveValidationState.SuppressedFalsePositive(assessment, metadata(assessment, ValidationDecisionReason.HarshBrakingWithContinuedMovement, ValidationOrigin.System), evidence))
-            return@withLock
-        }
-        if (allowEscalation && requiresCountdown(assessment, evidence)) {
-            publish(FalsePositiveValidationState.CandidateDetected(assessment, metadata(assessment, ValidationDecisionReason.CandidatePhysicalRisk, ValidationOrigin.System), evidence))
-            startCountdownLocked(assessment, evidence)
-        }
+        enqueueOffline(offlineEvents)
     }
 
-    private suspend fun handleResponse(response: UserValidationResponse) = mutex.withLock {
-        if (!started || response.protocolVersion != PROTOCOL_VERSION) {
-            counters = counters.copy(invalidResponses = counters.invalidResponses + 1)
-            return@withLock
-        }
-        if (!processedResponses.add(response.responseId)) {
-            counters = counters.copy(duplicateResponses = counters.duplicateResponses + 1)
-            return@withLock
-        }
-        val countdownState = validationStore.states.value.activeCountdown
-        if (countdownState == null || countdownState.assessment.sessionId != response.sessionId || countdownState.assessment.assessmentId != response.assessmentId) {
-            counters = counters.copy(ignoredResponses = counters.ignoredResponses + 1)
-            return@withLock
-        }
-        val assessment = countdownState.assessment
-        when (response.action) {
-            UserValidationAction.ConfirmSafe -> {
-                terminalAssessments.add(assessment.identifier())
-                cancelCountdownLocked()
-                val safe = FalsePositiveValidationState.SafeConfirmed(metadata(assessment, ValidationDecisionReason.UserConfirmedSafe, response.source.toOrigin()), response.responseId)
-                publish(safe)
-                returnToMonitoringLater(safe)
+    private suspend fun handleResponse(response: UserValidationResponse) {
+        val offlineEvents: List<PendingOfflineEvent> = mutex.withLock {
+            if (!started || response.protocolVersion != PROTOCOL_VERSION) {
+                counters = counters.copy(invalidResponses = counters.invalidResponses + 1)
+                return@withLock emptyList()
             }
-            UserValidationAction.RequestHelp -> {
-                publish(FalsePositiveValidationState.HelpRequested(metadata(assessment, ValidationDecisionReason.UserRequestedHelp, response.source.toOrigin()), response.responseId))
-                createIncidentLocked(assessment, IncidentCause.UserRequestedHelp, ValidationDecisionReason.UserRequestedHelp, response.source.toOrigin(), immediate = false)
+            if (!processedResponses.add(response.responseId)) {
+                counters = counters.copy(duplicateResponses = counters.duplicateResponses + 1)
+                return@withLock emptyList()
+            }
+            val countdownState = validationStore.states.value.activeCountdown
+            if (countdownState == null || countdownState.assessment.sessionId != response.sessionId || countdownState.assessment.assessmentId != response.assessmentId) {
+                counters = counters.copy(ignoredResponses = counters.ignoredResponses + 1)
+                return@withLock emptyList()
+            }
+            val assessment = countdownState.assessment
+            when (response.action) {
+                UserValidationAction.ConfirmSafe -> {
+                    terminalAssessments.add(assessment.identifier())
+                    processedAssessments.add(assessment.identifier())
+                    cancelCountdownLocked()
+                    val safe = FalsePositiveValidationState.SafeConfirmed(metadata(assessment, ValidationDecisionReason.UserConfirmedSafe, response.source.toOrigin()), response.responseId)
+                    publish(safe)
+                    returnToMonitoringLater(safe)
+                    emptyList()
+                }
+                UserValidationAction.RequestHelp -> {
+                    publish(FalsePositiveValidationState.HelpRequested(metadata(assessment, ValidationDecisionReason.UserRequestedHelp, response.source.toOrigin()), response.responseId))
+                    createIncidentLocked(assessment, IncidentCause.UserRequestedHelp, ValidationDecisionReason.UserRequestedHelp, response.source.toOrigin(), immediate = false).toOfflineEvents(assessment.identifier())
+                }
             }
         }
+        enqueueOffline(offlineEvents)
     }
 
     private fun startCountdownLocked(assessment: RiskAssessment, evidence: ValidationEvidence) {
@@ -275,37 +308,41 @@ class FalsePositiveValidationCoordinator(
         countdown = currentScope.launch {
             while (true) {
                 delay(config.visualUpdateIntervalNanos / NANOS_PER_MILLI)
-                mutex.withLock {
+                val offlineEvents: List<PendingOfflineEvent> = mutex.withLock {
                     val state = validationStore.states.value.activeCountdown ?: return@launch
                     if (state.assessment.assessmentId != assessment.assessmentId || state.assessment.sessionId != assessment.sessionId) return@launch
                     val remaining = (deadline - now()).coerceAtLeast(0L)
                     if (remaining <= 0L) {
                         counters = counters.copy(timeouts = counters.timeouts + 1)
-                        createIncidentLocked(assessment, IncidentCause.Timeout, ValidationDecisionReason.Timeout, ValidationOrigin.Timeout, immediate = false)
-                        return@launch
+                        return@withLock createIncidentLocked(assessment, IncidentCause.Timeout, ValidationDecisionReason.Timeout, ValidationOrigin.Timeout, immediate = false).toOfflineEvents(assessment.identifier())
                     }
                     publish(state.copy(remainingNanos = remaining))
+                    emptyList()
                 }
+                enqueueOffline(offlineEvents)
+                if (offlineEvents.isNotEmpty()) return@launch
             }
         }
     }
 
-    private fun recordMinorEventLocked(assessment: RiskAssessment, evidence: ValidationEvidence) {
-        val event = minorEventStore.add(
-            MinorEvent(
-                eventId = nextMinorEventId(),
-                sessionId = assessment.sessionId,
-                assessmentId = assessment.assessmentId,
-                windowId = assessment.windowId,
-                type = MinorEventType.Bump,
-                createdAtElapsedRealtimeNanos = now(),
-                score = assessment.score,
-                confidence = assessment.confidence,
-                evidence = evidence,
-                policyVersion = config.policyVersion
-            )
+    private fun recordMinorEventLocked(assessment: RiskAssessment, evidence: ValidationEvidence, key: AssessmentIdentifier): PendingOfflineEvent.Minor {
+        val createdAt = now()
+        val event = MinorEvent(
+            eventId = nextMinorEventId(),
+            sessionId = assessment.sessionId,
+            assessmentId = assessment.assessmentId,
+            windowId = assessment.windowId,
+            type = MinorEventType.Bump,
+            createdAtElapsedRealtimeNanos = createdAt,
+            score = assessment.score,
+            confidence = assessment.confidence,
+            evidence = evidence,
+            policyVersion = config.policyVersion
         )
-        publish(FalsePositiveValidationState.MinorEventRecorded(event, metadata(assessment, ValidationDecisionReason.IsolatedBump, ValidationOrigin.System)))
+        val pending = PendingOfflineEvent.Minor(key, event, metadata(assessment, ValidationDecisionReason.IsolatedBump, ValidationOrigin.System, createdAt))
+        persistenceDecisions.put(key, pending)
+        pendingPersistenceAssessments.add(key)
+        return pending
     }
 
     private fun createIncidentLocked(
@@ -314,47 +351,138 @@ class FalsePositiveValidationCoordinator(
         reason: ValidationDecisionReason,
         origin: ValidationOrigin,
         immediate: Boolean
-    ) {
+    ): IncidentBundle? {
         val key = assessment.identifier()
-        if (!terminalAssessments.add(key)) return
+        if (terminalAssessments.contains(key) || pendingPersistenceAssessments.contains(key)) return null
         cancelCountdownLocked()
         val createdAt = now()
-        val incident = incidentStore.add(
-            LocalIncident(
-                incidentId = nextIncidentId(),
-                sessionId = assessment.sessionId,
-                assessmentId = assessment.assessmentId,
-                windowId = assessment.windowId,
-                createdAtElapsedRealtimeNanos = createdAt,
-                cause = cause,
-                score = assessment.score,
-                riskLevel = assessment.riskLevel,
-                confidence = assessment.confidence,
-                relevantOutcomes = assessment.relevantOutcomeSummaries(),
-                ruleSetVersion = assessment.ruleSetVersion,
-                validationPolicyVersion = config.policyVersion,
-                gpsQuality = assessment.gpsQuality.status
-            )
+        val incident = LocalIncident(
+            incidentId = nextIncidentId(),
+            sessionId = assessment.sessionId,
+            assessmentId = assessment.assessmentId,
+            windowId = assessment.windowId,
+            createdAtElapsedRealtimeNanos = createdAt,
+            cause = cause,
+            score = assessment.score,
+            riskLevel = assessment.riskLevel,
+            confidence = assessment.confidence,
+            relevantOutcomes = assessment.relevantOutcomeSummaries(),
+            ruleSetVersion = assessment.ruleSetVersion,
+            validationPolicyVersion = config.policyVersion,
+            gpsQuality = assessment.gpsQuality.status
         )
-        val request = dispatchRequestStore.add(
-            AlertDispatchRequest(
-                requestId = nextDispatchRequestId(),
-                incidentId = incident.incidentId,
-                sessionId = assessment.sessionId,
-                assessmentId = assessment.assessmentId,
-                priority = if (immediate) AlertPriority.Critical else AlertPriority.High,
-                reason = cause,
-                createdAtElapsedRealtimeNanos = createdAt,
-                score = assessment.score,
-                confidence = assessment.confidence,
-                payload = AlertPayloadSummary(assessment.sessionId, assessment.assessmentId, incident.incidentId, assessment.score, assessment.riskLevel, cause, config.policyVersion)
-            )
+        val request = AlertDispatchRequest(
+            requestId = nextDispatchRequestId(),
+            incidentId = incident.incidentId,
+            sessionId = assessment.sessionId,
+            assessmentId = assessment.assessmentId,
+            priority = if (immediate) AlertPriority.Critical else AlertPriority.High,
+            reason = cause,
+            createdAtElapsedRealtimeNanos = createdAt,
+            score = assessment.score,
+            confidence = assessment.confidence,
+            payload = AlertPayloadSummary(assessment.sessionId, assessment.assessmentId, incident.incidentId, assessment.score, assessment.riskLevel, cause, config.policyVersion)
         )
-        val meta = metadata(assessment, reason, origin, createdAt)
-        if (immediate) {
-            publish(FalsePositiveValidationState.ImmediateAlertRequested(incident, request, meta))
-        } else {
-            publish(FalsePositiveValidationState.IncidentGenerated(incident, request, meta))
+        return IncidentBundle(key, incident, request, metadata(assessment, reason, origin, createdAt), immediate)
+    }
+
+    private suspend fun enqueueOffline(events: List<PendingOfflineEvent>) {
+        events.forEach { event ->
+            when (event) {
+                is PendingOfflineEvent.Minor -> {
+                    val result = try {
+                        offlineEventSink.enqueueMinorEvent(event.event)
+                    } catch (_: IllegalStateException) {
+                        com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult.PersistenceFailed(com.example.sos_segundoplano.domain.offline.OfflineSyncErrorCategory.Serialization, "offline_queue_storage_unavailable")
+                    }
+                    if (result.isPersisted) mutex.withLock {
+                        minorEventStore.add(event.event)
+                        pendingPersistenceAssessments.remove(event.key)
+                        persistenceDecisions.remove(event.key)
+                        cancelPersistenceRetry(event.key)
+                        processedAssessments.add(event.key)
+                        publish(FalsePositiveValidationState.MinorEventRecorded(event.event, event.metadata))
+                    } else if (result is com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult.PersistenceFailed) {
+                        publishPersistenceError(event.key, event.metadata)
+                    }
+                }
+                is PendingOfflineEvent.IncidentBundleEvent -> {
+                    val result = try {
+                        offlineEventSink.enqueueIncidentBundle(event.incident, event.request)
+                    } catch (_: IllegalStateException) {
+                        com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult.PersistenceFailed(com.example.sos_segundoplano.domain.offline.OfflineSyncErrorCategory.Serialization, "offline_queue_storage_unavailable")
+                    }
+                    if (result.isPersisted) mutex.withLock {
+                        incidentStore.add(event.incident)
+                        dispatchRequestStore.add(event.request)
+                        pendingPersistenceAssessments.remove(event.key)
+                        persistenceDecisions.remove(event.key)
+                        cancelPersistenceRetry(event.key)
+                        processedAssessments.add(event.key)
+                        terminalAssessments.add(event.key)
+                        if (event.immediate) {
+                            publish(FalsePositiveValidationState.ImmediateAlertRequested(event.incident, event.request, event.metadata))
+                        } else {
+                            publish(FalsePositiveValidationState.IncidentGenerated(event.incident, event.request, event.metadata))
+                        }
+                    } else if (result is com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult.PersistenceFailed) {
+                        publishPersistenceError(event.key, event.metadata)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun IncidentBundle?.toOfflineEvents(key: AssessmentIdentifier): List<PendingOfflineEvent> = this?.let {
+        val pending = PendingOfflineEvent.IncidentBundleEvent(it.key, it.incident, it.request, it.metadata, it.immediate)
+        persistenceDecisions.put(key, pending)
+        pendingPersistenceAssessments.add(key)
+        listOf(pending)
+    }.orEmpty()
+
+    private suspend fun publishPersistenceError(key: AssessmentIdentifier, metadata: ValidationMetadata) {
+        mutex.withLock {
+            pendingPersistenceAssessments.remove(key)
+            publish(FalsePositiveValidationState.Error(metadata, "OfflinePersistenceFailed"))
+        }
+        schedulePersistenceRetry(key)
+    }
+
+    private fun schedulePersistenceRetry(key: AssessmentIdentifier) {
+        val currentScope = scope ?: return
+        if (persistenceRetryJobs.containsKey(key)) return
+        val attempt = (persistenceRetryAttempts[key] ?: 0) + 1
+        persistenceRetryAttempts[key] = attempt
+        trimPersistenceRetryJobs()
+        if (attempt > MAX_PERSISTENCE_RETRY_ATTEMPTS) return
+        persistenceRetryJobs[key] = currentScope.launch {
+            delay(PERSISTENCE_RETRY_BACKOFF_MILLIS * attempt)
+            val pending = mutex.withLock {
+                persistenceRetryJobs.remove(key)
+                val decision = persistenceDecisions.get(key) ?: return@launch
+                if (pendingPersistenceAssessments.contains(key)) return@launch
+                pendingPersistenceAssessments.add(key)
+                decision
+            }
+            enqueueOffline(listOf(pending))
+        }
+    }
+
+    private suspend fun cancelPersistenceRetries() {
+        val jobs = persistenceRetryJobs.values.toList()
+        persistenceRetryJobs.clear()
+        persistenceRetryAttempts.clear()
+        jobs.forEach { it.cancelAndJoin() }
+    }
+
+    private fun cancelPersistenceRetry(key: AssessmentIdentifier) {
+        persistenceRetryJobs.remove(key)?.cancel()
+        persistenceRetryAttempts.remove(key)
+    }
+
+    private fun trimPersistenceRetryJobs() {
+        while (persistenceRetryJobs.size > config.assessmentBufferCapacity) {
+            cancelPersistenceRetry(persistenceRetryJobs.keys.first())
         }
     }
 
@@ -438,6 +566,11 @@ class FalsePositiveValidationCoordinator(
         cancelCountdownLocked()
         processedAssessments.clear()
         terminalAssessments.clear()
+        pendingPersistenceAssessments.clear()
+        persistenceDecisions.clear()
+        persistenceRetryJobs.values.forEach { it.cancel() }
+        persistenceRetryJobs.clear()
+        persistenceRetryAttempts.clear()
         processedResponses.clear()
         counters = ValidationCounters()
         lastEndNanos = null
@@ -488,9 +621,31 @@ class FalsePositiveValidationCoordinator(
             return true
         }
         fun contains(id: Any): Boolean = set.contains(id)
+        fun remove(id: Any) {
+            if (set.remove(id)) ids.remove(id)
+        }
         fun clear() {
             ids.clear()
             set.clear()
+        }
+    }
+
+    private class BoundedDecisionMap(private val capacity: Int) {
+        private val keys = ArrayDeque<Any>()
+        private val values = LinkedHashMap<Any, PendingOfflineEvent>()
+        fun get(key: Any): PendingOfflineEvent? = values[key]
+        fun put(key: Any, value: PendingOfflineEvent) {
+            if (!values.containsKey(key)) keys.addLast(key)
+            values[key] = value
+            while (keys.size > capacity) values.remove(keys.removeFirst())
+        }
+        fun remove(key: Any) {
+            values.remove(key)
+            keys.remove(key)
+        }
+        fun clear() {
+            keys.clear()
+            values.clear()
         }
     }
 
@@ -510,9 +665,25 @@ class FalsePositiveValidationCoordinator(
         }
     }
 
+    private data class IncidentBundle(
+        val key: AssessmentIdentifier,
+        val incident: LocalIncident,
+        val request: AlertDispatchRequest,
+        val metadata: ValidationMetadata,
+        val immediate: Boolean
+    )
+
+    private sealed interface PendingOfflineEvent {
+        val key: AssessmentIdentifier
+        data class Minor(override val key: AssessmentIdentifier, val event: MinorEvent, val metadata: ValidationMetadata) : PendingOfflineEvent
+        data class IncidentBundleEvent(override val key: AssessmentIdentifier, val incident: LocalIncident, val request: AlertDispatchRequest, val metadata: ValidationMetadata, val immediate: Boolean) : PendingOfflineEvent
+    }
+
     companion object {
         const val PROTOCOL_VERSION = 1
         private const val NANOS_PER_MILLI = 1_000_000L
+        private const val MAX_PERSISTENCE_RETRY_ATTEMPTS = 3
+        private const val PERSISTENCE_RETRY_BACKOFF_MILLIS = 1_000L
     }
 }
 
@@ -521,5 +692,9 @@ object FalsePositiveValidationCoordinatorProvider {
 
     fun setNotifier(notifier: FalsePositiveValidationNotifier) {
         coordinator.setNotifier(notifier)
+    }
+
+    fun setOfflineEventSink(sink: OfflineEventSink) {
+        coordinator.setOfflineEventSink(sink)
     }
 }
