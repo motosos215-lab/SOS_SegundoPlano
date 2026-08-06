@@ -26,6 +26,7 @@ import com.example.sos_segundoplano.ui.theme.MotoBackground
 @Composable
 fun HomeScreen(
     onStartTrip: () -> Unit,
+    onProfileSelected: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -40,7 +41,11 @@ fun HomeScreen(
             )
         },
         bottomBar = {
-            MotoBottomBar(selectedItem = MotoBottomBarItem.Home)
+            MotoBottomBar(
+                selectedItem = MotoBottomBarItem.Home,
+                enabledItems = setOf(MotoBottomBarItem.Home, MotoBottomBarItem.Profile),
+                onProfileSelected = onProfileSelected
+            )
         }
     ) { innerPadding ->
         Column(
