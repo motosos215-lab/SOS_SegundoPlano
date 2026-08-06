@@ -76,6 +76,20 @@ class ProfileScreenTest {
         composeRule.onNodeWithTag("profile_loading").assertIsDisplayed()
     }
 
+    @Test fun profileLoadingForNewSessionHidesPreviousProfileData() {
+        setProfile(ProfileUiState(loading = true))
+        composeRule.onNodeWithTag("profile_loading").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Moto Rider").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("profile_full_name").assertCountEquals(0)
+    }
+
+    @Test fun loggedOutStateShowsBlankProfileWithoutPreviousData() {
+        setProfile(ProfileUiState())
+        composeRule.onAllNodesWithTag("profile_loading").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Moto Rider").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("profile_full_name").assertCountEquals(0)
+    }
+
     @Test fun profileSuccessShowsReadOnlyInformation() {
         setProfile(ProfileUiState(profile = profile(phoneNumber = null)))
         composeRule.onAllNodesWithText("Moto Rider").assertCountEquals(2)
