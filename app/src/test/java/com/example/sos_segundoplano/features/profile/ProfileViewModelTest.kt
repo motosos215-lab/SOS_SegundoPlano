@@ -5,6 +5,7 @@ import com.example.sos_segundoplano.domain.auth.AuthResult
 import com.example.sos_segundoplano.domain.auth.AuthUser
 import com.example.sos_segundoplano.domain.auth.SessionExpired
 import com.example.sos_segundoplano.domain.auth.SessionState
+import com.example.sos_segundoplano.domain.auth.UserRole
 import com.example.sos_segundoplano.domain.profile.ProfileInvalidResponse
 import com.example.sos_segundoplano.domain.profile.ProfileNetworkUnavailable
 import com.example.sos_segundoplano.domain.profile.ProfileRateLimited
@@ -46,16 +47,132 @@ class ProfileViewModelTest {
         Dispatchers.resetMain()
     }
 
-    @Test fun loadsAutomaticallyOnceAndShowsSuccessWithoutSecrets() = runTest {
-        val repository = FakeProfileRepository(ProfileResult.Success(validProfile()))
-        val viewModel = ProfileViewModel(repository, FakeProfileViewModelAuthRepository())
+    @Test fun authenticatedSessionLoadsProfileOnceAndStaysStable() = runTest {
+        val repository = FakeProfileRepository(ProfileResult.Success(validProfile("rider-a")))
+        val auth = FakeAuthRepository()
+        val viewModel = ProfileViewModel(repository, auth)
 
         assertEquals(1, repository.loadCalls)
-        assertEquals("Moto Rider", viewModel.uiState.value.profile?.fullName)
-        viewModel.loadOnce()
+        assertEquals("rider-a", viewModel.uiState.value.profile?.id)
+
+        auth.emitSession(SessionState.Refreshing(aUser(), expiresAt(), true))
+        auth.emitSession(SessionState.Authenticated(aUser(), expiresAt(), true))
+        auth.emitSession(SessionState.Authenticated(aUser(), expiresAt(), true))
+
         assertEquals(1, repository.loadCalls)
+        assertEquals("rider-a", viewModel.uiState.value.profile?.id)
+        assertFalse(viewModel.uiState.value.loading)
         assertFalse(viewModel.uiState.value.toString().contains("access-token"))
         assertFalse(viewModel.uiState.value.toString().contains("password"))
+    }
+
+    @Test fun switchedSessionReloadsProfileShowsLoadingIntermediate() = runTest {
+        val pendingB = CompletableDeferred<ProfileResult<RiderProfile>>()
+        val repository = object : ProfileRepository {
+            var loadCalls = 0
+            override suspend fun loadProfile(): ProfileResult<RiderProfile> {
+                loadCalls++
+                return if (loadCalls == 1) ProfileResult.Success(validProfile("rider-a"))
+                else pendingB.await()
+            }
+        }
+        val auth = FakeAuthRepository()
+        val viewModel = ProfileViewModel(repository, auth)
+
+        assertEquals(1, repository.loadCalls)
+        assertEquals("rider-a", viewModel.uiState.value.profile?.id)
+
+        auth.emitSession(SessionState.LoggedOut)
+        assertEquals(1, repository.loadCalls)
+        assertFalse(viewModel.uiState.value.loading)
+        assertNull(viewModel.uiState.value.profile)
+        assertNull(viewModel.uiState.value.error)
+
+        auth.emitSession(SessionState.Authenticated(bUser(), expiresAt(), true))
+
+        assertEquals(2, repository.loadCalls)
+        assertTrue(viewModel.uiState.value.loading)
+        assertNull(viewModel.uiState.value.profile)
+        assertNull(viewModel.uiState.value.error)
+
+        pendingB.complete(ProfileResult.Success(validProfile("rider-b")))
+
+        assertEquals(2, repository.loadCalls)
+        assertEquals("rider-b", viewModel.uiState.value.profile?.id)
+        assertFalse(viewModel.uiState.value.loading)
+    }
+
+    @Test fun loggedOutSessionDoesNotLoadProfile() = runTest {
+        val repository = FakeProfileRepository(ProfileResult.Success(validProfile("rider-a")))
+        val auth = FakeAuthRepository(initialSession = SessionState.LoggedOut)
+        val viewModel = ProfileViewModel(repository, auth)
+
+        assertEquals(0, repository.loadCalls)
+        assertFalse(viewModel.uiState.value.loading)
+        assertNull(viewModel.uiState.value.profile)
+    }
+
+    @Test fun staleProfileResultFromPreviousSessionIsDiscarded() = runTest {
+        val pending = CompletableDeferred<ProfileResult<RiderProfile>>()
+        val repository = object : ProfileRepository {
+            var loadCalls = 0
+            override suspend fun loadProfile(): ProfileResult<RiderProfile> {
+                loadCalls++
+                return if (loadCalls == 1) pending.await() else ProfileResult.Success(validProfile("rider-b"))
+            }
+        }
+        val auth = FakeAuthRepository()
+        val viewModel = ProfileViewModel(repository, auth)
+
+        assertEquals(1, repository.loadCalls)
+        assertTrue(viewModel.uiState.value.loading)
+
+        auth.emitSession(SessionState.Authenticated(bUser(), expiresAt(), true))
+        pending.complete(ProfileResult.Success(validProfile("rider-a")))
+
+        assertEquals(2, repository.loadCalls)
+        assertEquals("rider-b", viewModel.uiState.value.profile?.id)
+        assertFalse(viewModel.uiState.value.loading)
+    }
+
+    @Test fun logoutLeavesFullyCleanState() = runTest {
+        val repository = FakeProfileRepository(ProfileResult.Success(validProfile("rider-a")))
+        val auth = FakeAuthRepository()
+        val viewModel = ProfileViewModel(repository, auth)
+
+        assertEquals("rider-a", viewModel.uiState.value.profile?.id)
+
+        viewModel.showLogoutDialog()
+        assertTrue(viewModel.uiState.value.isLogoutDialogVisible)
+
+        viewModel.confirmLogout()
+        viewModel.confirmLogout()
+
+        assertEquals(1, auth.logoutCalls)
+        assertTrue(auth.session.value is SessionState.LoggedOut)
+        assertNull(viewModel.uiState.value.profile)
+        assertNull(viewModel.uiState.value.error)
+        assertFalse(viewModel.uiState.value.loading)
+        assertFalse(viewModel.uiState.value.isRetrying)
+        assertFalse(viewModel.uiState.value.isLogoutDialogVisible)
+        assertFalse(viewModel.uiState.value.isLoggingOut)
+    }
+
+    @Test fun sameUserReloadsAfterLoggedOut() = runTest {
+        val repository = FakeProfileRepository(ProfileResult.Success(validProfile("rider-a")))
+        val auth = FakeAuthRepository()
+        val viewModel = ProfileViewModel(repository, auth)
+
+        assertEquals(1, repository.loadCalls)
+        assertEquals("rider-a", viewModel.uiState.value.profile?.id)
+
+        auth.emitSession(SessionState.LoggedOut)
+        assertNull(viewModel.uiState.value.profile)
+
+        auth.emitSession(SessionState.Authenticated(aUser(), expiresAt(), true))
+
+        assertEquals(2, repository.loadCalls)
+        assertEquals("rider-a", viewModel.uiState.value.profile?.id)
     }
 
     @Test fun mapsRecoverableErrors() = runTest {
@@ -67,7 +184,7 @@ class ProfileViewModelTest {
             ProfileInvalidResponse to ProfileUiError.InvalidResponse
         )
         cases.forEach { (result, expected) ->
-            val viewModel = ProfileViewModel(FakeProfileRepository(result), FakeProfileViewModelAuthRepository())
+            val viewModel = ProfileViewModel(FakeProfileRepository(result), FakeAuthRepository())
             assertEquals(expected, viewModel.uiState.value.error)
         }
     }
@@ -75,37 +192,31 @@ class ProfileViewModelTest {
     @Test fun retryIsManualAndPreventsDuplicateLoads() = runTest {
         val pending = CompletableDeferred<ProfileResult<RiderProfile>>()
         val repository = FakeProfileRepository(ProfileNetworkUnavailable) { pending.await() }
-        val viewModel = ProfileViewModel(repository, FakeProfileViewModelAuthRepository())
+        val viewModel = ProfileViewModel(repository, FakeAuthRepository())
 
         viewModel.retry()
         viewModel.retry()
 
         assertEquals(2, repository.loadCalls)
         assertTrue(viewModel.uiState.value.isRetrying)
-        pending.complete(ProfileResult.Success(validProfile()))
-        assertEquals("Moto Rider", viewModel.uiState.value.profile?.fullName)
+        pending.complete(ProfileResult.Success(validProfile("rider-a")))
+        assertEquals("rider-a", viewModel.uiState.value.profile?.id)
     }
 
-    @Test fun logoutDialogAndConfirmPreventDuplicates() = runTest {
-        val auth = FakeProfileViewModelAuthRepository()
-        val viewModel = ProfileViewModel(FakeProfileRepository(ProfileResult.Success(validProfile())), auth)
+    @Test fun retryAfterLoggedOutDoesNothing() = runTest {
+        val repository = FakeProfileRepository(ProfileNetworkUnavailable)
+        val auth = FakeAuthRepository(initialSession = SessionState.LoggedOut)
+        val viewModel = ProfileViewModel(repository, auth)
 
-        viewModel.showLogoutDialog()
-        assertTrue(viewModel.uiState.value.isLogoutDialogVisible)
-        viewModel.dismissLogoutDialog()
-        assertFalse(viewModel.uiState.value.isLogoutDialogVisible)
-        viewModel.showLogoutDialog()
-        viewModel.confirmLogout()
-        viewModel.confirmLogout()
+        viewModel.retry()
+        viewModel.retry()
 
-        assertEquals(1, auth.logoutCalls)
-        assertTrue(viewModel.uiState.value.isLoggingOut)
-        assertFalse(viewModel.uiState.value.isLogoutDialogVisible)
+        assertEquals(0, repository.loadCalls)
     }
 
     @Test fun dateFormatterPhoneAbsentLastLoginAbsentAndInitialsAreSafe() = runTest {
-        val profile = validProfile(phoneNumber = null, lastLoginAtUtc = null)
-        val viewModel = ProfileViewModel(FakeProfileRepository(ProfileResult.Success(profile)), FakeProfileViewModelAuthRepository())
+        val profile = validProfile("rider-a", phoneNumber = null, lastLoginAtUtc = null)
+        val viewModel = ProfileViewModel(FakeProfileRepository(ProfileResult.Success(profile)), FakeAuthRepository())
 
         assertNull(viewModel.uiState.value.profile?.phoneNumber)
         assertNull(viewModel.uiState.value.profile?.lastLoginAtUtc)
@@ -127,25 +238,49 @@ private class FakeProfileRepository(
     }
 }
 
-private class FakeProfileViewModelAuthRepository : AuthRepository {
+private class FakeAuthRepository(
+    initialSession: SessionState = SessionState.Authenticated(aUser(), expiresAt(), true)
+) : AuthRepository {
+    val session = MutableStateFlow(initialSession)
     var logoutCalls = 0
+
     override suspend fun login(email: String, password: String, rememberMe: Boolean): AuthResult<AuthUser> = error("unused")
     override suspend fun restoreSession(): AuthResult<AuthUser?> = AuthResult.Success(null)
     override suspend fun ensureValidAccessToken(): AuthResult<AccessToken> = SessionExpired
     override suspend fun refreshSession(): AuthResult<AuthUser> = SessionExpired
     override suspend fun logout(): AuthResult<Unit> {
         logoutCalls++
+        session.value = SessionState.LoggedOut
         return AuthResult.Success(Unit)
     }
-    override fun observeSession(): StateFlow<SessionState> = MutableStateFlow(SessionState.LoggedOut)
+    override fun observeSession(): StateFlow<SessionState> = session
+
+    fun emitSession(state: SessionState) {
+        session.value = state
+    }
 }
 
+private fun aUser(): AuthUser = authUser("rider-a", "Moto Rider A")
+private fun bUser(): AuthUser = authUser("rider-b", "Moto Rider B")
+
+private fun authUser(id: String, fullName: String): AuthUser = AuthUser(
+    id = id,
+    email = "$id@example.com",
+    fullName = fullName,
+    phoneNumber = "+52 555 555 5555",
+    role = UserRole.Rider,
+    isActive = true
+)
+
+private fun expiresAt(): Instant = Instant.parse("2026-08-06T12:00:00.000Z")
+
 private fun validProfile(
+    id: String,
     phoneNumber: String? = "+52 555 555 5555",
     lastLoginAtUtc: Instant? = Instant.parse("2026-08-04T12:05:00Z")
 ) = RiderProfile(
-    id = "rider-id",
-    email = "rider@example.com",
+    id = id,
+    email = "$id@example.com",
     fullName = "Moto Rider",
     phoneNumber = phoneNumber,
     role = "Rider",
