@@ -16,6 +16,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import com.example.sos_segundoplano.core.background.AndroidMonitoringServiceStarter
@@ -25,6 +26,7 @@ import com.example.sos_segundoplano.core.background.MonitoringServiceStarter
 import com.example.sos_segundoplano.core.background.MonitoringServiceStopResult
 import com.example.sos_segundoplano.core.background.MonitoringServiceStopper
 import com.example.sos_segundoplano.core.auth.AuthProvider
+import com.example.sos_segundoplano.core.profile.ProfileProvider
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatus
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatusChecker
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatusProvider
@@ -53,6 +55,7 @@ import com.example.sos_segundoplano.features.permissions.BluetoothRequirementDia
 import com.example.sos_segundoplano.features.permissions.MonitoringStartFailureDialog
 import com.example.sos_segundoplano.features.permissions.MonitoringStopFailureDialog
 import com.example.sos_segundoplano.features.permissions.NotificationPermissionDialog
+import com.example.sos_segundoplano.features.profile.ProfileRoute
 import com.example.sos_segundoplano.features.trip.HomeScreen
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
 import kotlinx.coroutines.flow.StateFlow
@@ -82,6 +85,13 @@ class MainActivity : ComponentActivity() {
                         monitoringServiceStarter = AndroidMonitoringServiceStarter(applicationContext),
                         monitoringServiceStopper = AndroidMonitoringServiceStopper(applicationContext),
                         offlineQueueSummaries = OfflineQueueProvider.get(applicationContext).repository.observeSummary(),
+                        profileContent = { onHomeSelected ->
+                            ProfileRoute(
+                                profileRepository = ProfileProvider.get(applicationContext),
+                                authRepository = authRepository,
+                                onHomeSelected = onHomeSelected
+                            )
+                        },
                         onOpenAppSettings = ::openAppSettings,
                         onOpenNotificationSettings = ::openNotificationSettings,
                         onOpenBluetoothSettings = ::openBluetoothSettings
@@ -153,9 +163,11 @@ fun MotoSosApp(
     },
     onOpenAppSettings: () -> Unit = {},
     onOpenNotificationSettings: () -> Unit = {},
-    onOpenBluetoothSettings: () -> Unit = {}
+    onOpenBluetoothSettings: () -> Unit = {},
+    profileContent: (@Composable (() -> Unit) -> Unit)? = null
 ) {
     var isTripActive by rememberSaveable { mutableStateOf(false) }
+    var selectedScreen by remember { mutableStateOf(MotoSosAppScreen.Home) }
     var isTripStartPending by remember { mutableStateOf(false) }
     var permissionDialogStatus by remember {
         mutableStateOf<BackgroundLocationPermissionStatus?>(null)
@@ -175,6 +187,14 @@ fun MotoSosApp(
     val offlineQueueSummary = (offlineQueueSummaries ?: kotlinx.coroutines.flow.flowOf(OfflineQueueSummary()))
         .collectAsState(OfflineQueueSummary())
         .value
+
+    if (currentState == TripSessionState.Active && selectedScreen != MotoSosAppScreen.Home) {
+        selectedScreen = MotoSosAppScreen.Home
+    }
+
+    BackHandler(enabled = currentState == TripSessionState.Idle && selectedScreen == MotoSosAppScreen.Profile) {
+        selectedScreen = MotoSosAppScreen.Home
+    }
 
     fun validateTripStartRequirements() {
         when (val locationStatus = locationPermissionStatusProvider.getStatus()) {
@@ -276,13 +296,26 @@ fun MotoSosApp(
     }
 
     when (currentState) {
-        TripSessionState.Idle -> HomeScreen(
-            onStartTrip = {
-                isTripStartPending = true
-                validateTripStartRequirements()
-            },
-            modifier = modifier
-        )
+        TripSessionState.Idle -> when (selectedScreen) {
+            MotoSosAppScreen.Home -> HomeScreen(
+                onStartTrip = {
+                    isTripStartPending = true
+                    validateTripStartRequirements()
+                },
+                onProfileSelected = { selectedScreen = MotoSosAppScreen.Profile },
+                modifier = modifier
+            )
+
+            MotoSosAppScreen.Profile -> profileContent?.invoke { selectedScreen = MotoSosAppScreen.Home }
+                ?: HomeScreen(
+                    onStartTrip = {
+                        isTripStartPending = true
+                        validateTripStartRequirements()
+                    },
+                    onProfileSelected = { selectedScreen = MotoSosAppScreen.Profile },
+                    modifier = modifier
+                )
+        }
 
         TripSessionState.Active -> MonitoringScreen(
             modifier = modifier,
@@ -375,6 +408,8 @@ fun MotoSosApp(
         )
     }
 }
+
+private enum class MotoSosAppScreen { Home, Profile }
 
 @Preview(showBackground = true)
 @Composable
