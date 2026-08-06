@@ -24,6 +24,7 @@ import com.example.sos_segundoplano.core.background.MonitoringServiceStartResult
 import com.example.sos_segundoplano.core.background.MonitoringServiceStarter
 import com.example.sos_segundoplano.core.background.MonitoringServiceStopResult
 import com.example.sos_segundoplano.core.background.MonitoringServiceStopper
+import com.example.sos_segundoplano.core.auth.AuthProvider
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatus
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatusChecker
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatusProvider
@@ -45,6 +46,8 @@ import com.example.sos_segundoplano.domain.validation.UserResponseSource
 import com.example.sos_segundoplano.domain.usecase.FinishTripUseCase
 import com.example.sos_segundoplano.domain.usecase.StartTripUseCase
 import com.example.sos_segundoplano.features.background.MonitoringScreen
+import com.example.sos_segundoplano.features.auth.InitialSessionRestoration
+import com.example.sos_segundoplano.features.auth.MotoSosRoot
 import com.example.sos_segundoplano.features.permissions.BackgroundLocationPermissionDialog
 import com.example.sos_segundoplano.features.permissions.BluetoothRequirementDialog
 import com.example.sos_segundoplano.features.permissions.MonitoringStartFailureDialog
@@ -62,19 +65,28 @@ class MainActivity : ComponentActivity() {
             isAppearanceLightStatusBars = true
             isAppearanceLightNavigationBars = true
         }
+        val authRepository = AuthProvider.get(applicationContext)
+        val initialSessionRestoration = InitialSessionRestoration {
+            AuthProvider.restorationResult()?.await()
+        }
         setContent {
             SOS_SegundoPlanoTheme {
-                MotoSosApp(
-                    locationPermissionStatusProvider = BackgroundLocationPermissionChecker(applicationContext),
-                    notificationStatusProvider = AppNotificationStatusChecker(applicationContext),
-                    bluetoothRequirementStatusProvider = BluetoothRequirementChecker(applicationContext),
-                    monitoringServiceStarter = AndroidMonitoringServiceStarter(applicationContext),
-                    monitoringServiceStopper = AndroidMonitoringServiceStopper(applicationContext),
-                    offlineQueueSummaries = OfflineQueueProvider.get(applicationContext).repository.observeSummary(),
-                    onOpenAppSettings = ::openAppSettings,
-                    onOpenNotificationSettings = ::openNotificationSettings,
-                    onOpenBluetoothSettings = ::openBluetoothSettings
-                )
+                MotoSosRoot(
+                    authRepository = authRepository,
+                    initialSessionRestoration = initialSessionRestoration
+                ) {
+                    MotoSosApp(
+                        locationPermissionStatusProvider = BackgroundLocationPermissionChecker(applicationContext),
+                        notificationStatusProvider = AppNotificationStatusChecker(applicationContext),
+                        bluetoothRequirementStatusProvider = BluetoothRequirementChecker(applicationContext),
+                        monitoringServiceStarter = AndroidMonitoringServiceStarter(applicationContext),
+                        monitoringServiceStopper = AndroidMonitoringServiceStopper(applicationContext),
+                        offlineQueueSummaries = OfflineQueueProvider.get(applicationContext).repository.observeSummary(),
+                        onOpenAppSettings = ::openAppSettings,
+                        onOpenNotificationSettings = ::openNotificationSettings,
+                        onOpenBluetoothSettings = ::openBluetoothSettings
+                    )
+                }
             }
         }
     }
