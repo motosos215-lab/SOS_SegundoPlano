@@ -7,6 +7,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.example.sos_segundoplano.MotoSosApp
 import com.example.sos_segundoplano.core.background.MonitoringServiceStartResult
 import com.example.sos_segundoplano.core.background.MonitoringServiceStarter
@@ -52,7 +53,7 @@ class TripFinishFlowTest {
         composeRule.onNodeWithTag("start_trip_button").performClick()
 
         composeRule.onNodeWithTag("monitoring_screen").assertIsDisplayed()
-        composeRule.onNodeWithTag("finish_trip_button").assertIsEnabled()
+        composeRule.onNodeWithTag("finish_trip_button").performScrollTo().assertIsEnabled()
         assertEquals(1, starter.invocationCount)
         assertEquals(0, stopper.invocationCount)
     }
@@ -205,7 +206,7 @@ class TripFinishFlowTest {
         locationProvider.updateStatus(BackgroundLocationPermissionStatus.BackgroundMissing)
         notificationProvider.updateStatus(AppNotificationStatus.Disabled)
         bluetoothProvider.updateStatus(BluetoothRequirementStatus.Disabled)
-        composeRule.onNodeWithTag("finish_trip_button").performClick()
+        composeRule.onNodeWithTag("finish_trip_button").performScrollTo().performClick()
 
         assertEquals(1, locationProvider.invocationCount)
         assertEquals(1, notificationProvider.invocationCount)
@@ -216,7 +217,7 @@ class TripFinishFlowTest {
 
     private fun startAndFinishTrip() {
         composeRule.onNodeWithTag("start_trip_button").performClick()
-        composeRule.onNodeWithTag("finish_trip_button").performClick()
+        composeRule.onNodeWithTag("finish_trip_button").performScrollTo().performClick()
     }
 
     private fun setAppContent(
