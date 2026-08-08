@@ -1,5 +1,6 @@
 package com.example.sos_segundoplano.ui
 
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -138,52 +139,42 @@ class SignalCaptureMonitoringScreenTest {
     }
 
     @Test fun connectedNearbyAndCapturingWatchStatesUseWearableSnapshot() {
-        setContent(
-            snapshot = TripSignalSnapshot(
-                wearable = WearableSample(status = WearableStatus.ConnectedNearby)
-            )
-        )
-        composeRule.onNodeWithTag("start_trip_button").performClick()
-        composeRule.onNodeWithText("Smartwatch conectado y cercano").performScrollTo().assertIsDisplayed()
-
+        val wearable = mutableStateOf(WearableSample(status = WearableStatus.ConnectedNearby))
         composeRule.setContent {
             SOS_SegundoPlanoTheme {
                 MonitoringScreen(
-                    snapshot = TripSignalSnapshot(
-                        wearable = WearableSample(status = WearableStatus.Capturing, captureActive = true, lastUpdatedMillis = 1L)
-                    )
+                    snapshot = TripSignalSnapshot(wearable = wearable.value)
                 )
             }
+        }
+
+        composeRule.onNodeWithText("Smartwatch conectado y cercano").performScrollTo().assertIsDisplayed()
+
+        composeRule.runOnIdle {
+            wearable.value = WearableSample(status = WearableStatus.Capturing, captureActive = true, lastUpdatedMillis = 1L)
         }
         composeRule.onNodeWithText("Smartwatch capturando señales").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Se recibió información del reloj").performScrollTo().assertIsDisplayed()
     }
 
     @Test fun wearableBatteryAndHeartRateOnlyAppearWhenPresent() {
+        val wearable = mutableStateOf(WearableSample(status = WearableStatus.Capturing))
         composeRule.setContent {
             SOS_SegundoPlanoTheme {
                 MonitoringScreen(
-                    snapshot = TripSignalSnapshot(
-                        wearable = WearableSample(status = WearableStatus.Capturing)
-                    )
+                    snapshot = TripSignalSnapshot(wearable = wearable.value)
                 )
             }
         }
         composeRule.onAllNodesWithText("Frecuencia cardiaca").assertCountEquals(0)
         composeRule.onAllNodesWithText("Batería del reloj").assertCountEquals(0)
 
-        composeRule.setContent {
-            SOS_SegundoPlanoTheme {
-                MonitoringScreen(
-                    snapshot = TripSignalSnapshot(
-                        wearable = WearableSample(
-                            status = WearableStatus.Capturing,
-                            heartRateBpm = 81.0,
-                            watchBatteryPercentage = 64
-                        )
-                    )
-                )
-            }
+        composeRule.runOnIdle {
+            wearable.value = WearableSample(
+                status = WearableStatus.Capturing,
+                heartRateBpm = 81.0,
+                watchBatteryPercentage = 64
+            )
         }
         composeRule.onNodeWithText("Frecuencia cardiaca").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("81 bpm").performScrollTo().assertIsDisplayed()
