@@ -217,24 +217,24 @@ private fun ValidationPanel(
     when (state) {
         is FalsePositiveValidationState.CountdownActive -> {
             val remainingSeconds = ((state.remainingNanos + NANOS_PER_SECOND - 1L) / NANOS_PER_SECOND).coerceAtLeast(0L)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("false_positive_validation_panel"),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+            TitledStatusCard(
+                title = stringResource(R.string.validation_countdown_title),
+                testTag = "false_positive_validation_panel"
             ) {
                 Text(
-                    text = stringResource(R.string.validation_countdown_title),
-                    style = MaterialTheme.typography.titleMedium,
+                    text = stringResource(R.string.validation_countdown_seconds, remainingSeconds),
+                    style = MaterialTheme.typography.headlineSmall,
                     color = MotoAlert,
-                    textAlign = TextAlign.Center
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
                 )
                 Text(
-                    text = stringResource(R.string.validation_countdown_seconds, remainingSeconds),
+                    text = stringResource(R.string.validation_countdown_waiting_driver),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    textAlign = TextAlign.Center
+                    color = MotoTextSecondary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -260,6 +260,16 @@ private fun ValidationPanel(
                 }
             }
         }
+
+        is FalsePositiveValidationState.CandidateDetected -> Text(
+            text = stringResource(R.string.validation_candidate_detected),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("false_positive_candidate_status"),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MotoAlert,
+            textAlign = TextAlign.Center
+        )
 
         is FalsePositiveValidationState.IncidentGenerated -> {
             val text = when (state.incident.cause) {
@@ -328,10 +338,18 @@ private fun ValidationPanel(
             textAlign = TextAlign.Center
         )
 
+        is FalsePositiveValidationState.Error -> Text(
+            text = stringResource(R.string.validation_local_registration_failed),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("false_positive_error_status"),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MotoAlert,
+            textAlign = TextAlign.Center
+        )
+
         FalsePositiveValidationState.Idle,
         is FalsePositiveValidationState.Monitoring,
-        is FalsePositiveValidationState.CandidateDetected,
-        is FalsePositiveValidationState.Error,
         is FalsePositiveValidationState.Stopped -> Unit
     }
 }

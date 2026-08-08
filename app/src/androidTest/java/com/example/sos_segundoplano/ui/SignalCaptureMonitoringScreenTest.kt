@@ -41,7 +41,12 @@ import com.example.sos_segundoplano.domain.signals.SpeedSource
 import com.example.sos_segundoplano.domain.signals.TripSignalSnapshot
 import com.example.sos_segundoplano.domain.signals.WearableSample
 import com.example.sos_segundoplano.domain.signals.WearableStatus
+import com.example.sos_segundoplano.domain.validation.AlertDispatchRequest
+import com.example.sos_segundoplano.domain.validation.AlertPayloadSummary
+import com.example.sos_segundoplano.domain.validation.AlertPriority
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
+import com.example.sos_segundoplano.domain.validation.IncidentCause
+import com.example.sos_segundoplano.domain.validation.LocalIncident
 import com.example.sos_segundoplano.domain.validation.ValidationDecisionReason
 import com.example.sos_segundoplano.domain.validation.ValidationEvidence
 import com.example.sos_segundoplano.domain.validation.ValidationMetadata
@@ -200,11 +205,59 @@ class SignalCaptureMonitoringScreenTest {
         }
 
         composeRule.onNodeWithText("Posible accidente detectado").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Quedan 20 s para confirmar.").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("MotoSOS espera confirmación del conductor antes de registrar un incidente local.").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Estoy bien").performScrollTo().performClick()
         composeRule.onNodeWithText("Necesito ayuda").performScrollTo().performClick()
 
         assertTrue(confirmCalled)
         assertTrue(helpCalled)
+    }
+
+    @Test fun safeConfirmedShowsCancelledAndMonitoringContinues() {
+        setMonitoringScreen(FalsePositiveValidationState.SafeConfirmed(fakeMetadata(), responseId = "safe-1"))
+
+        composeRule.onNodeWithText("Alerta cancelada. El viaje sigue siendo monitoreado.").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun helpRequestedIncidentShowsLocalPendingWithoutRemoteDeliveryLanguage() {
+        setMonitoringScreen(fakeIncidentState(IncidentCause.UserRequestedHelp))
+
+        composeRule.onNodeWithText("Solicitud de ayuda registrada. El envío remoto aún no está disponible.").performScrollTo().assertIsDisplayed()
+        assertNoRemoteDeliveryLanguage()
+    }
+
+    @Test fun timeoutIncidentShowsNoResponseAndLocalPending() {
+        setMonitoringScreen(fakeIncidentState(IncidentCause.Timeout))
+
+        composeRule.onNodeWithText("La cuenta regresiva terminó sin respuesta. Se registró un incidente local pendiente.").performScrollTo().assertIsDisplayed()
+        assertNoRemoteDeliveryLanguage()
+    }
+
+    @Test fun immediateAlertRequestedShowsLocalPendingWithoutRemoteDeliveryLanguage() {
+        val incident = fakeIncident(IncidentCause.CriticalPhysicalEvent)
+        setMonitoringScreen(FalsePositiveValidationState.ImmediateAlertRequested(incident, fakeDispatchRequest(incident), fakeMetadata()))
+
+        composeRule.onNodeWithText("Evento crítico detectado. Solicitud local inmediata pendiente.").performScrollTo().assertIsDisplayed()
+        assertNoRemoteDeliveryLanguage()
+    }
+
+    @Test fun validationErrorShowsLocalRegistrationFailure() {
+        setMonitoringScreen(FalsePositiveValidationState.Error(fakeMetadata(), "OfflinePersistenceFailed"))
+
+        composeRule.onNodeWithText("No se pudo registrar correctamente el evento local. El viaje sigue activo.").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test fun candidateDetectedShowsMinimalFeedback() {
+        setMonitoringScreen(
+            FalsePositiveValidationState.CandidateDetected(
+                assessment = fakeRiskAssessment(score = 55, level = RiskLevel.Medium),
+                metadata = fakeMetadata(),
+                evidence = fakeEvidence()
+            )
+        )
+
+        composeRule.onNodeWithText("Revisando posible accidente. MotoSOS prepara una confirmación local.").performScrollTo().assertIsDisplayed()
     }
 
     @Test fun monitoringScreenContainsLongResponsiveTexts() {
@@ -284,6 +337,21 @@ class SignalCaptureMonitoringScreenTest {
         }
     }
 
+    private fun setMonitoringScreen(validationState: FalsePositiveValidationState) {
+        composeRule.setContent {
+            SOS_SegundoPlanoTheme {
+                MonitoringScreen(validationState = validationState)
+            }
+        }
+    }
+
+    private fun assertNoRemoteDeliveryLanguage() {
+        composeRule.onAllNodesWithText("SOS enviado").assertCountEquals(0)
+        composeRule.onAllNodesWithText("contactos avisados").assertCountEquals(0)
+        composeRule.onAllNodesWithText("emergencia enviada").assertCountEquals(0)
+        composeRule.onAllNodesWithText("alerta entregada").assertCountEquals(0)
+    }
+
     private fun fakeSnapshot() = TripSignalSnapshot(
         speed = SignalReading(SignalAvailability.Available, SpeedSample(10f, 1L, SpeedSource.DirectLocation)),
         phoneBattery = SignalReading(SignalAvailability.Available, BatterySample(80, false, 1L)),
@@ -322,27 +390,74 @@ class SignalCaptureMonitoringScreenTest {
         partialWindow = false
     )
 
-    private fun fakeCountdownState() = FalsePositiveValidationState.CountdownActive(
-        assessment = fakeRiskAssessment(score = 55, level = RiskLevel.Medium),
-        metadata = ValidationMetadata(
+    private fun fakeMetadata(reason: ValidationDecisionReason = ValidationDecisionReason.CandidatePhysicalRisk) =
+        ValidationMetadata(
             sessionId = 1L,
             assessmentId = 1L,
             windowId = 1L,
             timestampElapsedRealtimeNanos = 1L,
-            reason = ValidationDecisionReason.CandidatePhysicalRisk,
+            reason = reason,
             score = 55,
             confidence = 0.8,
             origin = ValidationOrigin.System,
             policyVersion = "test-policy"
-        ),
-        evidence = ValidationEvidence(
-            movementContinuity = MovementContinuityState.Intermittent,
-            gpsQuality = GpsQualityStatus.Good,
-            ruleSetVersion = "test-rules"
-        ),
+        )
+
+    private fun fakeEvidence() = ValidationEvidence(
+        movementContinuity = MovementContinuityState.Intermittent,
+        gpsQuality = GpsQualityStatus.Good,
+        ruleSetVersion = "test-rules"
+    )
+
+    private fun fakeCountdownState() = FalsePositiveValidationState.CountdownActive(
+        assessment = fakeRiskAssessment(score = 55, level = RiskLevel.Medium),
+        metadata = fakeMetadata(),
+        evidence = fakeEvidence(),
         startedAtElapsedRealtimeNanos = 1L,
         deadlineElapsedRealtimeNanos = 21_000_000_000L,
         remainingNanos = 20_000_000_000L
+    )
+
+    private fun fakeIncidentState(cause: IncidentCause): FalsePositiveValidationState.IncidentGenerated {
+        val incident = fakeIncident(cause)
+        return FalsePositiveValidationState.IncidentGenerated(incident, fakeDispatchRequest(incident), fakeMetadata())
+    }
+
+    private fun fakeIncident(cause: IncidentCause) = LocalIncident(
+        incidentId = 1L,
+        sessionId = 1L,
+        assessmentId = 1L,
+        windowId = 1L,
+        createdAtElapsedRealtimeNanos = 1L,
+        cause = cause,
+        score = 55,
+        riskLevel = RiskLevel.Medium,
+        confidence = 0.8,
+        relevantOutcomes = emptyList(),
+        ruleSetVersion = "test-rules",
+        validationPolicyVersion = "test-policy",
+        gpsQuality = GpsQualityStatus.Good
+    )
+
+    private fun fakeDispatchRequest(incident: LocalIncident) = AlertDispatchRequest(
+        requestId = 1L,
+        incidentId = incident.incidentId,
+        sessionId = incident.sessionId,
+        assessmentId = incident.assessmentId,
+        priority = if (incident.cause == IncidentCause.CriticalPhysicalEvent) AlertPriority.Critical else AlertPriority.High,
+        reason = incident.cause,
+        createdAtElapsedRealtimeNanos = 1L,
+        score = incident.score,
+        confidence = incident.confidence,
+        payload = AlertPayloadSummary(
+            sessionId = incident.sessionId,
+            assessmentId = incident.assessmentId,
+            incidentId = incident.incidentId,
+            score = incident.score,
+            riskLevel = incident.riskLevel,
+            cause = incident.cause,
+            policyVersion = incident.validationPolicyVersion
+        )
     )
 }
 
