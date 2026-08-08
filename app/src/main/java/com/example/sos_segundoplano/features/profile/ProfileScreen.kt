@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,12 +32,17 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -46,9 +52,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.sos_segundoplano.R
+import com.example.sos_segundoplano.core.wear.WearProvider
 import com.example.sos_segundoplano.domain.profile.RiderProfile
 import com.example.sos_segundoplano.domain.repository.AuthRepository
 import com.example.sos_segundoplano.domain.repository.ProfileRepository
+import com.example.sos_segundoplano.domain.wear.WatchConnectionRepository
+import com.example.sos_segundoplano.features.wear.WatchConnectionRoute
 import com.example.sos_segundoplano.ui.components.MotoBottomBar
 import com.example.sos_segundoplano.ui.components.MotoBottomBarItem
 import com.example.sos_segundoplano.ui.components.MotoTopBar
@@ -72,6 +81,25 @@ fun ProfileRoute(
     onHomeSelected: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var showWatchConnection by rememberSaveable { mutableStateOf(false) }
+    if (showWatchConnection) {
+        val context = LocalContext.current
+        val watchRepository: WatchConnectionRepository = remember(context) {
+            WearProvider.get(context)
+        }
+        WatchConnectionRoute(
+            repository = watchRepository,
+            authRepository = authRepository,
+            onBack = { showWatchConnection = false },
+            onHomeSelected = {
+                showWatchConnection = false
+                onHomeSelected()
+            },
+            onProfileSelected = { showWatchConnection = false },
+            modifier = modifier
+        )
+        return
+    }
     val factory = remember(profileRepository, authRepository) {
         ProfileViewModel.Factory(profileRepository, authRepository)
     }
@@ -84,6 +112,7 @@ fun ProfileRoute(
         onLogoutSelected = viewModel::showLogoutDialog,
         onLogoutDismissed = viewModel::dismissLogoutDialog,
         onLogoutConfirmed = viewModel::confirmLogout,
+        onWatchConnectionSelected = { showWatchConnection = true },
         modifier = modifier
     )
 }
@@ -96,6 +125,7 @@ fun ProfileScreen(
     onLogoutSelected: () -> Unit,
     onLogoutDismissed: () -> Unit,
     onLogoutConfirmed: () -> Unit,
+    onWatchConnectionSelected: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BackHandler(onBack = onHomeSelected)
@@ -130,7 +160,8 @@ fun ProfileScreen(
                 state.profile != null -> ProfileContent(
                     profile = state.profile,
                     isLoggingOut = state.isLoggingOut,
-                    onLogoutSelected = onLogoutSelected
+                    onLogoutSelected = onLogoutSelected,
+                    onWatchConnectionSelected = onWatchConnectionSelected
                 )
                 state.error != null -> ProfileErrorContent(
                     error = state.error,
@@ -176,7 +207,8 @@ private fun ProfileLoading() {
 private fun ProfileContent(
     profile: RiderProfile,
     isLoggingOut: Boolean,
-    onLogoutSelected: () -> Unit
+    onLogoutSelected: () -> Unit,
+    onWatchConnectionSelected: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -186,6 +218,7 @@ private fun ProfileContent(
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         IdentityCard(profile)
+        WatchEntryCard(onClick = onWatchConnectionSelected)
         InfoCard(title = stringResource(R.string.profile_personal_info)) {
             ReadOnlyField(stringResource(R.string.profile_full_name), profile.fullName, "profile_full_name")
             ReadOnlyField(stringResource(R.string.profile_email), profile.email, "profile_email")
@@ -262,6 +295,34 @@ private fun ProfilePill(text: String, color: androidx.compose.ui.graphics.Color,
         color = color,
         fontWeight = FontWeight.SemiBold
     )
+}
+
+@Composable
+private fun WatchEntryCard(onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MotoSurface, RoundedCornerShape(18.dp))
+            .border(1.dp, MotoDivider, RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(16.dp)
+            .testTag("profile_watch_connection_card"),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = stringResource(R.string.watch_entry_title),
+            style = MaterialTheme.typography.titleMedium,
+            color = MotoTextPrimary,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.semantics { heading() }
+        )
+        Text(
+            text = stringResource(R.string.watch_entry_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MotoTextSecondary
+        )
+    }
 }
 
 @Composable
