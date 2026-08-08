@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.example.sos_segundoplano.MotoSosApp
 import com.example.sos_segundoplano.core.background.MonitoringServiceStartResult
 import com.example.sos_segundoplano.core.background.MonitoringServiceStarter
@@ -84,14 +85,15 @@ class TripStartFlowTest {
         composeRule.onNodeWithText("Sesión iniciada").assertIsDisplayed()
         composeRule.onNodeWithText("Monitoreo en segundo plano activo").assertIsDisplayed()
         composeRule.onAllNodesWithText("--").assertCountEquals(0)
-        composeRule.onNodeWithText("Precisión GPS").assertIsDisplayed()
-        composeRule.onNodeWithText("Esperando GPS").assertIsDisplayed()
-        composeRule.onAllNodesWithText("Esperando señal").assertCountEquals(4)
+        composeRule.onNodeWithText("Precisión GPS").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Esperando GPS").performScrollTo().assertIsDisplayed()
+        composeRule.onAllNodesWithText("Esperando señal").assertCountEquals(3)
         composeRule.onAllNodesWithText("57").assertCountEquals(0)
         composeRule.onAllNodesWithText("78%").assertCountEquals(0)
         composeRule.onAllNodesWithText("Excelente").assertCountEquals(0)
         composeRule.onAllNodesWithText("Fuerte").assertCountEquals(0)
-        composeRule.onNodeWithTag("finish_trip_button").assertIsEnabled()
+        composeRule.onNodeWithText("Esperando datos de riesgo").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("finish_trip_button").performScrollTo().assertIsEnabled()
         assertEquals(1, monitoringStarterCallCount)
         assertEquals(0, monitoringStopperCallCount)
         assertEquals(1, startTripCallCount)
