@@ -1,0 +1,1 @@
+# No consumer rules required for the pure protocol contract.

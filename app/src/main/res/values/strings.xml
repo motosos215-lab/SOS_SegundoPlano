@@ -155,4 +155,74 @@
     <string name="login_submitting_description">Inicio de sesión en curso</string>
     <string name="close">Cerrar</string>
     <string name="cancel">Cancelar</string>
+
+    <string name="watch_entry_title">Reloj Wear OS</string>
+    <string name="watch_entry_subtitle">Estado de conexión y sensores</string>
+
+    <string name="watch_connection_title">Reloj Wear OS</string>
+    <string name="watch_connection_subtitle">Conexión y sensores del reloj Wear OS</string>
+
+    <string name="watch_card_connection">Estado de conexión</string>
+    <string name="watch_card_device">Información del reloj</string>
+    <string name="watch_card_status">Estado</string>
+    <string name="watch_card_sensors">Sensores disponibles</string>
+    <string name="watch_card_last_reading">Última lectura</string>
+
+    <string name="watch_status_button">Obtener estado</string>
+    <string name="watch_snapshot_button">Obtener datos</string>
+    <string name="watch_refresh_button">Volver a comprobar</string>
+    <string name="watch_notice_dismiss">Entendido</string>
+
+    <string name="watch_state_loading">Comprobando el reloj…</string>
+    <string name="watch_state_data_layer">Conexión con Wear OS no disponible\nNo se pudo acceder al servicio de conexión con Wear OS. Comprueba que tu reloj esté emparejado y activo, y vuelve a intentarlo.</string>
+    <string name="watch_state_no_nodes">No hay relojes Wear OS conectados.</string>
+    <string name="watch_state_no_motosos">Reloj detectado. MotoSOS Wear aún no está instalado o no es compatible.</string>
+    <string name="watch_state_indirect">Conexión directa no disponible. Acerca el reloj al teléfono y vuelve a comprobar.</string>
+    <string name="watch_state_nearby">Reloj compatible encontrado. Conectando…</string>
+    <string name="watch_state_handshaking">Estableciendo conexión con el reloj…</string>
+    <string name="watch_state_connected">Conectado a %1$s</string>
+    <string name="watch_state_incompatible">El reloj no es compatible con esta versión de MotoSOS.</string>
+    <string name="watch_state_requesting_status">Solicitando estado del reloj…</string>
+    <string name="watch_state_requesting_snapshot">Solicitando datos de los sensores…</string>
+    <string name="watch_state_timeout">El reloj no respondió a tiempo. Vuelve a comprobar.</string>
+    <string name="watch_state_disconnected">Sin conexión con el reloj.</string>
+    <string name="watch_state_error">No se pudo completar la comprobación del reloj.</string>
+
+    <string name="watch_handshake_app">App en el reloj</string>
+    <string name="watch_handshake_app_version">Versión %1$s (%2$d)</string>
+    <string name="watch_handshake_manufacturer">Fabricante</string>
+    <string name="watch_handshake_model">Modelo</string>
+    <string name="watch_handshake_wear_os">Nivel de Wear OS</string>
+
+    <string name="watch_status_battery">Batería</string>
+    <string name="watch_battery_percent">%1$d %%</string>
+    <string name="watch_status_charging">Carga</string>
+    <string name="watch_last_communication">Última comunicación</string>
+    <string name="watch_charging_unknown">Desconocida</string>
+    <string name="watch_charging_yes">Sí</string>
+    <string name="watch_charging_no">No</string>
+
+    <string name="watch_available_short">Disponible</string>
+    <string name="watch_not_available_short">No disponible</string>
+
+    <string name="watch_sensor_accelerometer">Acelerómetro</string>
+    <string name="watch_sensor_gyroscope">Giroscopio</string>
+    <string name="watch_sensor_heart_rate">Ritmo cardiaco</string>
+    <string name="watch_sensor_heart_permission">Permiso del ritmo cardiaco</string>
+    <string name="watch_reading_time">Hora de la lectura</string>
+
+    <string name="watch_permission_granted">Concedido</string>
+    <string name="watch_permission_denied">Denegado</string>
+    <string name="watch_permission_not_requested">No solicitado</string>
+    <string name="watch_permission_not_required">No requerido</string>
+    <string name="watch_permission_unavailable">No disponible</string>
+
+    <string name="watch_notice_timeout">El reloj no respondió a tiempo. Inténtalo de nuevo.</string>
+    <string name="watch_notice_invalid_response">La respuesta del reloj no es válida.</string>
+    <string name="watch_notice_not_ready">El reloj no está listo. Inténtalo de nuevo.</string>
+    <string name="watch_notice_sensor_unavailable">Los sensores del reloj no están disponibles en este momento.</string>
+    <string name="watch_notice_permission_denied">El permiso del sensor fue denegado en el reloj.</string>
+    <string name="watch_notice_protocol_mismatch">El reloj y esta app no son compatibles.</string>
+    <string name="watch_notice_invalid_request">El reloj no pudo procesar la solicitud.</string>
+    <string name="watch_notice_internal_error">El reloj reportó un error interno.</string>
 </resources>

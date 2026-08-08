@@ -25,3 +25,4 @@ dependencyResolutionManagement {
 rootProject.name = "SOS_SegundoPlano"
 include(":app")
 include(":wear")
+include(":wear-protocol")
