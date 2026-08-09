@@ -143,7 +143,7 @@ class MonitoringNotificationFactory(
     private fun notificationTitle(state: FalsePositiveValidationState): String = when (state) {
         is FalsePositiveValidationState.CountdownActive -> appContext.getString(R.string.validation_countdown_title)
         is FalsePositiveValidationState.HelpRequested -> appContext.getString(R.string.validation_request_help)
-        is FalsePositiveValidationState.ImmediateAlertRequested -> appContext.getString(R.string.validation_immediate_alert_requested)
+        is FalsePositiveValidationState.ImmediateAlertRequested -> appContext.getString(R.string.validation_immediate_alert_requested_title)
         is FalsePositiveValidationState.IncidentGenerated -> appContext.getString(R.string.validation_incident_generated)
         is FalsePositiveValidationState.Error -> appContext.getString(R.string.validation_local_registration_failed_title)
         else -> appContext.getString(R.string.monitoring_notification_title)

@@ -253,7 +253,9 @@ class SignalCaptureMonitoringScreenTest {
         val incident = fakeIncident(IncidentCause.CriticalPhysicalEvent)
         setAccidentScreen(FalsePositiveValidationState.ImmediateAlertRequested(incident, fakeDispatchRequest(incident), fakeMetadata()))
 
-        composeRule.onNodeWithText("Evento crítico detectado. Solicitud local inmediata pendiente.").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Evento crítico detectado").performScrollTo().assertIsDisplayed()
+        composeRule.onAllNodesWithText("Solicitud local inmediata pendiente.").assertCountEquals(1)
+        composeRule.onNodeWithText("Solicitud local inmediata pendiente.").performScrollTo().assertIsDisplayed()
         assertNoRemoteDeliveryLanguage()
     }
 

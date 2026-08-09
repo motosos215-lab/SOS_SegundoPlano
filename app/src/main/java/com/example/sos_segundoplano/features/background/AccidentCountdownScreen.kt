@@ -180,7 +180,7 @@ private fun accidentTitle(state: FalsePositiveValidationState): String = when (s
     is FalsePositiveValidationState.CountdownActive -> stringResource(R.string.validation_countdown_title)
     is FalsePositiveValidationState.HelpRequested -> stringResource(R.string.validation_request_help)
     is FalsePositiveValidationState.IncidentGenerated -> stringResource(R.string.validation_incident_generated)
-    is FalsePositiveValidationState.ImmediateAlertRequested -> stringResource(R.string.validation_immediate_alert_requested)
+    is FalsePositiveValidationState.ImmediateAlertRequested -> stringResource(R.string.validation_immediate_alert_requested_title)
     is FalsePositiveValidationState.Error -> stringResource(R.string.validation_local_registration_failed_title)
     else -> stringResource(R.string.validation_countdown_title)
 }

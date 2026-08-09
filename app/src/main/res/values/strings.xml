@@ -134,7 +134,8 @@
     <string name="validation_minor_event_recorded">Evento menor registrado. El monitoreo continúa.</string>
     <string name="validation_braking_suppressed">Frenado brusco con movimiento continuo: alerta suprimida.</string>
     <string name="validation_incident_generated">Incidente local registrado. El envío remoto aún no está disponible.</string>
-    <string name="validation_immediate_alert_requested">Evento crítico detectado. Solicitud local inmediata pendiente.</string>
+    <string name="validation_immediate_alert_requested_title">Evento crítico detectado</string>
+    <string name="validation_immediate_alert_requested">Solicitud local inmediata pendiente.</string>
     <string name="validation_local_registration_failed_title">Registro local no completado</string>
     <string name="validation_local_registration_failed">No se pudo registrar correctamente el evento local. El viaje sigue activo.</string>
     <string name="emergency_notification_channel_name">Alertas de posible accidente</string>
