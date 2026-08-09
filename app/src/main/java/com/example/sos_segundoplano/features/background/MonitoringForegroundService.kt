@@ -8,9 +8,11 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import com.example.sos_segundoplano.data.signals.TripSignalCaptureCoordinator
+import com.example.sos_segundoplano.data.trip.TripSessionStoreProvider
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationCoordinatorProvider
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationStoreProvider
 import com.example.sos_segundoplano.data.validation.WearValidationStatusNotifier
+import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.domain.validation.UserResponseSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +61,7 @@ class MonitoringForegroundService : Service() {
             promoteToForeground(notificationFactory.buildNotification())
             startNotificationUpdates()
             captureCoordinator.start()
+            TripSessionStoreProvider.store.setState(TripSessionState.Active)
             START_NOT_STICKY
         } catch (_: SecurityException) {
             stopSelf(startId)
@@ -72,6 +75,7 @@ class MonitoringForegroundService : Service() {
         notificationCollector = null
         notificationScope = null
         captureCoordinator.stop()
+        TripSessionStoreProvider.store.setState(TripSessionState.Idle)
         super.onDestroy()
     }
 
