@@ -1,6 +1,7 @@
 package com.example.sos_segundoplano.data.validation
 
 import com.example.sos_segundoplano.data.rules.InMemoryRiskAssessmentStore
+import com.example.sos_segundoplano.data.remote.incident.IncidentRemoteCreator
 import com.example.sos_segundoplano.domain.offline.OfflineEventSink
 import com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult
 import com.example.sos_segundoplano.domain.offline.OfflineSyncErrorCategory
@@ -25,6 +26,7 @@ import com.example.sos_segundoplano.domain.validation.AlertRetryState
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationConfig
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
 import com.example.sos_segundoplano.domain.validation.IncidentCause
+import com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus
 import com.example.sos_segundoplano.domain.validation.LocalIncident
 import com.example.sos_segundoplano.domain.validation.MinorEvent
 import com.example.sos_segundoplano.domain.validation.MinorEventType
@@ -198,6 +200,7 @@ class FalsePositiveValidationCoordinatorTest {
             assertTrue(fixture.validation.states.value is FalsePositiveValidationState.SafeConfirmed)
             assertTrue(fixture.incidents.items.value.isEmpty())
             assertTrue(fixture.requests.items.value.isEmpty())
+            assertEquals(0, fixture.remoteCreator.calls)
             advanceTimeBy(1_000L)
             runCurrent()
             assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Monitoring)
@@ -244,6 +247,7 @@ class FalsePositiveValidationCoordinatorTest {
             assertEquals(AlertRetryState.NotStarted, state.dispatchRequest.retryState)
             assertEquals(1, fixture.incidents.items.value.size)
             assertEquals(1, fixture.requests.items.value.size)
+            assertEquals(0, fixture.remoteCreator.calls)
         } finally {
             fixture.close()
             runCurrent()
@@ -284,7 +288,31 @@ class FalsePositiveValidationCoordinatorTest {
 
             assertEquals(1, fixture.incidents.items.value.size)
             assertEquals(1, fixture.requests.items.value.size)
+            val state = fixture.validation.states.value as FalsePositiveValidationState.IncidentGenerated
+            assertEquals("remote-incident-1", state.incident.remoteIncidentId)
+            assertEquals(IncidentRemoteCreationStatus.Success("remote-incident-1"), state.incident.remoteCreationStatus)
+            assertEquals("remote-incident-1", fixture.incidents.items.value.single().remoteIncidentId)
+            assertEquals(1, fixture.remoteCreator.calls)
             assertEquals(1L, fixture.coordinator.validationCounters.timeouts)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun timeoutRemoteNetworkFailureKeepsLocalIncidentWithoutCrash() = runTest {
+        val fixture = fixture(incidentRemoteCreator = FakeIncidentRemoteCreator(IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable")))
+        try {
+            startCountdown(fixture)
+            fixture.clock.now = 20_000_000_000L
+            advanceTimeBy(1_000L)
+            runCurrent()
+
+            val state = fixture.validation.states.value as FalsePositiveValidationState.IncidentGenerated
+            assertEquals(1, fixture.incidents.items.value.size)
+            assertEquals(null, state.incident.remoteIncidentId)
+            assertEquals(IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable"), state.incident.remoteCreationStatus)
+            assertEquals(1, fixture.remoteCreator.calls)
         } finally {
             fixture.close()
             runCurrent()
@@ -510,7 +538,10 @@ class FalsePositiveValidationCoordinatorTest {
         }
     }
 
-    private fun TestScope.fixture(offlineEventSink: OfflineEventSink? = null): Fixture {
+    private fun TestScope.fixture(
+        offlineEventSink: OfflineEventSink? = null,
+        incidentRemoteCreator: FakeIncidentRemoteCreator = FakeIncidentRemoteCreator()
+    ): Fixture {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val fixtureJob = SupervisorJob()
         val fixtureScope = CoroutineScope(fixtureJob + dispatcher)
@@ -535,7 +566,8 @@ class FalsePositiveValidationCoordinatorTest {
             externalScope = fixtureScope
         )
         coordinator.setOfflineEventSink(offlineEventSink ?: FakeOfflineEventSink())
-        return Fixture(clock, risk, validation, minor, incidents, requests, coordinator, fixtureJob)
+        coordinator.setIncidentRemoteCreator(incidentRemoteCreator)
+        return Fixture(clock, risk, validation, minor, incidents, requests, coordinator, incidentRemoteCreator, fixtureJob)
     }
 
     private suspend fun Fixture.close() {
@@ -562,8 +594,26 @@ class FalsePositiveValidationCoordinatorTest {
         val incidents: InMemoryBoundedValidationStore<com.example.sos_segundoplano.domain.validation.LocalIncident>,
         val requests: InMemoryBoundedValidationStore<com.example.sos_segundoplano.domain.validation.AlertDispatchRequest>,
         val coordinator: FalsePositiveValidationCoordinator,
+        val remoteCreator: FakeIncidentRemoteCreator,
         val fixtureJob: Job
     )
+
+    private class FakeIncidentRemoteCreator(
+        private val status: IncidentRemoteCreationStatus = IncidentRemoteCreationStatus.Success("remote-incident-1")
+    ) : IncidentRemoteCreator {
+        var calls = 0
+
+        override suspend fun createIncident(incident: LocalIncident): LocalIncident {
+            calls++
+            return when (status) {
+                is IncidentRemoteCreationStatus.Success -> incident.copy(
+                    remoteIncidentId = status.incidentId,
+                    remoteCreationStatus = status
+                )
+                else -> incident.copy(remoteCreationStatus = status)
+            }
+        }
+    }
 
     private class FakeClock(var now: Long = 0L) : MonotonicClock {
         override fun elapsedRealtimeNanos(): Long = now

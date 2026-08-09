@@ -2,6 +2,8 @@ package com.example.sos_segundoplano.data.validation
 
 import com.example.sos_segundoplano.data.rules.RiskAssessmentStore
 import com.example.sos_segundoplano.data.rules.RiskAssessmentStoreProvider
+import com.example.sos_segundoplano.data.remote.incident.IncidentRemoteCreator
+import com.example.sos_segundoplano.data.remote.incident.NoOpIncidentRemoteCreator
 import com.example.sos_segundoplano.domain.offline.NoOpOfflineEventSink
 import com.example.sos_segundoplano.domain.offline.OfflineEventSink
 import com.example.sos_segundoplano.domain.offline.isPersisted
@@ -17,6 +19,7 @@ import com.example.sos_segundoplano.domain.validation.AssessmentIdentifier
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationConfig
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
 import com.example.sos_segundoplano.domain.validation.IncidentCause
+import com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus
 import com.example.sos_segundoplano.domain.validation.LocalIncident
 import com.example.sos_segundoplano.domain.validation.MinorEvent
 import com.example.sos_segundoplano.domain.validation.MinorEventType
@@ -41,6 +44,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
@@ -70,6 +74,7 @@ class FalsePositiveValidationCoordinator(
     private val nextDispatchRequestId: () -> Long = { IncidentStoreProvider.dispatchRequestIds.incrementAndGet() },
     private var notifier: FalsePositiveValidationNotifier = NoOpFalsePositiveValidationNotifier,
     private var offlineEventSink: OfflineEventSink = NoOpOfflineEventSink,
+    private var incidentRemoteCreator: IncidentRemoteCreator = NoOpIncidentRemoteCreator,
     private val externalScope: CoroutineScope? = null
 ) {
     private var scope: CoroutineScope? = null
@@ -89,6 +94,7 @@ class FalsePositiveValidationCoordinator(
     private val persistenceRetryJobs = LinkedHashMap<AssessmentIdentifier, Job>()
     private val persistenceRetryAttempts = LinkedHashMap<AssessmentIdentifier, Int>()
     private val processedResponses = BoundedStringSet(config.assessmentBufferCapacity)
+    private val remoteIncidentAttempts = BoundedIdSet(config.assessmentBufferCapacity)
 
     val validationCounters: ValidationCounters get() = counters
 
@@ -99,6 +105,10 @@ class FalsePositiveValidationCoordinator(
 
     fun setOfflineEventSink(nextSink: OfflineEventSink) {
         offlineEventSink = nextSink
+    }
+
+    fun setIncidentRemoteCreator(nextCreator: IncidentRemoteCreator) {
+        incidentRemoteCreator = nextCreator
     }
 
     fun start(expectedSessionId: Long? = null) {
@@ -412,24 +422,50 @@ class FalsePositiveValidationCoordinator(
                     } catch (_: IllegalStateException) {
                         com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult.PersistenceFailed(com.example.sos_segundoplano.domain.offline.OfflineSyncErrorCategory.Serialization, "offline_queue_storage_unavailable")
                     }
-                    if (result.isPersisted) mutex.withLock {
-                        incidentStore.add(event.incident)
-                        dispatchRequestStore.add(event.request)
-                        pendingPersistenceAssessments.remove(event.key)
-                        persistenceDecisions.remove(event.key)
-                        cancelPersistenceRetry(event.key)
-                        processedAssessments.add(event.key)
-                        terminalAssessments.add(event.key)
-                        if (event.immediate) {
-                            publish(FalsePositiveValidationState.ImmediateAlertRequested(event.incident, event.request, event.metadata))
-                        } else {
-                            publish(FalsePositiveValidationState.IncidentGenerated(event.incident, event.request, event.metadata))
+                    if (result.isPersisted) {
+                        val incident = createRemoteIncidentOnce(event)
+                        mutex.withLock {
+                            incidentStore.add(incident)
+                            dispatchRequestStore.add(event.request)
+                            pendingPersistenceAssessments.remove(event.key)
+                            persistenceDecisions.remove(event.key)
+                            cancelPersistenceRetry(event.key)
+                            processedAssessments.add(event.key)
+                            terminalAssessments.add(event.key)
+                            if (event.immediate) {
+                                publish(FalsePositiveValidationState.ImmediateAlertRequested(incident, event.request, event.metadata))
+                            } else {
+                                publish(FalsePositiveValidationState.IncidentGenerated(incident, event.request, event.metadata))
+                            }
                         }
                     } else if (result is com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult.PersistenceFailed) {
                         publishPersistenceError(event.key, event.metadata)
                     }
                 }
             }
+        }
+    }
+
+    private suspend fun createRemoteIncidentOnce(event: PendingOfflineEvent.IncidentBundleEvent): LocalIncident {
+        if (event.incident.cause != IncidentCause.Timeout) return event.incident
+        val firstAttempt = mutex.withLock { remoteIncidentAttempts.add(event.key) }
+        if (!firstAttempt) return event.incident.copy(
+            remoteCreationStatus = IncidentRemoteCreationStatus.DuplicateAttempt
+        )
+        return try {
+            incidentRemoteCreator.createIncident(
+                event.incident.copy(remoteCreationStatus = IncidentRemoteCreationStatus.Pending)
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: IllegalStateException) {
+            event.incident.copy(
+                remoteCreationStatus = IncidentRemoteCreationStatus.InvalidResponse("incident_remote_creator_failed")
+            )
+        } catch (_: RuntimeException) {
+            event.incident.copy(
+                remoteCreationStatus = IncidentRemoteCreationStatus.InvalidResponse("incident_remote_creator_failed")
+            )
         }
     }
 
@@ -572,6 +608,7 @@ class FalsePositiveValidationCoordinator(
         persistenceRetryJobs.clear()
         persistenceRetryAttempts.clear()
         processedResponses.clear()
+        remoteIncidentAttempts.clear()
         counters = ValidationCounters()
         lastEndNanos = null
         if (clearStores) {
@@ -696,5 +733,9 @@ object FalsePositiveValidationCoordinatorProvider {
 
     fun setOfflineEventSink(sink: OfflineEventSink) {
         coordinator.setOfflineEventSink(sink)
+    }
+
+    fun setIncidentRemoteCreator(creator: IncidentRemoteCreator) {
+        coordinator.setIncidentRemoteCreator(creator)
     }
 }

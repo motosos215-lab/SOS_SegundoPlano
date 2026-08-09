@@ -79,6 +79,18 @@ enum class AlertPriority { Normal, High, Critical }
 enum class AlertDeliveryStatus { Pending }
 enum class AlertRetryState { NotStarted }
 
+sealed interface IncidentRemoteCreationStatus {
+    data object NotRequested : IncidentRemoteCreationStatus
+    data object Pending : IncidentRemoteCreationStatus
+    data class Success(val incidentId: String) : IncidentRemoteCreationStatus
+    data class HttpError(val statusCode: Int, val sanitizedMessage: String?) : IncidentRemoteCreationStatus
+    data class NetworkUnavailable(val sanitizedMessage: String?) : IncidentRemoteCreationStatus
+    data class Timeout(val sanitizedMessage: String?) : IncidentRemoteCreationStatus
+    data class InvalidResponse(val sanitizedMessage: String?) : IncidentRemoteCreationStatus
+    data class MissingRequiredData(val sanitizedMessage: String?) : IncidentRemoteCreationStatus
+    data object DuplicateAttempt : IncidentRemoteCreationStatus
+}
+
 data class AssessmentIdentifier(
     val sessionId: Long,
     val assessmentId: Long,
@@ -142,6 +154,8 @@ data class LocalIncident(
     val ruleSetVersion: String,
     val validationPolicyVersion: String,
     val gpsQuality: GpsQualityStatus,
+    val remoteIncidentId: String? = null,
+    val remoteCreationStatus: IncidentRemoteCreationStatus = IncidentRemoteCreationStatus.NotRequested,
     val deliveryStatus: AlertDeliveryStatus = AlertDeliveryStatus.Pending
 )
 
