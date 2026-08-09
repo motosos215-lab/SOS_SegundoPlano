@@ -24,7 +24,21 @@ import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatus
 import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatusProvider
 import com.example.sos_segundoplano.data.trip.InMemoryTripSessionStore
 import com.example.sos_segundoplano.domain.model.TripSessionState
+import com.example.sos_segundoplano.domain.rules.BatteryReadinessStatus
+import com.example.sos_segundoplano.domain.rules.ConnectivityReadinessStatus
+import com.example.sos_segundoplano.domain.rules.DeviceReadinessEvaluation
+import com.example.sos_segundoplano.domain.rules.GpsQualityEvaluation
+import com.example.sos_segundoplano.domain.rules.GpsQualityStatus
+import com.example.sos_segundoplano.domain.rules.MovementContinuityState
+import com.example.sos_segundoplano.domain.rules.RiskAssessment
+import com.example.sos_segundoplano.domain.rules.RiskLevel
+import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
+import com.example.sos_segundoplano.domain.validation.ValidationDecisionReason
+import com.example.sos_segundoplano.domain.validation.ValidationEvidence
+import com.example.sos_segundoplano.domain.validation.ValidationMetadata
+import com.example.sos_segundoplano.domain.validation.ValidationOrigin
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -44,6 +58,30 @@ class TripSessionRestorationTest {
 
         composeRule.onNodeWithTag("monitoring_screen").assertIsDisplayed()
         composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
+    }
+
+    @Test fun activeSessionWithCountdownOpensAccidentScreenFirst() {
+        setAppContent(
+            store = InMemoryTripSessionStore(TripSessionState.Active),
+            validationState = fakeCountdownState()
+        )
+
+        composeRule.onNodeWithTag("accident_countdown_screen").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
+    }
+
+    @Test fun safeConfirmedKeepsActiveSessionOnMonitoring() {
+        val store = InMemoryTripSessionStore(TripSessionState.Active)
+        setAppContent(
+            store = store,
+            validationState = FalsePositiveValidationState.SafeConfirmed(fakeMetadata(), "safe-1")
+        )
+
+        composeRule.onNodeWithTag("monitoring_screen").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("accident_countdown_screen").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
+        assertEquals(TripSessionState.Active, store.states.value)
     }
 
     @Test fun activeSessionSurvivesNewCompositionWithSameStore() {
@@ -121,7 +159,8 @@ class TripSessionRestorationTest {
 
     private fun setAppContent(
         store: InMemoryTripSessionStore,
-        stopper: MonitoringServiceStopper = FakeRestorationMonitoringServiceStopper(MonitoringServiceStopResult.Stopped)
+        stopper: MonitoringServiceStopper = FakeRestorationMonitoringServiceStopper(MonitoringServiceStopResult.Stopped),
+        validationState: FalsePositiveValidationState = FalsePositiveValidationState.Idle
     ) {
         composeRule.setContent {
             SOS_SegundoPlanoTheme {
@@ -131,11 +170,66 @@ class TripSessionRestorationTest {
                     notificationStatusProvider = AppNotificationStatusProvider { AppNotificationStatus.Enabled },
                     bluetoothRequirementStatusProvider = BluetoothRequirementStatusProvider { BluetoothRequirementStatus.Enabled },
                     monitoringServiceStarter = FakeRestorationMonitoringServiceStarter(),
-                    monitoringServiceStopper = stopper
+                    monitoringServiceStopper = stopper,
+                    validationStates = MutableStateFlow(validationState)
                 )
             }
         }
     }
+
+    private fun fakeCountdownState() = FalsePositiveValidationState.CountdownActive(
+        assessment = RiskAssessment(
+            sessionId = 1L,
+            assessmentId = 1L,
+            windowId = 1L,
+            startNanos = 1L,
+            endNanos = 2L,
+            score = 55,
+            riskLevel = RiskLevel.Medium,
+            confidence = 0.8,
+            outcomes = emptyList(),
+            contributions = emptyList(),
+            gpsQuality = GpsQualityEvaluation(GpsQualityStatus.Good, 4.0, 1L, 0.9),
+            deviceReadiness = DeviceReadinessEvaluation(
+                batteryStatus = BatteryReadinessStatus.Normal,
+                batteryPercentage = 80,
+                charging = false,
+                connectivityStatus = ConnectivityReadinessStatus.Available,
+                connectivityValidated = true,
+                transport = null,
+                wearableStatus = null,
+                canCommunicateLater = true,
+                confidence = 0.8
+            ),
+            movementContinuity = MovementContinuityState.Stopped,
+            droppedProcessedWindows = 0L,
+            lateWindows = 0L,
+            droppedRawEvents = 0L,
+            ruleSetVersion = "test-rules",
+            partialWindow = false
+        ),
+        metadata = fakeMetadata(),
+        evidence = ValidationEvidence(
+            movementContinuity = MovementContinuityState.Stopped,
+            gpsQuality = GpsQualityStatus.Good,
+            ruleSetVersion = "test-rules"
+        ),
+        startedAtElapsedRealtimeNanos = 1L,
+        deadlineElapsedRealtimeNanos = 21_000_000_000L,
+        remainingNanos = 20_000_000_000L
+    )
+
+    private fun fakeMetadata() = ValidationMetadata(
+        sessionId = 1L,
+        assessmentId = 1L,
+        windowId = 1L,
+        timestampElapsedRealtimeNanos = 1L,
+        reason = ValidationDecisionReason.CandidatePhysicalRisk,
+        score = 55,
+        confidence = 0.8,
+        origin = ValidationOrigin.System,
+        policyVersion = "test-policy"
+    )
 }
 
 private class FakeRestorationMonitoringServiceStarter : MonitoringServiceStarter {

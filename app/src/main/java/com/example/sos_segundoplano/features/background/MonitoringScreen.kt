@@ -38,8 +38,6 @@ import com.example.sos_segundoplano.domain.signals.CaptureState
 import com.example.sos_segundoplano.domain.signals.TripSignalSnapshot
 import com.example.sos_segundoplano.domain.signals.WearableSample
 import com.example.sos_segundoplano.domain.signals.WearableStatus
-import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
-import com.example.sos_segundoplano.domain.validation.IncidentCause
 import com.example.sos_segundoplano.ui.components.MotoBottomBar
 import com.example.sos_segundoplano.ui.components.MotoBottomBarItem
 import com.example.sos_segundoplano.ui.components.MotoMetricCard
@@ -58,11 +56,8 @@ import com.example.sos_segundoplano.ui.theme.MotoTextSecondary
 fun MonitoringScreen(
     modifier: Modifier = Modifier,
     snapshot: TripSignalSnapshot = TripSignalSnapshot(),
-    validationState: FalsePositiveValidationState = FalsePositiveValidationState.Idle,
     riskAssessmentState: RiskAssessmentState = RiskAssessmentState.Idle,
     offlineQueueSummary: OfflineQueueSummary = OfflineQueueSummary(),
-    onConfirmSafe: (Long, Long, String) -> Unit = { _, _, _ -> },
-    onRequestHelp: (Long, Long, String) -> Unit = { _, _, _ -> },
     onFinishTrip: () -> Unit = {},
     isFinishTripEnabled: Boolean = true
 ) {
@@ -103,11 +98,6 @@ fun MonitoringScreen(
             Spacer(modifier = Modifier.height(8.dp))
             MonitoringStatusPanel(snapshot.captureState)
             RiskScorePanel(riskAssessmentState)
-            ValidationPanel(
-                state = validationState,
-                onConfirmSafe = onConfirmSafe,
-                onRequestHelp = onRequestHelp
-            )
             OfflineQueuePanel(offlineQueueSummary)
             MetricsGrid(snapshot)
             WearablePanel(snapshot.wearable)
@@ -207,154 +197,6 @@ private fun OfflineQueuePanel(summary: OfflineQueueSummary) {
         textAlign = TextAlign.Center
     )
 }
-
-@Composable
-private fun ValidationPanel(
-    state: FalsePositiveValidationState,
-    onConfirmSafe: (Long, Long, String) -> Unit,
-    onRequestHelp: (Long, Long, String) -> Unit
-) {
-    when (state) {
-        is FalsePositiveValidationState.CountdownActive -> {
-            val remainingSeconds = ((state.remainingNanos + NANOS_PER_SECOND - 1L) / NANOS_PER_SECOND).coerceAtLeast(0L)
-            TitledStatusCard(
-                title = stringResource(R.string.validation_countdown_title),
-                testTag = "false_positive_validation_panel"
-            ) {
-                Text(
-                    text = stringResource(R.string.validation_countdown_seconds, remainingSeconds),
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = MotoAlert,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Text(
-                    text = stringResource(R.string.validation_countdown_waiting_driver),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MotoTextSecondary,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = { onConfirmSafe(state.metadata.sessionId, state.metadata.assessmentId, "mobile-confirm-${state.metadata.sessionId}-${state.metadata.assessmentId}") },
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("confirm_safe_button")
-                    ) {
-                        Text(stringResource(R.string.validation_confirm_safe))
-                    }
-                    Button(
-                        onClick = { onRequestHelp(state.metadata.sessionId, state.metadata.assessmentId, "mobile-help-${state.metadata.sessionId}-${state.metadata.assessmentId}") },
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("request_help_button"),
-                        colors = ButtonDefaults.buttonColors(containerColor = MotoAlert)
-                    ) {
-                        Text(stringResource(R.string.validation_request_help))
-                    }
-                }
-            }
-        }
-
-        is FalsePositiveValidationState.CandidateDetected -> Text(
-            text = stringResource(R.string.validation_candidate_detected),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("false_positive_candidate_status"),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MotoAlert,
-            textAlign = TextAlign.Center
-        )
-
-        is FalsePositiveValidationState.IncidentGenerated -> {
-            val text = when (state.incident.cause) {
-                IncidentCause.UserRequestedHelp -> stringResource(R.string.validation_help_requested)
-                IncidentCause.Timeout -> stringResource(R.string.validation_timeout_escalated)
-                IncidentCause.CriticalPhysicalEvent -> stringResource(R.string.validation_immediate_alert_requested)
-            }
-            Text(
-                text = text,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("false_positive_escalated_status"),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MotoAlert,
-                textAlign = TextAlign.Center
-            )
-        }
-
-        is FalsePositiveValidationState.ImmediateAlertRequested -> Text(
-            text = stringResource(R.string.validation_immediate_alert_requested),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("false_positive_immediate_alert_status"),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MotoAlert,
-            textAlign = TextAlign.Center
-        )
-
-        is FalsePositiveValidationState.SafeConfirmed -> Text(
-            text = stringResource(R.string.validation_cancelled_safe),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("false_positive_safe_confirmed_status"),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MotoSuccess,
-            textAlign = TextAlign.Center
-        )
-
-        is FalsePositiveValidationState.MinorEventRecorded -> Text(
-            text = stringResource(R.string.validation_minor_event_recorded),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("false_positive_minor_event_status"),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MotoSuccess,
-            textAlign = TextAlign.Center
-        )
-
-        is FalsePositiveValidationState.SuppressedFalsePositive -> Text(
-            text = stringResource(R.string.validation_braking_suppressed),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("false_positive_braking_suppressed_status"),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MotoSuccess,
-            textAlign = TextAlign.Center
-        )
-
-        is FalsePositiveValidationState.HelpRequested -> Text(
-            text = stringResource(R.string.validation_help_requested),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("false_positive_help_requested_status"),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MotoAlert,
-            textAlign = TextAlign.Center
-        )
-
-        is FalsePositiveValidationState.Error -> Text(
-            text = stringResource(R.string.validation_local_registration_failed),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("false_positive_error_status"),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MotoAlert,
-            textAlign = TextAlign.Center
-        )
-
-        FalsePositiveValidationState.Idle,
-        is FalsePositiveValidationState.Monitoring,
-        is FalsePositiveValidationState.Stopped -> Unit
-    }
-}
-
-private const val NANOS_PER_SECOND = 1_000_000_000L
 
 @Composable
 private fun MetricsGrid(snapshot: TripSignalSnapshot) {

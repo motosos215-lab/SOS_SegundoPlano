@@ -51,6 +51,7 @@ import com.example.sos_segundoplano.domain.validation.ValidationDecisionReason
 import com.example.sos_segundoplano.domain.validation.ValidationEvidence
 import com.example.sos_segundoplano.domain.validation.ValidationMetadata
 import com.example.sos_segundoplano.domain.validation.ValidationOrigin
+import com.example.sos_segundoplano.features.background.AccidentCountdownScreen
 import com.example.sos_segundoplano.features.background.MonitoringScreen
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -187,13 +188,13 @@ class SignalCaptureMonitoringScreenTest {
         composeRule.onNodeWithText("64%").performScrollTo().assertIsDisplayed()
     }
 
-    @Test fun falsePositiveCountdownRemainsVisibleAndActionable() {
+    @Test fun falsePositiveCountdownUsesDedicatedScreenAndRemainsActionable() {
         var confirmCalled = false
         var helpCalled = false
         composeRule.setContent {
             SOS_SegundoPlanoTheme {
-                MonitoringScreen(
-                    validationState = fakeCountdownState(),
+                AccidentCountdownScreen(
+                    state = fakeCountdownState(),
                     onConfirmSafe = { sessionId, assessmentId, _ ->
                         confirmCalled = sessionId == 1L && assessmentId == 1L
                     },
@@ -204,6 +205,7 @@ class SignalCaptureMonitoringScreenTest {
             }
         }
 
+        composeRule.onNodeWithTag("accident_countdown_screen").assertIsDisplayed()
         composeRule.onNodeWithText("Posible accidente detectado").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Quedan 20 s para confirmar.").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("MotoSOS espera confirmación del conductor antes de registrar un incidente local.").performScrollTo().assertIsDisplayed()
@@ -214,21 +216,34 @@ class SignalCaptureMonitoringScreenTest {
         assertTrue(helpCalled)
     }
 
-    @Test fun safeConfirmedShowsCancelledAndMonitoringContinues() {
-        setMonitoringScreen(FalsePositiveValidationState.SafeConfirmed(fakeMetadata(), responseId = "safe-1"))
+    @Test fun countdownStateIsNotRenderedInsideMonitoringScreen() {
+        composeRule.setContent {
+            SOS_SegundoPlanoTheme {
+                MonitoringScreen()
+            }
+        }
 
-        composeRule.onNodeWithText("Alerta cancelada. El viaje sigue siendo monitoreado.").performScrollTo().assertIsDisplayed()
+        composeRule.onAllNodesWithTag("false_positive_validation_panel").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Posible accidente detectado").assertCountEquals(0)
+    }
+
+    @Test fun safeConfirmedShowsCancelledAndMonitoringContinues() {
+        setAppContentWithValidation(FalsePositiveValidationState.SafeConfirmed(fakeMetadata(), responseId = "safe-1"))
+
+        composeRule.onNodeWithTag("start_trip_button").performClick()
+        composeRule.onNodeWithTag("monitoring_screen").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Alerta cancelada. El viaje sigue siendo monitoreado.").assertCountEquals(0)
     }
 
     @Test fun helpRequestedIncidentShowsLocalPendingWithoutRemoteDeliveryLanguage() {
-        setMonitoringScreen(fakeIncidentState(IncidentCause.UserRequestedHelp))
+        setAccidentScreen(fakeIncidentState(IncidentCause.UserRequestedHelp))
 
         composeRule.onNodeWithText("Solicitud de ayuda registrada. El envío remoto aún no está disponible.").performScrollTo().assertIsDisplayed()
         assertNoRemoteDeliveryLanguage()
     }
 
     @Test fun timeoutIncidentShowsNoResponseAndLocalPending() {
-        setMonitoringScreen(fakeIncidentState(IncidentCause.Timeout))
+        setAccidentScreen(fakeIncidentState(IncidentCause.Timeout))
 
         composeRule.onNodeWithText("La cuenta regresiva terminó sin respuesta. Se registró un incidente local pendiente.").performScrollTo().assertIsDisplayed()
         assertNoRemoteDeliveryLanguage()
@@ -236,28 +251,16 @@ class SignalCaptureMonitoringScreenTest {
 
     @Test fun immediateAlertRequestedShowsLocalPendingWithoutRemoteDeliveryLanguage() {
         val incident = fakeIncident(IncidentCause.CriticalPhysicalEvent)
-        setMonitoringScreen(FalsePositiveValidationState.ImmediateAlertRequested(incident, fakeDispatchRequest(incident), fakeMetadata()))
+        setAccidentScreen(FalsePositiveValidationState.ImmediateAlertRequested(incident, fakeDispatchRequest(incident), fakeMetadata()))
 
         composeRule.onNodeWithText("Evento crítico detectado. Solicitud local inmediata pendiente.").performScrollTo().assertIsDisplayed()
         assertNoRemoteDeliveryLanguage()
     }
 
     @Test fun validationErrorShowsLocalRegistrationFailure() {
-        setMonitoringScreen(FalsePositiveValidationState.Error(fakeMetadata(), "OfflinePersistenceFailed"))
+        setAccidentScreen(FalsePositiveValidationState.Error(fakeMetadata(), "OfflinePersistenceFailed"))
 
         composeRule.onNodeWithText("No se pudo registrar correctamente el evento local. El viaje sigue activo.").performScrollTo().assertIsDisplayed()
-    }
-
-    @Test fun candidateDetectedShowsMinimalFeedback() {
-        setMonitoringScreen(
-            FalsePositiveValidationState.CandidateDetected(
-                assessment = fakeRiskAssessment(score = 55, level = RiskLevel.Medium),
-                metadata = fakeMetadata(),
-                evidence = fakeEvidence()
-            )
-        )
-
-        composeRule.onNodeWithText("Revisando posible accidente. MotoSOS prepara una confirmación local.").performScrollTo().assertIsDisplayed()
     }
 
     @Test fun monitoringScreenContainsLongResponsiveTexts() {
@@ -337,10 +340,25 @@ class SignalCaptureMonitoringScreenTest {
         }
     }
 
-    private fun setMonitoringScreen(validationState: FalsePositiveValidationState) {
+    private fun setAccidentScreen(validationState: FalsePositiveValidationState) {
         composeRule.setContent {
             SOS_SegundoPlanoTheme {
-                MonitoringScreen(validationState = validationState)
+                AccidentCountdownScreen(state = validationState)
+            }
+        }
+    }
+
+    private fun setAppContentWithValidation(validationState: FalsePositiveValidationState) {
+        composeRule.setContent {
+            SOS_SegundoPlanoTheme {
+                MotoSosApp(
+                    locationPermissionStatusProvider = BackgroundLocationPermissionStatusProvider { BackgroundLocationPermissionStatus.Granted },
+                    notificationStatusProvider = AppNotificationStatusProvider { AppNotificationStatus.Enabled },
+                    bluetoothRequirementStatusProvider = BluetoothRequirementStatusProvider { BluetoothRequirementStatus.Enabled },
+                    monitoringServiceStarter = CountingStarter(),
+                    monitoringServiceStopper = CountingStopper(),
+                    validationStates = MutableStateFlow(validationState)
+                )
             }
         }
     }

@@ -31,9 +31,11 @@ class MonitoringNotificationFactoryTest {
     private val context: Context = InstrumentationRegistry.getInstrumentation().targetContext
     private val notificationManager = context.getSystemService(NotificationManager::class.java)
     private val testChannelId = "test_active_trip_monitoring"
+    private val testEmergencyChannelId = "test_possible_accident_alerts"
     private val factory = MonitoringNotificationFactory(
         context = context,
         channelId = testChannelId,
+        emergencyChannelId = testEmergencyChannelId,
         notificationId = 13017
     )
 
@@ -41,6 +43,7 @@ class MonitoringNotificationFactoryTest {
     fun tearDown() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             notificationManager.deleteNotificationChannel(testChannelId)
+            notificationManager.deleteNotificationChannel(testEmergencyChannelId)
         }
     }
 
@@ -55,6 +58,12 @@ class MonitoringNotificationFactoryTest {
             assertEquals(NotificationManager.IMPORTANCE_LOW, channel.importance)
             assertFalse(channel.canShowBadge())
             assertFalse(channel.shouldVibrate())
+
+            val emergencyChannel = notificationManager.getNotificationChannel(testEmergencyChannelId)
+            assertNotNull(emergencyChannel)
+            assertEquals(NotificationManager.IMPORTANCE_HIGH, emergencyChannel.importance)
+            assertTrue(emergencyChannel.canShowBadge())
+            assertTrue(emergencyChannel.shouldVibrate())
         } else {
             assertTrue(factory.isChannelEnabled())
         }
@@ -87,6 +96,7 @@ class MonitoringNotificationFactoryTest {
     fun countdownNotificationUsesAccidentContentActionsAndHighPriority() {
         val notification = factory.buildNotification(fakeCountdownState())
 
+        assertEquals(testEmergencyChannelId, notification.channelId)
         assertEquals(
             context.getString(R.string.validation_countdown_title),
             notification.extras.getString(Notification.EXTRA_TITLE)
@@ -96,6 +106,8 @@ class MonitoringNotificationFactoryTest {
             notification.extras.getString(Notification.EXTRA_TEXT)
         )
         assertEquals(NotificationCompat.PRIORITY_HIGH, notification.priority)
+        assertEquals(NotificationCompat.CATEGORY_ALARM, notification.category)
+        assertFalse(notification.flags and Notification.FLAG_ONGOING_EVENT != 0)
         val actions = notification.actions.orEmpty()
         assertEquals(2, actions.size)
         assertEquals(context.getString(R.string.validation_confirm_safe), actions[0].title.toString())

@@ -1,6 +1,7 @@
 package com.example.sos_segundoplano.features.background
 
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -24,6 +25,9 @@ import kotlinx.coroutines.launch
 class MonitoringForegroundService : Service() {
     private val notificationFactory: MonitoringNotificationFactory by lazy {
         MonitoringNotificationFactory(this)
+    }
+    private val notificationManager: NotificationManager by lazy {
+        getSystemService(NotificationManager::class.java)
     }
     private val captureCoordinator: TripSignalCaptureCoordinator by lazy {
         TripSignalCaptureCoordinator(applicationContext)
@@ -58,7 +62,7 @@ class MonitoringForegroundService : Service() {
 
         return try {
             FalsePositiveValidationCoordinatorProvider.setNotifier(WearValidationStatusNotifier(applicationContext))
-            promoteToForeground(notificationFactory.buildNotification())
+            promoteToForeground(notificationFactory.buildMonitoringNotification())
             startNotificationUpdates()
             captureCoordinator.start()
             TripSessionStoreProvider.store.setState(TripSessionState.Active)
@@ -74,6 +78,7 @@ class MonitoringForegroundService : Service() {
         notificationScope?.cancel()
         notificationCollector = null
         notificationScope = null
+        notificationManager.cancel(MonitoringNotificationFactory.EMERGENCY_NOTIFICATION_ID)
         captureCoordinator.stop()
         TripSessionStoreProvider.store.setState(TripSessionState.Idle)
         super.onDestroy()
@@ -85,7 +90,14 @@ class MonitoringForegroundService : Service() {
         notificationScope = nextScope
         notificationCollector = nextScope.launch {
             FalsePositiveValidationStoreProvider.store.states.collect { state ->
-                promoteToForeground(notificationFactory.buildNotification(state))
+                if (state.shouldShowEmergencyNotification()) {
+                    notificationManager.notify(
+                        MonitoringNotificationFactory.EMERGENCY_NOTIFICATION_ID,
+                        notificationFactory.buildEmergencyNotification(state)
+                    )
+                } else {
+                    notificationManager.cancel(MonitoringNotificationFactory.EMERGENCY_NOTIFICATION_ID)
+                }
             }
         }
     }
@@ -129,4 +141,13 @@ class MonitoringForegroundService : Service() {
         fun createStartIntent(context: Context): Intent = Intent(context, MonitoringForegroundService::class.java)
             .setAction(ACTION_START_MONITORING)
     }
+}
+
+private fun com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.shouldShowEmergencyNotification(): Boolean = when (this) {
+    is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.CountdownActive,
+    is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.HelpRequested,
+    is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.IncidentGenerated,
+    is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.ImmediateAlertRequested,
+    is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.Error -> true
+    else -> false
 }

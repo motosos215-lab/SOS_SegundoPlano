@@ -135,7 +135,10 @@
     <string name="validation_braking_suppressed">Frenado brusco con movimiento continuo: alerta suprimida.</string>
     <string name="validation_incident_generated">Incidente local registrado. El envío remoto aún no está disponible.</string>
     <string name="validation_immediate_alert_requested">Evento crítico detectado. Solicitud local inmediata pendiente.</string>
+    <string name="validation_local_registration_failed_title">Registro local no completado</string>
     <string name="validation_local_registration_failed">No se pudo registrar correctamente el evento local. El viaje sigue activo.</string>
+    <string name="emergency_notification_channel_name">Alertas de posible accidente</string>
+    <string name="emergency_notification_channel_description">Alertas urgentes para confirmar una posible emergencia durante un viaje.</string>
     <string name="offline_queue_pending">%1$d evento(s) guardado(s) localmente. Pendiente de sincronización.</string>
     <string name="offline_queue_waiting_connection">%1$d evento(s) esperando conexión para reintento.</string>
     <string name="offline_queue_not_configured">%1$d evento(s) guardado(s). Sincronización remota aún no configurada.</string>

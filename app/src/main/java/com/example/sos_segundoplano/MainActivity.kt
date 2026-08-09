@@ -49,6 +49,7 @@ import com.example.sos_segundoplano.domain.rules.RiskAssessmentState
 import com.example.sos_segundoplano.domain.signals.TripSignalSnapshot
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
 import com.example.sos_segundoplano.domain.validation.UserResponseSource
+import com.example.sos_segundoplano.features.background.AccidentCountdownScreen
 import com.example.sos_segundoplano.domain.usecase.FinishTripUseCase
 import com.example.sos_segundoplano.domain.usecase.StartTripUseCase
 import com.example.sos_segundoplano.features.background.MonitoringScreen
@@ -187,9 +188,11 @@ fun MotoSosApp(
     var isTripFinishInProgress by remember { mutableStateOf(false) }
     var monitoringStopFailureVisible by remember { mutableStateOf(false) }
     val currentState = resolvedTripSessionStore.states.collectAsState().value
+    val validationState = validationStates.collectAsState().value
     val offlineQueueSummary = (offlineQueueSummaries ?: kotlinx.coroutines.flow.flowOf(OfflineQueueSummary()))
         .collectAsState(OfflineQueueSummary())
         .value
+    var dismissedEmergencyStateKey by remember { mutableStateOf<String?>(null) }
 
     if (currentState == TripSessionState.Active && selectedScreen != MotoSosAppScreen.Home) {
         selectedScreen = MotoSosAppScreen.Home
@@ -298,7 +301,21 @@ fun MotoSosApp(
         }
     }
 
-    when (currentState) {
+    val emergencyStateKey = validationState.emergencyScreenKey()
+    if (validationState is FalsePositiveValidationState.CountdownActive) {
+        AccidentCountdownScreen(
+            state = validationState,
+            modifier = modifier,
+            onConfirmSafe = onConfirmSafe,
+            onRequestHelp = onRequestHelp
+        )
+    } else if (currentState == TripSessionState.Active && emergencyStateKey != null && emergencyStateKey != dismissedEmergencyStateKey) {
+        AccidentCountdownScreen(
+            state = validationState,
+            modifier = modifier,
+            onContinueTrip = { dismissedEmergencyStateKey = emergencyStateKey }
+        )
+    } else when (currentState) {
         TripSessionState.Idle -> when (selectedScreen) {
             MotoSosAppScreen.Home -> HomeScreen(
                 onStartTrip = {
@@ -323,11 +340,8 @@ fun MotoSosApp(
         TripSessionState.Active -> MonitoringScreen(
             modifier = modifier,
             snapshot = signalSnapshots.collectAsState().value,
-            validationState = validationStates.collectAsState().value,
             riskAssessmentState = riskAssessmentStates.collectAsState().value,
             offlineQueueSummary = offlineQueueSummary,
-            onConfirmSafe = onConfirmSafe,
-            onRequestHelp = onRequestHelp,
             onFinishTrip = {
                 finishActiveTrip()
             },
@@ -411,6 +425,14 @@ fun MotoSosApp(
             }
         )
     }
+}
+
+private fun FalsePositiveValidationState.emergencyScreenKey(): String? = when (this) {
+    is FalsePositiveValidationState.HelpRequested -> "help-${metadata.sessionId}-${metadata.assessmentId}-$responseId"
+    is FalsePositiveValidationState.IncidentGenerated -> "incident-${incident.sessionId}-${incident.assessmentId}-${incident.incidentId}-${incident.cause}"
+    is FalsePositiveValidationState.ImmediateAlertRequested -> "immediate-${incident.sessionId}-${incident.assessmentId}-${incident.incidentId}"
+    is FalsePositiveValidationState.Error -> "error-${metadata?.sessionId}-${metadata?.assessmentId}-$message"
+    else -> null
 }
 
 private enum class MotoSosAppScreen { Home, Profile }
