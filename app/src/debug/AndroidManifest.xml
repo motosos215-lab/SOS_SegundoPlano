@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name=".debug.DebugAccidentAlertReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.example.sos_segundoplano.DEBUG_TRIGGER_ACCIDENT" />
+                <action android:name="com.example.sos_segundoplano.DEBUG_RESET_ACCIDENT" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

@@ -14,7 +14,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.Modifier
@@ -41,12 +40,16 @@ import com.example.sos_segundoplano.data.rules.RiskAssessmentStoreProvider
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationCoordinatorProvider
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationStoreProvider
 import com.example.sos_segundoplano.data.signals.TripSignalStoreProvider
+import com.example.sos_segundoplano.data.trip.InMemoryTripSessionStore
+import com.example.sos_segundoplano.data.trip.TripSessionStore
+import com.example.sos_segundoplano.data.trip.TripSessionStoreProvider
 import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.domain.offline.OfflineQueueSummary
 import com.example.sos_segundoplano.domain.rules.RiskAssessmentState
 import com.example.sos_segundoplano.domain.signals.TripSignalSnapshot
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
 import com.example.sos_segundoplano.domain.validation.UserResponseSource
+import com.example.sos_segundoplano.features.background.AccidentCountdownScreen
 import com.example.sos_segundoplano.domain.usecase.FinishTripUseCase
 import com.example.sos_segundoplano.domain.usecase.StartTripUseCase
 import com.example.sos_segundoplano.features.background.MonitoringScreen
@@ -86,6 +89,7 @@ class MainActivity : ComponentActivity() {
                         bluetoothRequirementStatusProvider = BluetoothRequirementChecker(applicationContext),
                         monitoringServiceStarter = AndroidMonitoringServiceStarter(applicationContext),
                         monitoringServiceStopper = AndroidMonitoringServiceStopper(applicationContext),
+                        tripSessionStore = TripSessionStoreProvider.store,
                         offlineQueueSummaries = OfflineQueueProvider.get(applicationContext).repository.observeSummary(),
                         profileContent = { onHomeSelected ->
                             ProfileRoute(
@@ -154,6 +158,7 @@ fun MotoSosApp(
         MonitoringServiceStarter { MonitoringServiceStartResult.Started },
     monitoringServiceStopper: MonitoringServiceStopper =
         MonitoringServiceStopper { MonitoringServiceStopResult.Stopped },
+    tripSessionStore: TripSessionStore? = null,
     signalSnapshots: StateFlow<TripSignalSnapshot> = TripSignalStoreProvider.store.snapshots,
     validationStates: StateFlow<FalsePositiveValidationState> = FalsePositiveValidationStoreProvider.store.states,
     riskAssessmentStates: StateFlow<RiskAssessmentState> = RiskAssessmentStoreProvider.store.states,
@@ -169,7 +174,7 @@ fun MotoSosApp(
     onOpenBluetoothSettings: () -> Unit = {},
     profileContent: (@Composable (() -> Unit) -> Unit)? = null
 ) {
-    var isTripActive by rememberSaveable { mutableStateOf(false) }
+    val resolvedTripSessionStore = tripSessionStore ?: remember { InMemoryTripSessionStore() }
     var selectedScreen by remember { mutableStateOf(MotoSosAppScreen.Home) }
     var isTripStartPending by remember { mutableStateOf(false) }
     var permissionDialogStatus by remember {
@@ -182,14 +187,12 @@ fun MotoSosApp(
     var monitoringStartFailureVisible by remember { mutableStateOf(false) }
     var isTripFinishInProgress by remember { mutableStateOf(false) }
     var monitoringStopFailureVisible by remember { mutableStateOf(false) }
-    val currentState = if (isTripActive) {
-        TripSessionState.Active
-    } else {
-        TripSessionState.Idle
-    }
+    val currentState = resolvedTripSessionStore.states.collectAsState().value
+    val validationState = validationStates.collectAsState().value
     val offlineQueueSummary = (offlineQueueSummaries ?: kotlinx.coroutines.flow.flowOf(OfflineQueueSummary()))
         .collectAsState(OfflineQueueSummary())
         .value
+    var dismissedEmergencyStateKey by remember { mutableStateOf<String?>(null) }
 
     if (currentState == TripSessionState.Active && selectedScreen != MotoSosAppScreen.Home) {
         selectedScreen = MotoSosAppScreen.Home
@@ -210,7 +213,7 @@ fun MotoSosApp(
                                     when (monitoringServiceStarter.start()) {
                                         MonitoringServiceStartResult.Started -> {
                                             val nextState = startTripUseCase(currentState)
-                                            isTripActive = nextState == TripSessionState.Active
+                                            resolvedTripSessionStore.setState(nextState)
                                             isTripStartPending = false
                                             permissionDialogStatus = null
                                             isNotificationDialogVisible = false
@@ -281,7 +284,7 @@ fun MotoSosApp(
             MonitoringServiceStopResult.Stopped,
             MonitoringServiceStopResult.AlreadyStopped -> {
                 val nextState = finishTripUseCase(currentState)
-                isTripActive = nextState == TripSessionState.Active
+                resolvedTripSessionStore.setState(nextState)
                 isTripFinishInProgress = false
                 monitoringStopFailureVisible = false
                 isTripStartPending = false
@@ -298,7 +301,21 @@ fun MotoSosApp(
         }
     }
 
-    when (currentState) {
+    val emergencyStateKey = validationState.emergencyScreenKey()
+    if (validationState is FalsePositiveValidationState.CountdownActive) {
+        AccidentCountdownScreen(
+            state = validationState,
+            modifier = modifier,
+            onConfirmSafe = onConfirmSafe,
+            onRequestHelp = onRequestHelp
+        )
+    } else if (currentState == TripSessionState.Active && emergencyStateKey != null && emergencyStateKey != dismissedEmergencyStateKey) {
+        AccidentCountdownScreen(
+            state = validationState,
+            modifier = modifier,
+            onContinueTrip = { dismissedEmergencyStateKey = emergencyStateKey }
+        )
+    } else when (currentState) {
         TripSessionState.Idle -> when (selectedScreen) {
             MotoSosAppScreen.Home -> HomeScreen(
                 onStartTrip = {
@@ -323,11 +340,8 @@ fun MotoSosApp(
         TripSessionState.Active -> MonitoringScreen(
             modifier = modifier,
             snapshot = signalSnapshots.collectAsState().value,
-            validationState = validationStates.collectAsState().value,
             riskAssessmentState = riskAssessmentStates.collectAsState().value,
             offlineQueueSummary = offlineQueueSummary,
-            onConfirmSafe = onConfirmSafe,
-            onRequestHelp = onRequestHelp,
             onFinishTrip = {
                 finishActiveTrip()
             },
@@ -411,6 +425,14 @@ fun MotoSosApp(
             }
         )
     }
+}
+
+private fun FalsePositiveValidationState.emergencyScreenKey(): String? = when (this) {
+    is FalsePositiveValidationState.HelpRequested -> "help-${metadata.sessionId}-${metadata.assessmentId}-$responseId"
+    is FalsePositiveValidationState.IncidentGenerated -> "incident-${incident.sessionId}-${incident.assessmentId}-${incident.incidentId}-${incident.cause}"
+    is FalsePositiveValidationState.ImmediateAlertRequested -> "immediate-${incident.sessionId}-${incident.assessmentId}-${incident.incidentId}"
+    is FalsePositiveValidationState.Error -> "error-${metadata?.sessionId}-${metadata?.assessmentId}-$message"
+    else -> null
 }
 
 private enum class MotoSosAppScreen { Home, Profile }

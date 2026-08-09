@@ -1,6 +1,7 @@
 package com.example.sos_segundoplano.features.background
 
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -8,9 +9,11 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import com.example.sos_segundoplano.data.signals.TripSignalCaptureCoordinator
+import com.example.sos_segundoplano.data.trip.TripSessionStoreProvider
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationCoordinatorProvider
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationStoreProvider
 import com.example.sos_segundoplano.data.validation.WearValidationStatusNotifier
+import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.domain.validation.UserResponseSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,8 +26,14 @@ class MonitoringForegroundService : Service() {
     private val notificationFactory: MonitoringNotificationFactory by lazy {
         MonitoringNotificationFactory(this)
     }
+    private val notificationManager: NotificationManager by lazy {
+        getSystemService(NotificationManager::class.java)
+    }
     private val captureCoordinator: TripSignalCaptureCoordinator by lazy {
         TripSignalCaptureCoordinator(applicationContext)
+    }
+    private val accidentTripFinalizer: AccidentTripFinalizer by lazy {
+        AccidentTripFinalizer { stopSelf() }
     }
     private var notificationScope: CoroutineScope? = null
     private var notificationCollector: Job? = null
@@ -56,9 +65,11 @@ class MonitoringForegroundService : Service() {
 
         return try {
             FalsePositiveValidationCoordinatorProvider.setNotifier(WearValidationStatusNotifier(applicationContext))
-            promoteToForeground(notificationFactory.buildNotification())
-            startNotificationUpdates()
+            promoteToForeground(notificationFactory.buildMonitoringNotification())
             captureCoordinator.start()
+            TripSessionStoreProvider.store.setState(TripSessionState.Active)
+            accidentTripFinalizer.reset()
+            startNotificationUpdates()
             START_NOT_STICKY
         } catch (_: SecurityException) {
             stopSelf(startId)
@@ -71,7 +82,10 @@ class MonitoringForegroundService : Service() {
         notificationScope?.cancel()
         notificationCollector = null
         notificationScope = null
+        notificationManager.cancel(MonitoringNotificationFactory.EMERGENCY_NOTIFICATION_ID)
+        stopForegroundNotification()
         captureCoordinator.stop()
+        TripSessionStoreProvider.store.setState(TripSessionState.Idle)
         super.onDestroy()
     }
 
@@ -81,7 +95,15 @@ class MonitoringForegroundService : Service() {
         notificationScope = nextScope
         notificationCollector = nextScope.launch {
             FalsePositiveValidationStoreProvider.store.states.collect { state ->
-                promoteToForeground(notificationFactory.buildNotification(state))
+                if (state.shouldShowEmergencyNotification()) {
+                    notificationManager.notify(
+                        MonitoringNotificationFactory.EMERGENCY_NOTIFICATION_ID,
+                        notificationFactory.buildEmergencyNotification(state)
+                    )
+                } else {
+                    notificationManager.cancel(MonitoringNotificationFactory.EMERGENCY_NOTIFICATION_ID)
+                }
+                accidentTripFinalizer.onValidationStateChanged(state)
             }
         }
     }
@@ -114,6 +136,15 @@ class MonitoringForegroundService : Service() {
         }
     }
 
+    private fun stopForegroundNotification() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+    }
+
     companion object {
         const val ACTION_START_MONITORING = "com.example.sos_segundoplano.action.START_MONITORING"
         const val ACTION_CONFIRM_SAFE = "com.example.sos_segundoplano.action.CONFIRM_SAFE"
@@ -125,4 +156,13 @@ class MonitoringForegroundService : Service() {
         fun createStartIntent(context: Context): Intent = Intent(context, MonitoringForegroundService::class.java)
             .setAction(ACTION_START_MONITORING)
     }
+}
+
+private fun com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.shouldShowEmergencyNotification(): Boolean = when (this) {
+    is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.CountdownActive,
+    is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.HelpRequested,
+    is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.IncidentGenerated,
+    is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.ImmediateAlertRequested,
+    is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.Error -> true
+    else -> false
 }

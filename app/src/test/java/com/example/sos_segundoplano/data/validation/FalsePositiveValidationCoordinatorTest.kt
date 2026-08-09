@@ -250,6 +250,28 @@ class FalsePositiveValidationCoordinatorTest {
         }
     }
 
+    @Test fun requestHelpPublishesTransientHelpBeforePersistedIncidentGenerated() = runTest {
+        val sink = FakeOfflineEventSink()
+        val fixture = fixture(sink)
+        sink.onBeforeBundleReturn = {
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.HelpRequested)
+            assertTrue(fixture.incidents.items.value.isEmpty())
+            assertTrue(fixture.requests.items.value.isEmpty())
+        }
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-before-persist")
+            runCurrent()
+
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.IncidentGenerated)
+            assertEquals(1, fixture.incidents.items.value.size)
+            assertEquals(1, fixture.requests.items.value.size)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
     @Test fun timeoutCreatesSinglePendingIncidentAndAlert() = runTest {
         val fixture = fixture()
         try {
@@ -403,6 +425,8 @@ class FalsePositiveValidationCoordinatorTest {
             assertTrue(fixture.incidents.items.value.isEmpty())
             assertTrue(fixture.requests.items.value.isEmpty())
             assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+            assertFalse(fixture.validation.states.value is FalsePositiveValidationState.IncidentGenerated)
+            assertFalse(fixture.validation.states.value is FalsePositiveValidationState.ImmediateAlertRequested)
         } finally {
             fixture.close()
             runCurrent()
