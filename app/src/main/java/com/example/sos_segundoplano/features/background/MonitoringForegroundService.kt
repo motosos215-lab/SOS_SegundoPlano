@@ -32,6 +32,9 @@ class MonitoringForegroundService : Service() {
     private val captureCoordinator: TripSignalCaptureCoordinator by lazy {
         TripSignalCaptureCoordinator(applicationContext)
     }
+    private val accidentTripFinalizer: AccidentTripFinalizer by lazy {
+        AccidentTripFinalizer { stopSelf() }
+    }
     private var notificationScope: CoroutineScope? = null
     private var notificationCollector: Job? = null
 
@@ -63,9 +66,10 @@ class MonitoringForegroundService : Service() {
         return try {
             FalsePositiveValidationCoordinatorProvider.setNotifier(WearValidationStatusNotifier(applicationContext))
             promoteToForeground(notificationFactory.buildMonitoringNotification())
-            startNotificationUpdates()
             captureCoordinator.start()
             TripSessionStoreProvider.store.setState(TripSessionState.Active)
+            accidentTripFinalizer.reset()
+            startNotificationUpdates()
             START_NOT_STICKY
         } catch (_: SecurityException) {
             stopSelf(startId)
@@ -79,6 +83,7 @@ class MonitoringForegroundService : Service() {
         notificationCollector = null
         notificationScope = null
         notificationManager.cancel(MonitoringNotificationFactory.EMERGENCY_NOTIFICATION_ID)
+        stopForegroundNotification()
         captureCoordinator.stop()
         TripSessionStoreProvider.store.setState(TripSessionState.Idle)
         super.onDestroy()
@@ -98,6 +103,7 @@ class MonitoringForegroundService : Service() {
                 } else {
                     notificationManager.cancel(MonitoringNotificationFactory.EMERGENCY_NOTIFICATION_ID)
                 }
+                accidentTripFinalizer.onValidationStateChanged(state)
             }
         }
     }
@@ -127,6 +133,15 @@ class MonitoringForegroundService : Service() {
                 MonitoringNotificationFactory.NOTIFICATION_ID,
                 notification
             )
+        }
+    }
+
+    private fun stopForegroundNotification() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
         }
     }
 
