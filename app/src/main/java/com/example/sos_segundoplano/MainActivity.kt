@@ -43,12 +43,16 @@ import com.example.sos_segundoplano.data.signals.TripSignalStoreProvider
 import com.example.sos_segundoplano.data.trip.InMemoryTripSessionStore
 import com.example.sos_segundoplano.data.trip.TripSessionStore
 import com.example.sos_segundoplano.data.trip.TripSessionStoreProvider
+import com.example.sos_segundoplano.data.trip.AndroidElapsedRealtimeClock
+import com.example.sos_segundoplano.data.trip.TripTimingStoreProvider
 import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.domain.offline.OfflineQueueSummary
 import com.example.sos_segundoplano.domain.rules.RiskAssessmentState
 import com.example.sos_segundoplano.domain.signals.TripSignalSnapshot
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
 import com.example.sos_segundoplano.domain.validation.UserResponseSource
+import com.example.sos_segundoplano.domain.trip.ElapsedRealtimeClock
+import com.example.sos_segundoplano.domain.trip.TripTimingStore
 import com.example.sos_segundoplano.features.background.AccidentCountdownScreen
 import com.example.sos_segundoplano.domain.usecase.FinishTripUseCase
 import com.example.sos_segundoplano.domain.usecase.StartTripUseCase
@@ -96,6 +100,7 @@ class MainActivity : ComponentActivity() {
                                 monitoringServiceStarter = AndroidMonitoringServiceStarter(applicationContext),
                                 monitoringServiceStopper = AndroidMonitoringServiceStopper(applicationContext),
                                 tripSessionStore = TripSessionStoreProvider.store,
+                                tripTimingStore = TripTimingStoreProvider.store,
                                 offlineQueueSummaries = OfflineQueueProvider.get(applicationContext).repository.observeSummary(),
                                 profileContent = { onHomeSelected ->
                                     ProfileRoute(
@@ -168,6 +173,8 @@ fun MotoSosApp(
     monitoringServiceStopper: MonitoringServiceStopper =
         MonitoringServiceStopper { MonitoringServiceStopResult.Stopped },
     tripSessionStore: TripSessionStore? = null,
+    tripTimingStore: TripTimingStore? = null,
+    elapsedRealtimeClock: ElapsedRealtimeClock = AndroidElapsedRealtimeClock,
     signalSnapshots: StateFlow<TripSignalSnapshot> = TripSignalStoreProvider.store.snapshots,
     validationStates: StateFlow<FalsePositiveValidationState> = FalsePositiveValidationStoreProvider.store.states,
     riskAssessmentStates: StateFlow<RiskAssessmentState> = RiskAssessmentStoreProvider.store.states,
@@ -184,6 +191,7 @@ fun MotoSosApp(
     profileContent: (@Composable (() -> Unit) -> Unit)? = null
 ) {
     val resolvedTripSessionStore = tripSessionStore ?: remember { InMemoryTripSessionStore() }
+    val resolvedTripTimingStore = tripTimingStore
     var selectedScreen by remember { mutableStateOf(MotoSosAppScreen.Home) }
     var isTripStartPending by remember { mutableStateOf(false) }
     var permissionDialogStatus by remember {
@@ -292,6 +300,7 @@ fun MotoSosApp(
         when (monitoringServiceStopper.stop()) {
             MonitoringServiceStopResult.Stopped,
             MonitoringServiceStopResult.AlreadyStopped -> {
+                resolvedTripTimingStore?.clear()
                 val nextState = finishTripUseCase(currentState)
                 resolvedTripSessionStore.setState(nextState)
                 isTripFinishInProgress = false
@@ -348,6 +357,8 @@ fun MotoSosApp(
 
         TripSessionState.Active -> MonitoringScreen(
             modifier = modifier,
+            tripTimingStates = resolvedTripTimingStore?.states,
+            elapsedRealtimeClock = elapsedRealtimeClock,
             snapshot = signalSnapshots.collectAsState().value,
             riskAssessmentState = riskAssessmentStates.collectAsState().value,
             offlineQueueSummary = offlineQueueSummary,

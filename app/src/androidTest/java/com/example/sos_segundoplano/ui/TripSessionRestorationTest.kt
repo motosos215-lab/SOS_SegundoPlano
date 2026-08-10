@@ -24,6 +24,8 @@ import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatus
 import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatusProvider
 import com.example.sos_segundoplano.data.trip.InMemoryTripSessionStore
 import com.example.sos_segundoplano.domain.model.TripSessionState
+import com.example.sos_segundoplano.domain.trip.TripTimingState
+import com.example.sos_segundoplano.domain.trip.TripTimingStore
 import com.example.sos_segundoplano.domain.rules.BatteryReadinessStatus
 import com.example.sos_segundoplano.domain.rules.ConnectivityReadinessStatus
 import com.example.sos_segundoplano.domain.rules.DeviceReadinessEvaluation
@@ -39,6 +41,7 @@ import com.example.sos_segundoplano.domain.validation.ValidationMetadata
 import com.example.sos_segundoplano.domain.validation.ValidationOrigin
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -141,6 +144,25 @@ class TripSessionRestorationTest {
         composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
         composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
         assertEquals(TripSessionState.Idle, store.states.value)
+    }
+
+    @Test fun successfulFinishClearsActiveTripTiming() {
+        val sessionStore = InMemoryTripSessionStore(TripSessionState.Active)
+        val timingStore = FakeRestorationTripTimingStore(TripTimingState.Active(1_000L))
+        composeRule.setContent {
+            SOS_SegundoPlanoTheme {
+                MotoSosApp(
+                    tripSessionStore = sessionStore,
+                    tripTimingStore = timingStore,
+                    monitoringServiceStopper = FakeRestorationMonitoringServiceStopper(MonitoringServiceStopResult.Stopped)
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("finish_trip_button").performScrollTo().performClick()
+
+        assertEquals(TripTimingState.Unknown, timingStore.states.value)
+        composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
     }
 
     @Test fun failedFinishKeepsActiveMonitoring() {
@@ -246,4 +268,15 @@ private class FakeRestorationMonitoringServiceStopper(
     private val result: MonitoringServiceStopResult
 ) : MonitoringServiceStopper {
     override fun stop(): MonitoringServiceStopResult = result
+}
+
+private class FakeRestorationTripTimingStore(initial: TripTimingState) : TripTimingStore {
+    private val mutableStates = MutableStateFlow(initial)
+    override val states: StateFlow<TripTimingState> = mutableStates
+    override fun beginConfirmedTrip() {
+        mutableStates.value = TripTimingState.Active(0L)
+    }
+    override fun clear() {
+        mutableStates.value = TripTimingState.Unknown
+    }
 }

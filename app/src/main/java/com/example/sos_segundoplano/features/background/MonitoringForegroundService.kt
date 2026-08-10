@@ -12,6 +12,7 @@ import android.util.Log
 import com.example.sos_segundoplano.data.signals.TripSignalCaptureCoordinator
 import com.example.sos_segundoplano.data.remote.trip.TripRemoteSessionProvider
 import com.example.sos_segundoplano.data.trip.TripSessionStoreProvider
+import com.example.sos_segundoplano.data.trip.TripTimingStoreProvider
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationLogger
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationCoordinatorProvider
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationStoreProvider
@@ -36,7 +37,7 @@ class MonitoringForegroundService : Service() {
         TripSignalCaptureCoordinator(applicationContext)
     }
     private val accidentTripFinalizer: AccidentTripFinalizer by lazy {
-        AccidentTripFinalizer { stopSelf() }
+        AccidentTripFinalizer(::finishTripAfterAccident)
     }
     private var notificationScope: CoroutineScope? = null
     private var notificationCollector: Job? = null
@@ -74,6 +75,7 @@ class MonitoringForegroundService : Service() {
             promoteToForeground(notificationFactory.buildMonitoringNotification())
             reconcileRemoteTrip()
             captureCoordinator.start()
+            TripTimingStoreProvider.store.beginConfirmedTrip()
             TripSessionStoreProvider.store.setState(TripSessionState.Active)
             accidentTripFinalizer.reset()
             startNotificationUpdates()
@@ -96,6 +98,7 @@ class MonitoringForegroundService : Service() {
         notificationManager.cancel(MonitoringNotificationFactory.EMERGENCY_NOTIFICATION_ID)
         stopForegroundNotification()
         captureCoordinator.stop()
+        TripTimingStoreProvider.store.clear()
         TripSessionStoreProvider.store.setState(TripSessionState.Idle)
         TripRemoteSessionProvider.get(applicationContext).store.clearRemoteTripId()
         super.onDestroy()
@@ -108,6 +111,11 @@ class MonitoringForegroundService : Service() {
         tripReconciliationJob = nextScope.launch {
             TripRemoteSessionProvider.get(applicationContext).reconciler.resolveActiveTrip()
         }
+    }
+
+    private fun finishTripAfterAccident() {
+        TripTimingStoreProvider.store.clear()
+        stopSelf()
     }
 
     private fun startNotificationUpdates() {
