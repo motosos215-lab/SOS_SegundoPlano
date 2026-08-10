@@ -18,6 +18,7 @@ import com.example.sos_segundoplano.domain.auth.SessionState
 import com.example.sos_segundoplano.domain.auth.StorageFailure
 import com.example.sos_segundoplano.domain.auth.Timeout
 import com.example.sos_segundoplano.domain.auth.Unauthorized
+import com.example.sos_segundoplano.domain.auth.UserRole
 import com.example.sos_segundoplano.domain.repository.AuthRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -69,13 +70,14 @@ data class LoginUiState(
     val emailError: EmailValidationError? = null,
     val passwordError: PasswordValidationError? = null,
     val authMessage: AuthUiMessage? = null,
-    val startupState: AuthEntryStatus = AuthEntryStatus.Restoring
+    val startupState: AuthEntryStatus = AuthEntryStatus.Restoring,
+    val authenticatedRole: UserRole? = null
 ) {
     override fun toString(): String =
         "LoginUiState(email=[REDACTED], password=[REDACTED], rememberMe=$rememberMe, " +
             "isPasswordVisible=$isPasswordVisible, isSubmitting=$isSubmitting, " +
             "emailError=$emailError, passwordError=$passwordError, authMessage=$authMessage, " +
-            "startupState=$startupState)"
+            "startupState=$startupState, authenticatedRole=$authenticatedRole)"
 }
 
 class LoginViewModel(
@@ -209,7 +211,8 @@ class LoginViewModel(
                 isPasswordVisible = if (terminalLoginState) false else current.isPasswordVisible,
                 isSubmitting = if (terminalLoginState) false else current.isSubmitting,
                 authMessage = sessionState.entryMessage() ?: current.authMessage,
-                startupState = status
+                startupState = status,
+                authenticatedRole = sessionState.authenticatedRole()
             )
         }
     }
@@ -255,6 +258,12 @@ private fun SessionState.entryMessage(): AuthUiMessage? = when (this) {
     is SessionState.AccessDenied -> AuthUiMessage.AccessDenied
     SessionState.InactiveAccount -> AuthUiMessage.InactiveAccount
     SessionState.StorageUnavailable -> AuthUiMessage.StorageUnavailable
+    else -> null
+}
+
+private fun SessionState.authenticatedRole(): UserRole? = when (this) {
+    is SessionState.Authenticated -> user.role
+    is SessionState.Refreshing -> user.role
     else -> null
 }
 

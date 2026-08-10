@@ -326,7 +326,7 @@ class DefaultAuthRepository(
             return InvalidResponse(sanitizedMessage = "auth_user_incomplete")
         }
         if (!user.isActive) return InactiveAccount
-        if (user.role != UserRole.Rider) return AccessDenied(user.role)
+        if (user.role !in SUPPORTED_MOBILE_ROLES) return AccessDenied(user.role)
         return null
     }
 
@@ -424,6 +424,7 @@ class DefaultAuthRepository(
     companion object {
         val DEFAULT_EXPIRATION_MARGIN: Duration = Duration.ofSeconds(60)
         private val EMAIL_PATTERN = Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
+        private val SUPPORTED_MOBILE_ROLES = setOf(UserRole.Rider, UserRole.Monitor)
     }
 
     private sealed interface RestoreDecision {

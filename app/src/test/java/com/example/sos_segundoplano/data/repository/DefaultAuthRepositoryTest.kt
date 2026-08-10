@@ -119,13 +119,25 @@ class DefaultAuthRepositoryTest {
         assertTrue(result is AuthResult.Success)
     }
 
-    @Test fun monitorUnknownInactiveAndIncompleteUsersAreRejectedWithoutSaving() = runBlocking {
+    @Test fun monitorLoginPreservesRealRoleAndPersistsSession() = runBlocking {
+        val data = validLoginData(now.plusSeconds(300)).copy(
+            user = validUser().copy(id = "monitor-id", role = "Monitor")
+        )
+        val store = FakeSessionStore()
+        val repo = repository(FakeAuthRemoteDataSource(AuthResult.Success(data)), store)
+
+        val result = repo.login("monitor@example.com", "password", true)
+
+        assertEquals(UserRole.Monitor, (result as AuthResult.Success).value.role)
+        assertEquals(UserRole.Monitor, requireNotNull(store.stored).user.role)
+        assertEquals(
+            UserRole.Monitor,
+            (repo.observeSession().value as SessionState.Authenticated).user.role
+        )
+    }
+
+    @Test fun unknownInactiveAndIncompleteUsersAreRejectedWithoutSaving() = runBlocking {
         val cases = listOf(
-            RejectedLoginCase(
-                "monitor",
-                validLoginData(now.plusSeconds(300)).copy(user = validUser().copy(role = "Monitor")),
-                AccessDenied(UserRole.Monitor)
-            ),
             RejectedLoginCase(
                 "unknown",
                 validLoginData(now.plusSeconds(300)).copy(user = validUser().copy(role = "Administrator")),
@@ -366,13 +378,42 @@ class DefaultAuthRepositoryTest {
         assertTrue(repo.observeSession().value is SessionState.Authenticated)
     }
 
-    @Test fun restoreRejectsStoredMonitorAndInactiveRider() = runBlocking {
+    @Test fun restorePreservesStoredMonitorRole() = runBlocking {
         val monitorStore = FakeSessionStore(
             validSession(now.plusSeconds(300), validUserDomain().copy(role = UserRole.Monitor))
         )
         val monitorRepo = repository(FakeAuthRemoteDataSource(InvalidResponse()), monitorStore)
-        assertEquals(AccessDenied(UserRole.Monitor), monitorRepo.restoreSession())
-        assertNull(monitorStore.stored)
+
+        val result = monitorRepo.restoreSession()
+
+        assertEquals(UserRole.Monitor, (result as AuthResult.Success).value?.role)
+        assertEquals(
+            UserRole.Monitor,
+            (monitorRepo.observeSession().value as SessionState.Authenticated).user.role
+        )
+    }
+
+    @Test fun monitorRefreshAndLogoutPreserveRoleThenClearSession() = runBlocking {
+        val monitor = validUserDomain().copy(role = UserRole.Monitor)
+        val store = FakeSessionStore(validSession(now.plusSeconds(30), monitor))
+        val remote = FakeAuthRemoteDataSource(InvalidResponse()).apply {
+            refreshResult = AuthResult.Success(
+                RefreshDataDto("new-access", "new-refresh", now.plusSeconds(600).toString())
+            )
+        }
+        val repo = repository(remote, store)
+        repo.restoreSession()
+
+        val refreshed = repo.refreshSession()
+        assertEquals(UserRole.Monitor, (refreshed as AuthResult.Success).value.role)
+        assertEquals(UserRole.Monitor, requireNotNull(store.stored).user.role)
+
+        assertTrue(repo.logout() is AuthResult.Success)
+        assertNull(store.stored)
+        assertTrue(repo.observeSession().value is SessionState.LoggedOut)
+    }
+
+    @Test fun restoreRejectsInactiveRider() = runBlocking {
 
         val inactiveStore = FakeSessionStore(
             validSession(now.plusSeconds(300), validUserDomain().copy(isActive = false))
