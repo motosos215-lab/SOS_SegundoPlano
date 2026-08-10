@@ -266,4 +266,5 @@
     <string name="watch_notice_protocol_mismatch">El reloj y esta app no son compatibles.</string>
     <string name="watch_notice_invalid_request">El reloj no pudo procesar la solicitud.</string>
     <string name="watch_notice_internal_error">El reloj reportó un error interno.</string>
+    <string name="allow_notifications">Permitir notificaciones</string>
 </resources>

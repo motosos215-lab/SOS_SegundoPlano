@@ -44,6 +44,7 @@ import com.example.sos_segundoplano.ui.theme.MotoTextSecondary
 
 @Composable
 fun NotificationPermissionDialog(
+    onRequestPermission: (() -> Unit)? = null,
     onOpenSettings: () -> Unit,
     onRecheckPermissions: () -> Unit,
     onDismiss: () -> Unit,
@@ -78,6 +79,19 @@ fun NotificationPermissionDialog(
                 color = MotoTextSecondary
             )
             Spacer(modifier = Modifier.height(2.dp))
+            onRequestPermission?.let { requestPermission ->
+                Button(
+                    onClick = requestPermission,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .testTag("request_notification_permission_button"),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MotoPrimaryBlue)
+                ) {
+                    Text(text = stringResource(R.string.allow_notifications), color = MotoSurface)
+                }
+            }
             Button(
                 onClick = onOpenSettings,
                 modifier = Modifier

@@ -20,6 +20,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Restore Firebase configuration
+        env:
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON_B64" ]; then
+            printf '%s\n' 'GOOGLE_SERVICES_JSON_B64 is not configured' >&2
+            exit 1
+          fi
+          if ! printf '%s' "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > app/google-services.json; then
+            printf '%s\n' 'Firebase configuration could not be restored' >&2
+            exit 1
+          fi
+          if [ ! -s app/google-services.json ]; then
+            printf '%s\n' 'Firebase configuration is empty' >&2
+            exit 1
+          fi
+
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:

@@ -42,6 +42,14 @@
             android:stopWithTask="false"
             android:foregroundServiceType="location" />
 
+        <service
+            android:name=".push.MotoSosFirebaseMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <!-- Exported so Google Play Services Wear can deliver validation responses; payload is validated in service code. -->
         <service
             android:name=".data.validation.PhoneValidationWearableListenerService"

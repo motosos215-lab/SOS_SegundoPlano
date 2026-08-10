@@ -1,0 +1,44 @@
+package com.example.sos_segundoplano.core.push
+
+import android.content.Context
+import com.example.sos_segundoplano.data.local.push.KeystoreEncryptedPushTokenStore
+import com.example.sos_segundoplano.domain.push.PushTokenCoordinator
+import com.google.firebase.messaging.FirebaseMessaging
+
+fun interface InitialPushTokenFetcher {
+    fun fetch(onToken: (String) -> Unit)
+}
+
+class FirebaseInitialPushTokenFetcher : InitialPushTokenFetcher {
+    override fun fetch(onToken: (String) -> Unit) {
+        FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+            if (token.isNotBlank()) onToken(token)
+        }
+    }
+}
+
+class PushTokenBootstrap(
+    private val coordinator: PushTokenCoordinator,
+    private val fetcher: InitialPushTokenFetcher
+) {
+    fun start() {
+        runCatching {
+            fetcher.fetch { token -> coordinator.recordToken(token) }
+        }
+    }
+}
+
+object PushTokenProvider {
+    @Volatile private var coordinator: PushTokenCoordinator? = null
+
+    fun initialize(context: Context) {
+        val installed = get(context)
+        PushTokenBootstrap(installed, FirebaseInitialPushTokenFetcher()).start()
+    }
+
+    fun get(context: Context): PushTokenCoordinator = coordinator ?: synchronized(this) {
+        coordinator ?: PushTokenCoordinator(
+            KeystoreEncryptedPushTokenStore(context.applicationContext)
+        ).also { coordinator = it }
+    }
+}
