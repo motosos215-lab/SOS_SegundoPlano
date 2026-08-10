@@ -8,8 +8,11 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import com.example.sos_segundoplano.data.signals.TripSignalCaptureCoordinator
+import com.example.sos_segundoplano.data.remote.trip.TripRemoteSessionProvider
 import com.example.sos_segundoplano.data.trip.TripSessionStoreProvider
+import com.example.sos_segundoplano.data.validation.FalsePositiveValidationLogger
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationCoordinatorProvider
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationStoreProvider
 import com.example.sos_segundoplano.data.validation.WearValidationStatusNotifier
@@ -37,6 +40,8 @@ class MonitoringForegroundService : Service() {
     }
     private var notificationScope: CoroutineScope? = null
     private var notificationCollector: Job? = null
+    private var tripReconciliationScope: CoroutineScope? = null
+    private var tripReconciliationJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -65,7 +70,9 @@ class MonitoringForegroundService : Service() {
 
         return try {
             FalsePositiveValidationCoordinatorProvider.setNotifier(WearValidationStatusNotifier(applicationContext))
+            FalsePositiveValidationCoordinatorProvider.setLogger(AndroidFalsePositiveValidationLogger)
             promoteToForeground(notificationFactory.buildMonitoringNotification())
+            reconcileRemoteTrip()
             captureCoordinator.start()
             TripSessionStoreProvider.store.setState(TripSessionState.Active)
             accidentTripFinalizer.reset()
@@ -80,13 +87,27 @@ class MonitoringForegroundService : Service() {
     override fun onDestroy() {
         notificationCollector?.cancel()
         notificationScope?.cancel()
+        tripReconciliationJob?.cancel()
+        tripReconciliationScope?.cancel()
         notificationCollector = null
         notificationScope = null
+        tripReconciliationJob = null
+        tripReconciliationScope = null
         notificationManager.cancel(MonitoringNotificationFactory.EMERGENCY_NOTIFICATION_ID)
         stopForegroundNotification()
         captureCoordinator.stop()
         TripSessionStoreProvider.store.setState(TripSessionState.Idle)
+        TripRemoteSessionProvider.get(applicationContext).store.clearRemoteTripId()
         super.onDestroy()
+    }
+
+    private fun reconcileRemoteTrip() {
+        if (tripReconciliationJob != null) return
+        val nextScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        tripReconciliationScope = nextScope
+        tripReconciliationJob = nextScope.launch {
+            TripRemoteSessionProvider.get(applicationContext).reconciler.resolveActiveTrip()
+        }
     }
 
     private fun startNotificationUpdates() {
@@ -156,6 +177,18 @@ class MonitoringForegroundService : Service() {
         fun createStartIntent(context: Context): Intent = Intent(context, MonitoringForegroundService::class.java)
             .setAction(ACTION_START_MONITORING)
     }
+}
+
+private object AndroidFalsePositiveValidationLogger : FalsePositiveValidationLogger {
+    override fun countdownExpired() {
+        Log.d(TAG, "countdown expired")
+    }
+
+    override fun duplicateIncidentAttempt() {
+        Log.w(TAG, "duplicate incident attempt")
+    }
+
+    private const val TAG = "MotoSOS.Validation"
 }
 
 private fun com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.shouldShowEmergencyNotification(): Boolean = when (this) {

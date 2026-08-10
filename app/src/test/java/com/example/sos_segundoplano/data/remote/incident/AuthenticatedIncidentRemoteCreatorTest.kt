@@ -5,6 +5,8 @@ import com.example.sos_segundoplano.domain.auth.AuthResult
 import com.example.sos_segundoplano.domain.auth.AuthUser
 import com.example.sos_segundoplano.domain.auth.SessionExpired
 import com.example.sos_segundoplano.domain.auth.SessionState
+import com.example.sos_segundoplano.data.remote.trip.ActiveTripLookupResult
+import com.example.sos_segundoplano.data.remote.trip.ActiveTripRemoteResolver
 import com.example.sos_segundoplano.domain.repository.AuthRepository
 import com.example.sos_segundoplano.domain.rules.GpsQualityStatus
 import com.example.sos_segundoplano.domain.rules.RiskLevel
@@ -15,8 +17,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
+import java.util.UUID
 
 class AuthenticatedIncidentRemoteCreatorTest {
     @Test fun timeoutIncidentBuildsRequestFromAvailableMobileDataAndStoresRemoteId() = runBlocking {
@@ -24,17 +28,20 @@ class AuthenticatedIncidentRemoteCreatorTest {
         val creator = AuthenticatedIncidentRemoteCreator(
             authRepository = FakeAuthRepository(),
             remoteDataSource = remote,
+            activeTripRemoteResolver = FakeActiveTripRemoteResolver(ActiveTripLookupResult.Found("remote-trip-1")),
             nowUtc = { Instant.parse("2026-08-08T14:20:00Z") }
         )
 
         val created = creator.createIncident(incident())
 
         assertEquals("incident-remote-1", created.remoteIncidentId)
+        assertEquals("remote-trip-1", created.remoteTripId)
         assertEquals(IncidentRemoteCreationStatus.Success("incident-remote-1"), created.remoteCreationStatus)
         assertEquals("Bearer access-token", remote.authorization)
+        assertTrue(UUID.fromString(requireNotNull(created.clientIncidentId)).toString() == created.clientIncidentId)
         assertEquals(CreateIncidentRequestDto(
-            tripId = "1",
-            clientIncidentId = "mobile-1-2-3",
+            tripId = "remote-trip-1",
+            clientIncidentId = requireNotNull(created.clientIncidentId),
             source = "MobileDetection",
             cause = "CountdownTimeout",
             riskLevel = "High",
@@ -51,13 +58,64 @@ class AuthenticatedIncidentRemoteCreatorTest {
         val remote = FakeIncidentRemoteDataSource(IncidentRemoteCreationStatus.Success("incident-remote-1"))
         val creator = AuthenticatedIncidentRemoteCreator(
             authRepository = FakeAuthRepository(tokenResult = SessionExpired),
-            remoteDataSource = remote
+            remoteDataSource = remote,
+            activeTripRemoteResolver = FakeActiveTripRemoteResolver(ActiveTripLookupResult.Found("remote-trip-1"))
         )
 
         val created = creator.createIncident(incident())
 
         assertEquals(null, remote.request)
         assertEquals(IncidentRemoteCreationStatus.HttpError(401, "access_token_unavailable"), created.remoteCreationStatus)
+    }
+
+    @Test fun noActiveRemoteTripDoesNotPostInvalidIncident() = runBlocking {
+        val remote = FakeIncidentRemoteDataSource(IncidentRemoteCreationStatus.Success("incident-remote-1"))
+        val creator = AuthenticatedIncidentRemoteCreator(
+            authRepository = FakeAuthRepository(),
+            remoteDataSource = remote,
+            activeTripRemoteResolver = FakeActiveTripRemoteResolver(ActiveTripLookupResult.NoActiveTrip)
+        )
+
+        val created = creator.createIncident(incident())
+
+        assertEquals(null, remote.request)
+        assertEquals(null, created.remoteTripId)
+        assertEquals(IncidentRemoteCreationStatus.MissingRequiredData("active_remote_trip_missing"), created.remoteCreationStatus)
+    }
+
+    @Test fun timeoutIncidentWithoutScoreStillPostsAndStoresRemoteIncidentId() = runBlocking {
+        val remote = FakeIncidentRemoteDataSource(IncidentRemoteCreationStatus.Success("incident-remote-1"))
+        val creator = AuthenticatedIncidentRemoteCreator(
+            authRepository = FakeAuthRepository(),
+            remoteDataSource = remote,
+            activeTripRemoteResolver = FakeActiveTripRemoteResolver(ActiveTripLookupResult.Found("remote-trip-1"))
+        )
+
+        val created = creator.createIncident(incident(score = null))
+
+        assertEquals(null, remote.request?.score)
+        assertEquals("incident-remote-1", created.remoteIncidentId)
+        assertEquals(IncidentRemoteCreationStatus.Success("incident-remote-1"), created.remoteCreationStatus)
+    }
+
+    @Test fun tripLookupHttpAndNetworkFailuresDoNotCrashOrPostIncident() = runBlocking {
+        val cases = listOf(
+            ActiveTripLookupResult.HttpError(500, "server_error") to IncidentRemoteCreationStatus.HttpError(500, "trip_lookup_failed"),
+            ActiveTripLookupResult.NetworkUnavailable("network_unavailable") to IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable")
+        )
+        cases.forEach { (tripResult, expectedStatus) ->
+            val remote = FakeIncidentRemoteDataSource(IncidentRemoteCreationStatus.Success("incident-remote-1"))
+            val creator = AuthenticatedIncidentRemoteCreator(
+                authRepository = FakeAuthRepository(),
+                remoteDataSource = remote,
+                activeTripRemoteResolver = FakeActiveTripRemoteResolver(tripResult)
+            )
+
+            val created = creator.createIncident(incident())
+
+            assertEquals(null, remote.request)
+            assertEquals(expectedStatus, created.remoteCreationStatus)
+        }
     }
 
     private class FakeIncidentRemoteDataSource(
@@ -87,14 +145,20 @@ class AuthenticatedIncidentRemoteCreatorTest {
         override fun observeSession(): StateFlow<SessionState> = MutableStateFlow(SessionState.LoggedOut)
     }
 
-    private fun incident(): LocalIncident = LocalIncident(
+    private class FakeActiveTripRemoteResolver(
+        private val result: ActiveTripLookupResult
+    ) : ActiveTripRemoteResolver {
+        override suspend fun resolveActiveTrip(): ActiveTripLookupResult = result
+    }
+
+    private fun incident(score: Int? = 75): LocalIncident = LocalIncident(
         incidentId = 1L,
         sessionId = 1L,
         assessmentId = 2L,
         windowId = 3L,
         createdAtElapsedRealtimeNanos = 4L,
         cause = IncidentCause.Timeout,
-        score = 75,
+        score = score,
         riskLevel = RiskLevel.High,
         confidence = 0.8,
         relevantOutcomes = emptyList(),
