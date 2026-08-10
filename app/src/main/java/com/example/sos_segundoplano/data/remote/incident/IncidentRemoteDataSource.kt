@@ -43,7 +43,8 @@ class RetrofitIncidentRemoteDataSource(
         if (!envelope.success) {
             return@executeSafely mapHandledFailure(response.code(), envelope.error)
         }
-        val incidentId = envelope.data?.incidentId?.trim()
+        val incidentId = envelope.data?.incident?.id?.trim()
+            ?: envelope.data?.incidentId?.trim()
             ?: return@executeSafely IncidentRemoteCreationStatus.InvalidResponse("incident_id_missing")
         if (incidentId.isBlank()) {
             IncidentRemoteCreationStatus.InvalidResponse("incident_id_missing")

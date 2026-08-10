@@ -154,6 +154,8 @@ data class LocalIncident(
     val ruleSetVersion: String,
     val validationPolicyVersion: String,
     val gpsQuality: GpsQualityStatus,
+    val remoteTripId: String? = null,
+    val clientIncidentId: String? = null,
     val remoteIncidentId: String? = null,
     val remoteCreationStatus: IncidentRemoteCreationStatus = IncidentRemoteCreationStatus.NotRequested,
     val deliveryStatus: AlertDeliveryStatus = AlertDeliveryStatus.Pending

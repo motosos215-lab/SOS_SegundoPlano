@@ -60,6 +60,16 @@ object NoOpFalsePositiveValidationNotifier : FalsePositiveValidationNotifier {
     override fun onValidationStateChanged(state: FalsePositiveValidationState) = Unit
 }
 
+interface FalsePositiveValidationLogger {
+    fun countdownExpired()
+    fun duplicateIncidentAttempt()
+}
+
+object NoOpFalsePositiveValidationLogger : FalsePositiveValidationLogger {
+    override fun countdownExpired() = Unit
+    override fun duplicateIncidentAttempt() = Unit
+}
+
 class FalsePositiveValidationCoordinator(
     private val riskAssessmentStore: RiskAssessmentStore = RiskAssessmentStoreProvider.store,
     private val validationStore: FalsePositiveValidationStore = FalsePositiveValidationStoreProvider.store,
@@ -75,6 +85,7 @@ class FalsePositiveValidationCoordinator(
     private var notifier: FalsePositiveValidationNotifier = NoOpFalsePositiveValidationNotifier,
     private var offlineEventSink: OfflineEventSink = NoOpOfflineEventSink,
     private var incidentRemoteCreator: IncidentRemoteCreator = NoOpIncidentRemoteCreator,
+    private var logger: FalsePositiveValidationLogger = NoOpFalsePositiveValidationLogger,
     private val externalScope: CoroutineScope? = null
 ) {
     private var scope: CoroutineScope? = null
@@ -109,6 +120,10 @@ class FalsePositiveValidationCoordinator(
 
     fun setIncidentRemoteCreator(nextCreator: IncidentRemoteCreator) {
         incidentRemoteCreator = nextCreator
+    }
+
+    fun setLogger(nextLogger: FalsePositiveValidationLogger) {
+        logger = nextLogger
     }
 
     fun start(expectedSessionId: Long? = null) {
@@ -323,6 +338,7 @@ class FalsePositiveValidationCoordinator(
                     if (state.assessment.assessmentId != assessment.assessmentId || state.assessment.sessionId != assessment.sessionId) return@launch
                     val remaining = (deadline - now()).coerceAtLeast(0L)
                     if (remaining <= 0L) {
+                        logger.countdownExpired()
                         counters = counters.copy(timeouts = counters.timeouts + 1)
                         return@withLock createIncidentLocked(assessment, IncidentCause.Timeout, ValidationDecisionReason.Timeout, ValidationOrigin.Timeout, immediate = false).toOfflineEvents(assessment.identifier())
                     }
@@ -451,7 +467,7 @@ class FalsePositiveValidationCoordinator(
         val firstAttempt = mutex.withLock { remoteIncidentAttempts.add(event.key) }
         if (!firstAttempt) return event.incident.copy(
             remoteCreationStatus = IncidentRemoteCreationStatus.DuplicateAttempt
-        )
+        ).also { logger.duplicateIncidentAttempt() }
         return try {
             incidentRemoteCreator.createIncident(
                 event.incident.copy(remoteCreationStatus = IncidentRemoteCreationStatus.Pending)
@@ -737,5 +753,9 @@ object FalsePositiveValidationCoordinatorProvider {
 
     fun setIncidentRemoteCreator(creator: IncidentRemoteCreator) {
         coordinator.setIncidentRemoteCreator(creator)
+    }
+
+    fun setLogger(logger: FalsePositiveValidationLogger) {
+        coordinator.setLogger(logger)
     }
 }
