@@ -81,7 +81,10 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             SOS_SegundoPlanoTheme {
-                NotificationRuntimePermissionGate(onOpenSettings = ::openNotificationSettings) {
+                NotificationRuntimePermissionGate(
+                    lifecycleOwner = this@MainActivity,
+                    onOpenSettings = ::openNotificationSettings
+                ) {
                     MotoSosRoot(
                         authRepository = authRepository,
                         initialSessionRestoration = initialSessionRestoration,

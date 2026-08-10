@@ -12,20 +12,20 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import com.example.sos_segundoplano.core.permissions.NotificationRuntimePermissionPolicy
 import com.example.sos_segundoplano.core.permissions.NotificationRuntimePermissionState
 
 @Composable
 fun NotificationRuntimePermissionGate(
+    lifecycleOwner: LifecycleOwner,
     onOpenSettings: () -> Unit,
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
     val policy = NotificationRuntimePermissionPolicy()
     fun currentState(): NotificationRuntimePermissionState = policy.evaluate(
         sdkInt = Build.VERSION.SDK_INT,
