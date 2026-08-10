@@ -61,6 +61,7 @@ import com.example.sos_segundoplano.features.permissions.BluetoothRequirementDia
 import com.example.sos_segundoplano.features.permissions.MonitoringStartFailureDialog
 import com.example.sos_segundoplano.features.permissions.MonitoringStopFailureDialog
 import com.example.sos_segundoplano.features.permissions.NotificationPermissionDialog
+import com.example.sos_segundoplano.features.permissions.NotificationRuntimePermissionGate
 import com.example.sos_segundoplano.features.profile.ProfileRoute
 import com.example.sos_segundoplano.features.trip.HomeScreen
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
@@ -80,32 +81,34 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             SOS_SegundoPlanoTheme {
-                MotoSosRoot(
-                    authRepository = authRepository,
-                    initialSessionRestoration = initialSessionRestoration,
-                    riderContent = {
-                        MotoSosApp(
-                            locationPermissionStatusProvider = BackgroundLocationPermissionChecker(applicationContext),
-                            notificationStatusProvider = AppNotificationStatusChecker(applicationContext),
-                            bluetoothRequirementStatusProvider = BluetoothRequirementChecker(applicationContext),
-                            monitoringServiceStarter = AndroidMonitoringServiceStarter(applicationContext),
-                            monitoringServiceStopper = AndroidMonitoringServiceStopper(applicationContext),
-                            tripSessionStore = TripSessionStoreProvider.store,
-                            offlineQueueSummaries = OfflineQueueProvider.get(applicationContext).repository.observeSummary(),
-                            profileContent = { onHomeSelected ->
-                                ProfileRoute(
-                                    profileRepository = ProfileProvider.get(applicationContext),
-                                    authRepository = authRepository,
-                                    onHomeSelected = onHomeSelected
-                                )
-                            },
-                            onOpenAppSettings = ::openAppSettings,
-                            onOpenNotificationSettings = ::openNotificationSettings,
-                            onOpenBluetoothSettings = ::openBluetoothSettings
-                        )
-                    },
-                    monitorContent = { MonitorRoot(authRepository) }
-                )
+                NotificationRuntimePermissionGate(onOpenSettings = ::openNotificationSettings) {
+                    MotoSosRoot(
+                        authRepository = authRepository,
+                        initialSessionRestoration = initialSessionRestoration,
+                        riderContent = {
+                            MotoSosApp(
+                                locationPermissionStatusProvider = BackgroundLocationPermissionChecker(applicationContext),
+                                notificationStatusProvider = AppNotificationStatusChecker(applicationContext),
+                                bluetoothRequirementStatusProvider = BluetoothRequirementChecker(applicationContext),
+                                monitoringServiceStarter = AndroidMonitoringServiceStarter(applicationContext),
+                                monitoringServiceStopper = AndroidMonitoringServiceStopper(applicationContext),
+                                tripSessionStore = TripSessionStoreProvider.store,
+                                offlineQueueSummaries = OfflineQueueProvider.get(applicationContext).repository.observeSummary(),
+                                profileContent = { onHomeSelected ->
+                                    ProfileRoute(
+                                        profileRepository = ProfileProvider.get(applicationContext),
+                                        authRepository = authRepository,
+                                        onHomeSelected = onHomeSelected
+                                    )
+                                },
+                                onOpenAppSettings = ::openAppSettings,
+                                onOpenNotificationSettings = ::openNotificationSettings,
+                                onOpenBluetoothSettings = ::openBluetoothSettings
+                            )
+                        },
+                        monitorContent = { MonitorRoot(authRepository) }
+                    )
+                }
             }
         }
     }
