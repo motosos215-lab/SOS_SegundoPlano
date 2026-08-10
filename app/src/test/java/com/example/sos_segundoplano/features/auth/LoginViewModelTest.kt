@@ -123,6 +123,7 @@ class LoginViewModelTest {
 
         assertEquals("", viewModel.uiState.value.password)
         assertEquals(AuthEntryStatus.Authenticated, viewModel.uiState.value.startupState)
+        assertEquals(UserRole.Rider, viewModel.uiState.value.authenticatedRole)
         assertFalse(viewModel.uiState.value.toString().contains("access-token"))
         assertFalse(viewModel.uiState.value.toString().contains("refresh-token"))
     }
@@ -213,6 +214,7 @@ class LoginViewModelTest {
 
         restoration.complete(Unit)
         assertEquals(AuthEntryStatus.Authenticated, viewModel.uiState.value.startupState)
+        assertEquals(UserRole.Rider, viewModel.uiState.value.authenticatedRole)
 
         repository.session.value = SessionState.Expired
         assertEquals(AuthEntryStatus.Expired, viewModel.uiState.value.startupState)
@@ -220,7 +222,25 @@ class LoginViewModelTest {
 
         repository.session.value = SessionState.AccessDenied(UserRole.Monitor)
         assertEquals(AuthEntryStatus.AccessDenied, viewModel.uiState.value.startupState)
+        assertNull(viewModel.uiState.value.authenticatedRole)
         assertFalse(viewModel.uiState.value.startupState == AuthEntryStatus.Authenticated)
+    }
+
+    @Test
+    fun monitorRoleSurvivesAuthenticatedAndRefreshingStateMapping() = runTest {
+        val monitor = validUser().copy(role = UserRole.Monitor)
+        val repository = FakeAuthRepository(initialState = authenticatedState(monitor))
+        val viewModel = viewModel(repository)
+
+        assertEquals(UserRole.Monitor, viewModel.uiState.value.authenticatedRole)
+
+        repository.session.value = SessionState.Refreshing(
+            user = monitor,
+            accessTokenExpiresAt = Instant.parse("2026-08-05T22:00:00Z"),
+            rememberMe = true
+        )
+        assertEquals(AuthEntryStatus.Refreshing, viewModel.uiState.value.startupState)
+        assertEquals(UserRole.Monitor, viewModel.uiState.value.authenticatedRole)
     }
 
     private fun viewModel(

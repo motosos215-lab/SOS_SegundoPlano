@@ -22,9 +22,12 @@ import com.example.sos_segundoplano.domain.auth.InvalidCredentials
 import com.example.sos_segundoplano.domain.auth.SessionExpired
 import com.example.sos_segundoplano.domain.auth.SessionState
 import com.example.sos_segundoplano.domain.auth.UserRole
+import com.example.sos_segundoplano.data.trip.InMemoryTripSessionStore
+import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.domain.repository.AuthRepository
 import com.example.sos_segundoplano.features.auth.InitialSessionRestoration
 import com.example.sos_segundoplano.features.auth.MotoSosRoot
+import com.example.sos_segundoplano.features.monitor.MonitorHomePlaceholderScreen
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -141,6 +144,45 @@ class MobileLoginEntryTest {
     }
 
     @Test
+    fun monitorSessionUsesMonitorRootAndNeverComposesRiderEvenWithActiveTripContent() {
+        val repository = UiFakeAuthRepository(initialState = authenticated(monitor()))
+        var riderCompositionCount = 0
+        setRoot(
+            repository = repository,
+            monitorContent = { MonitorHomePlaceholderScreen(onLogout = {}) },
+            authenticatedContent = {
+                riderCompositionCount++
+                MotoSosApp(
+                    tripSessionStore = InMemoryTripSessionStore(TripSessionState.Active)
+                )
+            }
+        )
+
+        composeRule.onNodeWithText("Modo Monitor").assertIsDisplayed()
+        composeRule.onNodeWithText("Sesión Monitor activa").assertIsDisplayed()
+        composeRule.onNodeWithText("Cerrar sesión").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Monitoreo").assertCountEquals(0)
+        assertEquals(0, riderCompositionCount)
+    }
+
+    @Test
+    fun monitorLogoutReturnsToLogin() {
+        val repository = UiFakeAuthRepository(initialState = authenticated(monitor()))
+        setRoot(
+            repository = repository,
+            monitorContent = {
+                MonitorHomePlaceholderScreen(onLogout = { repository.logoutForTest() })
+            }
+        )
+
+        composeRule.onNodeWithText("Cerrar sesión").performClick()
+
+        composeRule.onNodeWithTag("login_screen").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Modo Monitor").assertCountEquals(0)
+    }
+
+    @Test
     fun expiredAndAccessDeniedNeverRevealHome() {
         val repository = UiFakeAuthRepository(initialState = SessionState.Expired)
         setRoot(repository) { MotoSosApp() }
@@ -175,6 +217,9 @@ class MobileLoginEntryTest {
     private fun setRoot(
         repository: UiFakeAuthRepository,
         restoration: InitialSessionRestoration = InitialSessionRestoration {},
+        monitorContent: @androidx.compose.runtime.Composable () -> Unit = {
+            MonitorHomePlaceholderScreen(onLogout = {})
+        },
         authenticatedContent: @androidx.compose.runtime.Composable () -> Unit = { MotoSosApp() }
     ) {
         composeRule.setContent {
@@ -182,7 +227,8 @@ class MobileLoginEntryTest {
                 MotoSosRoot(
                     authRepository = repository,
                     initialSessionRestoration = restoration,
-                    authenticatedContent = authenticatedContent
+                    riderContent = authenticatedContent,
+                    monitorContent = monitorContent
                 )
             }
         }
@@ -200,6 +246,10 @@ private class UiFakeAuthRepository(
 ) : AuthRepository {
     val session = MutableStateFlow(initialState)
     var loginCalls = 0
+
+    fun logoutForTest() {
+        session.value = SessionState.LoggedOut
+    }
 
     override suspend fun login(email: String, password: String, rememberMe: Boolean): AuthResult<AuthUser> {
         loginCalls++
@@ -224,6 +274,13 @@ private fun rider(): AuthUser = AuthUser(
     phoneNumber = "+520000000000",
     role = UserRole.Rider,
     isActive = true
+)
+
+private fun monitor(): AuthUser = rider().copy(
+    id = "monitor-id",
+    email = "monitor@example.com",
+    fullName = "Moto Monitor",
+    role = UserRole.Monitor
 )
 
 private fun authenticated(

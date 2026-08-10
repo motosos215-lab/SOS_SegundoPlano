@@ -55,6 +55,7 @@ import com.example.sos_segundoplano.domain.usecase.StartTripUseCase
 import com.example.sos_segundoplano.features.background.MonitoringScreen
 import com.example.sos_segundoplano.features.auth.InitialSessionRestoration
 import com.example.sos_segundoplano.features.auth.MotoSosRoot
+import com.example.sos_segundoplano.features.monitor.MonitorRoot
 import com.example.sos_segundoplano.features.permissions.BackgroundLocationPermissionDialog
 import com.example.sos_segundoplano.features.permissions.BluetoothRequirementDialog
 import com.example.sos_segundoplano.features.permissions.MonitoringStartFailureDialog
@@ -81,28 +82,30 @@ class MainActivity : ComponentActivity() {
             SOS_SegundoPlanoTheme {
                 MotoSosRoot(
                     authRepository = authRepository,
-                    initialSessionRestoration = initialSessionRestoration
-                ) {
-                    MotoSosApp(
-                        locationPermissionStatusProvider = BackgroundLocationPermissionChecker(applicationContext),
-                        notificationStatusProvider = AppNotificationStatusChecker(applicationContext),
-                        bluetoothRequirementStatusProvider = BluetoothRequirementChecker(applicationContext),
-                        monitoringServiceStarter = AndroidMonitoringServiceStarter(applicationContext),
-                        monitoringServiceStopper = AndroidMonitoringServiceStopper(applicationContext),
-                        tripSessionStore = TripSessionStoreProvider.store,
-                        offlineQueueSummaries = OfflineQueueProvider.get(applicationContext).repository.observeSummary(),
-                        profileContent = { onHomeSelected ->
-                            ProfileRoute(
-                                profileRepository = ProfileProvider.get(applicationContext),
-                                authRepository = authRepository,
-                                onHomeSelected = onHomeSelected
-                            )
-                        },
-                        onOpenAppSettings = ::openAppSettings,
-                        onOpenNotificationSettings = ::openNotificationSettings,
-                        onOpenBluetoothSettings = ::openBluetoothSettings
-                    )
-                }
+                    initialSessionRestoration = initialSessionRestoration,
+                    riderContent = {
+                        MotoSosApp(
+                            locationPermissionStatusProvider = BackgroundLocationPermissionChecker(applicationContext),
+                            notificationStatusProvider = AppNotificationStatusChecker(applicationContext),
+                            bluetoothRequirementStatusProvider = BluetoothRequirementChecker(applicationContext),
+                            monitoringServiceStarter = AndroidMonitoringServiceStarter(applicationContext),
+                            monitoringServiceStopper = AndroidMonitoringServiceStopper(applicationContext),
+                            tripSessionStore = TripSessionStoreProvider.store,
+                            offlineQueueSummaries = OfflineQueueProvider.get(applicationContext).repository.observeSummary(),
+                            profileContent = { onHomeSelected ->
+                                ProfileRoute(
+                                    profileRepository = ProfileProvider.get(applicationContext),
+                                    authRepository = authRepository,
+                                    onHomeSelected = onHomeSelected
+                                )
+                            },
+                            onOpenAppSettings = ::openAppSettings,
+                            onOpenNotificationSettings = ::openNotificationSettings,
+                            onOpenBluetoothSettings = ::openBluetoothSettings
+                        )
+                    },
+                    monitorContent = { MonitorRoot(authRepository) }
+                )
             }
         }
     }
