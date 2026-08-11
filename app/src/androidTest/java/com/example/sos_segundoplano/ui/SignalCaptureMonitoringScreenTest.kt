@@ -310,15 +310,22 @@ class SignalCaptureMonitoringScreenTest {
         composeRule.onAllNodesWithText("z").assertCountEquals(0)
     }
 
-    @Test fun finishingTripStopsAndSecondTripStartsAgain() {
+    @Test fun finishingTripShowsSummaryThenStopsAndSecondTripStartsAgain() {
         val starter = CountingStarter()
         val stopper = CountingStopper()
         setContent(starter = starter, stopper = stopper, snapshot = fakeSnapshot())
         composeRule.onNodeWithTag("start_trip_button").performClick()
         composeRule.onNodeWithTag("finish_trip_button").performScrollTo().performClick()
+        composeRule.onNodeWithTag("trip_local_summary_screen").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
+        composeRule.onNodeWithTag("trip_summary_return_home").performClick()
+        composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("trip_local_summary_screen").assertCountEquals(0)
         composeRule.onNodeWithTag("start_trip_button").performClick()
         assertEquals(2, starter.starts)
         assertEquals(1, stopper.stops)
+        composeRule.onNodeWithTag("monitoring_screen").assertIsDisplayed()
     }
 
     private fun setContent(

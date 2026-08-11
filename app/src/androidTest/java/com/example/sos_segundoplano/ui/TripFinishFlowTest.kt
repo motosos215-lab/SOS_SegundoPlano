@@ -59,7 +59,7 @@ class TripFinishFlowTest {
     }
 
     @Test
-    fun successfulStopReturnsToHomeAndHidesFailureDialog() {
+    fun successfulStopShowsSummaryThenReturnsHomeAndHidesFailureDialog() {
         val stopper = FakeMonitoringServiceStopper(MonitoringServiceStopResult.Stopped)
         var finishTripCallCount = 0
 
@@ -79,21 +79,21 @@ class TripFinishFlowTest {
         assertEquals(1, stopper.invocationCount)
         assertEquals(1, finishTripCallCount)
         composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
-        composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
         composeRule.onAllNodesWithTag("monitoring_stop_failure_dialog").assertCountEquals(0)
+        assertSummaryThenReturnHome()
     }
 
     @Test
-    fun alreadyStoppedReturnsToHomeWithoutFailureDialog() {
+    fun alreadyStoppedShowsSummaryThenReturnsHomeWithoutFailureDialog() {
         val stopper = FakeMonitoringServiceStopper(MonitoringServiceStopResult.AlreadyStopped)
 
         setAppContent(monitoringServiceStopper = stopper)
 
         startAndFinishTrip()
 
-        composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
         composeRule.onAllNodesWithTag("monitoring_stop_failure_dialog").assertCountEquals(0)
         assertEquals(1, stopper.invocationCount)
+        assertSummaryThenReturnHome()
     }
 
     @Test
@@ -122,7 +122,7 @@ class TripFinishFlowTest {
     }
 
     @Test
-    fun successfulRetryClosesDialogAndReturnsToHome() {
+    fun successfulRetryClosesDialogShowsSummaryThenReturnsHome() {
         val stopper = FakeMonitoringServiceStopper(MonitoringServiceStopResult.Failed)
 
         setAppContent(monitoringServiceStopper = stopper)
@@ -134,7 +134,7 @@ class TripFinishFlowTest {
         assertEquals(2, stopper.invocationCount)
         composeRule.onAllNodesWithTag("monitoring_stop_failure_dialog").assertCountEquals(0)
         composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
-        composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
+        assertSummaryThenReturnHome()
     }
 
     @Test
@@ -165,7 +165,7 @@ class TripFinishFlowTest {
     }
 
     @Test
-    fun canStartNewTripAfterSuccessfulFinish() {
+    fun canStartNewTripAfterSuccessfulFinishAndSummaryDismissal() {
         val starter = FakeTripFinishMonitoringServiceStarter(MonitoringServiceStartResult.Started)
         val stopper = FakeMonitoringServiceStopper(MonitoringServiceStopResult.Stopped)
 
@@ -175,6 +175,7 @@ class TripFinishFlowTest {
         )
 
         startAndFinishTrip()
+        assertSummaryThenReturnHome()
         composeRule.onNodeWithTag("start_trip_button").performClick()
 
         assertEquals(2, starter.invocationCount)
@@ -183,7 +184,7 @@ class TripFinishFlowTest {
     }
 
     @Test
-    fun revokedRequirementsAfterActiveDoNotBlockFinish() {
+    fun revokedRequirementsAfterActiveDoNotBlockFinishOrSummary() {
         val locationProvider = FakeTripFinishLocationPermissionStatusProvider(
             BackgroundLocationPermissionStatus.Granted
         )
@@ -212,7 +213,18 @@ class TripFinishFlowTest {
         assertEquals(1, notificationProvider.invocationCount)
         assertEquals(1, bluetoothProvider.invocationCount)
         assertEquals(1, stopper.invocationCount)
+        composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
+        assertSummaryThenReturnHome()
+    }
+
+    private fun assertSummaryThenReturnHome() {
+        composeRule.onNodeWithTag("trip_local_summary_screen").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
+
+        composeRule.onNodeWithTag("trip_summary_return_home").performClick()
+
         composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("trip_local_summary_screen").assertCountEquals(0)
     }
 
     private fun startAndFinishTrip() {
