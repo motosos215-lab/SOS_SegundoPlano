@@ -13,6 +13,8 @@ import com.example.sos_segundoplano.MotoSosApp
 import com.example.sos_segundoplano.core.background.MonitoringServiceStopResult
 import com.example.sos_segundoplano.core.background.MonitoringServiceStopper
 import com.example.sos_segundoplano.data.trip.InMemoryTripSessionStore
+import com.example.sos_segundoplano.data.remote.trip.RemoteTripFinisher
+import com.example.sos_segundoplano.data.remote.trip.TripMutationResult
 import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.domain.trip.ElapsedRealtimeClock
 import com.example.sos_segundoplano.domain.trip.TripTimingState
@@ -23,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
+import java.util.concurrent.atomic.AtomicInteger
 
 class TripLocalSummaryFlowTest {
     @get:Rule val composeRule = createComposeRule()
@@ -83,6 +86,30 @@ class TripLocalSummaryFlowTest {
 
         composeRule.onNodeWithTag("trip_local_summary_screen").assertIsDisplayed()
         composeRule.onNodeWithText("00:00:47").assertIsDisplayed()
+    }
+
+    @Test fun localSummaryRemainsVisibleWhileRemoteFinishRunsAfterCaptureStops() {
+        val remoteFinishCalls = AtomicInteger(0)
+        composeRule.setContent {
+            SOS_SegundoPlanoTheme {
+                MotoSosApp(
+                    tripSessionStore = InMemoryTripSessionStore(TripSessionState.Active),
+                    tripTimingStore = SummaryFakeTimingStore(TripTimingState.Active(10_000L)),
+                    elapsedRealtimeClock = ElapsedRealtimeClock { 57_000L },
+                    monitoringServiceStopper = successfulStopper(),
+                    remoteTripFinisher = RemoteTripFinisher {
+                        remoteFinishCalls.incrementAndGet()
+                        TripMutationResult.Success("remote-trip-1", "Finished")
+                    }
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("finish_trip_button").performScrollTo().performClick()
+
+        composeRule.onNodeWithTag("trip_local_summary_screen").assertIsDisplayed()
+        composeRule.onNodeWithText("00:00:47").assertIsDisplayed()
+        composeRule.waitUntil { remoteFinishCalls.get() == 1 }
     }
 
     private fun setActiveTrip(timing: SummaryFakeTimingStore) {

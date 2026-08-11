@@ -193,6 +193,7 @@ private fun accidentMessage(state: FalsePositiveValidationState): String = when 
         IncidentCause.UserRequestedHelp -> stringResource(R.string.validation_help_requested)
         IncidentCause.Timeout -> stringResource(R.string.validation_timeout_escalated)
         IncidentCause.CriticalPhysicalEvent -> stringResource(R.string.validation_immediate_alert_requested)
+        IncidentCause.ManualSos -> stringResource(R.string.validation_help_requested)
     }
     is FalsePositiveValidationState.ImmediateAlertRequested -> stringResource(R.string.validation_immediate_alert_requested)
     is FalsePositiveValidationState.Error -> stringResource(R.string.validation_local_registration_failed)

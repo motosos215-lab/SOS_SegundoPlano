@@ -144,7 +144,7 @@ class OfflineQueueSerializer {
 
     companion object {
         private val MINOR_TYPES = setOf("Bump", "RoadIrregularity")
-        private val INCIDENT_CAUSES = setOf("UserRequestedHelp", "Timeout", "CriticalPhysicalEvent")
+        private val INCIDENT_CAUSES = setOf("UserRequestedHelp", "Timeout", "CriticalPhysicalEvent", "ManualSos")
         private val ALERT_PRIORITIES = setOf("Normal", "High", "Critical")
         private val RISK_LEVELS = setOf("Low", "Medium", "High", "Unknown")
         private val GPS_QUALITIES = setOf("Good", "Degraded", "Poor", "Unavailable", "Stale")

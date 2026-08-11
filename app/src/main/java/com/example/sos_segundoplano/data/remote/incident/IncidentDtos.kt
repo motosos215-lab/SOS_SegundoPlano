@@ -9,12 +9,31 @@ data class CreateIncidentRequestDto(
     val source: String,
     val cause: String,
     val riskLevel: String,
-    val score: Int?,
-    val confidence: Double,
-    val gpsQuality: String,
-    val ruleSetVersion: String,
-    val validationPolicyVersion: String,
-    val occurredAtUtc: String
+    val occurredAtUtc: String,
+    val location: IncidentLocationDto? = null,
+    val evidenceSummary: IncidentEvidenceSummaryDto? = null
+)
+
+@JsonClass(generateAdapter = false)
+data class IncidentLocationDto(
+    val latitude: Double,
+    val longitude: Double,
+    val accuracyMeters: Double? = null,
+    val speedKmh: Double? = null,
+    val provider: String? = null,
+    val recordedAtUtc: String? = null
+)
+
+@JsonClass(generateAdapter = false)
+data class IncidentEvidenceSummaryDto(
+    val assessmentId: Long? = null,
+    val windowId: Long? = null,
+    val triggeredRules: List<String>? = null,
+    val hasSmartwatchData: Boolean? = null,
+    val hasLocation: Boolean? = null,
+    val phoneBatteryLevel: Int? = null,
+    val watchBatteryLevel: Int? = null,
+    val appVersion: String? = null
 )
 
 @JsonClass(generateAdapter = false)

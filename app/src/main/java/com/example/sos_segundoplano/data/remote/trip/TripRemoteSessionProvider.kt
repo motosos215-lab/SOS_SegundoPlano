@@ -8,7 +8,10 @@ import com.example.sos_segundoplano.data.remote.auth.AuthNetworkFactory
 
 class TripRemoteSessionDependencies(
     val store: RemoteTripSessionStore,
-    val reconciler: TripRemoteSessionReconciler
+    val reconciler: TripRemoteSessionReconciler,
+    val starter: RemoteTripStarter,
+    val resolvedStarter: ResolvedRemoteTripStarter,
+    val finisher: RemoteTripFinisher
 )
 
 object TripRemoteSessionProvider {
@@ -26,14 +29,23 @@ object TripRemoteSessionProvider {
         val store = PersistentRemoteTripSessionStore(
             SharedPreferencesRemoteTripSessionPersistence(context)
         )
+        val authRepository = AuthProvider.get(context)
+        val remoteDataSource = RetrofitTripRemoteDataSource(api, moshi)
+        val starter = AuthenticatedRemoteTripStarter(authRepository, remoteDataSource, store)
         return TripRemoteSessionDependencies(
             store = store,
             reconciler = TripRemoteSessionReconciler(
-                authRepository = AuthProvider.get(context),
-                remoteDataSource = RetrofitTripRemoteDataSource(api, moshi),
+                authRepository = authRepository,
+                remoteDataSource = remoteDataSource,
                 store = store,
                 logger = AndroidTripRemoteSessionLogger
-            )
+            ),
+            starter = starter,
+            resolvedStarter = DefaultResolvedRemoteTripStarter(
+                resourcesResolver = AuthenticatedTripStartResourcesResolver(authRepository, remoteDataSource),
+                remoteTripStarter = starter
+            ),
+            finisher = AuthenticatedRemoteTripFinisher(authRepository, remoteDataSource, store)
         )
     }
 }

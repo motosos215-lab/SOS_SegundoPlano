@@ -37,6 +37,105 @@ fun interface ActiveTripRemoteResolver {
     suspend fun resolveActiveTrip(): ActiveTripLookupResult
 }
 
+fun interface RemoteTripStarter {
+    suspend fun startTrip(request: StartTripRequestDto): TripMutationResult
+}
+
+fun interface RemoteTripFinisher {
+    suspend fun finishTrip(request: FinishTripRequestDto): TripMutationResult
+}
+
+class AuthenticatedRemoteTripStarter(
+    private val authRepository: AuthRepository,
+    private val remoteDataSource: TripRemoteDataSource,
+    private val store: RemoteTripSessionStore
+) : RemoteTripStarter {
+    private val mutex = Mutex()
+
+    override suspend fun startTrip(request: StartTripRequestDto): TripMutationResult = mutex.withLock {
+        if (request.vehicleId.isBlank()) {
+            return@withLock TripMutationResult.MissingRequiredData("vehicle_id_missing")
+        }
+        if (request.mobileDeviceId.isBlank()) {
+            return@withLock TripMutationResult.MissingRequiredData("mobile_device_id_missing")
+        }
+        val token = when (val result = authRepository.ensureValidAccessToken()) {
+            is AuthResult.Success -> result.value.reveal()
+            is AuthFailure -> return@withLock result.toTripMutationResult()
+        }
+        val first = remoteDataSource.startTrip("Bearer $token", request)
+        val mutation = retryStartOnceAfterUnauthorized(first, request)
+        when (val result = mutation) {
+            is TripMutationResult.Success -> {
+                if (!store.setRemoteTripId(result.remoteTripId)) {
+                    TripMutationResult.InvalidResponse("remote_trip_persistence_failed")
+                } else {
+                    result
+                }
+            }
+            else -> result
+        }
+    }
+
+    private suspend fun retryStartOnceAfterUnauthorized(
+        first: TripMutationResult,
+        request: StartTripRequestDto
+    ): TripMutationResult {
+        if (first !is TripMutationResult.HttpError || first.statusCode != 401) return first
+        if (authRepository.refreshSession() !is AuthResult.Success) return first
+        val refreshedToken = when (val result = authRepository.ensureValidAccessToken()) {
+            is AuthResult.Success -> result.value.reveal()
+            is AuthFailure -> return result.toTripMutationResult()
+        }
+        return remoteDataSource.startTrip("Bearer $refreshedToken", request)
+    }
+}
+
+class AuthenticatedRemoteTripFinisher(
+    private val authRepository: AuthRepository,
+    private val remoteDataSource: TripRemoteDataSource,
+    private val store: RemoteTripSessionStore
+) : RemoteTripFinisher {
+    private val mutex = Mutex()
+
+    override suspend fun finishTrip(request: FinishTripRequestDto): TripMutationResult = mutex.withLock {
+        val remoteTripId = store.remoteTripId.value?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return@withLock TripMutationResult.MissingRequiredData("remote_trip_id_missing")
+        val token = when (val result = authRepository.ensureValidAccessToken()) {
+            is AuthResult.Success -> result.value.reveal()
+            is AuthFailure -> return@withLock result.toTripMutationResult()
+        }
+        val first = remoteDataSource.finishTrip("Bearer $token", remoteTripId, request)
+        val mutation = retryFinishOnceAfterUnauthorized(first, remoteTripId, request)
+        when (val result = mutation) {
+            is TripMutationResult.Success -> {
+                if (result.remoteTripId != remoteTripId) {
+                    TripMutationResult.InvalidResponse("remote_trip_id_mismatch")
+                } else if (!store.clearRemoteTripId()) {
+                    TripMutationResult.InvalidResponse("remote_trip_clear_failed")
+                } else {
+                    result
+                }
+            }
+            else -> result
+        }
+    }
+
+    private suspend fun retryFinishOnceAfterUnauthorized(
+        first: TripMutationResult,
+        remoteTripId: String,
+        request: FinishTripRequestDto
+    ): TripMutationResult {
+        if (first !is TripMutationResult.HttpError || first.statusCode != 401) return first
+        if (authRepository.refreshSession() !is AuthResult.Success) return first
+        val refreshedToken = when (val result = authRepository.ensureValidAccessToken()) {
+            is AuthResult.Success -> result.value.reveal()
+            is AuthFailure -> return result.toTripMutationResult()
+        }
+        return remoteDataSource.finishTrip("Bearer $refreshedToken", remoteTripId, request)
+    }
+}
+
 class TripRemoteSessionReconciler(
     private val authRepository: AuthRepository,
     private val remoteDataSource: TripRemoteDataSource,
@@ -81,6 +180,13 @@ class TripRemoteSessionReconciler(
         is InvalidResponse -> ActiveTripLookupResult.InvalidResponse(sanitizedMessage ?: "access_token_invalid")
         else -> ActiveTripLookupResult.HttpError(401, "access_token_unavailable")
     }
+}
+
+private fun AuthFailure.toTripMutationResult(): TripMutationResult = when (this) {
+    is NetworkUnavailable -> TripMutationResult.NetworkUnavailable(sanitizedMessage ?: "network_unavailable")
+    is Timeout -> TripMutationResult.Timeout(sanitizedMessage ?: "network_timeout")
+    is InvalidResponse -> TripMutationResult.InvalidResponse(sanitizedMessage ?: "access_token_invalid")
+    else -> TripMutationResult.HttpError(401, "access_token_unavailable")
 }
 
 interface TripRemoteSessionLogger {

@@ -7,6 +7,7 @@ import com.example.sos_segundoplano.domain.auth.NetworkUnavailable
 import com.example.sos_segundoplano.domain.auth.Timeout
 import com.example.sos_segundoplano.data.remote.trip.ActiveTripLookupResult
 import com.example.sos_segundoplano.data.remote.trip.ActiveTripRemoteResolver
+import com.example.sos_segundoplano.data.remote.trip.RemoteTripSessionStore
 import com.example.sos_segundoplano.domain.repository.AuthRepository
 import com.example.sos_segundoplano.domain.validation.IncidentCause
 import com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus
@@ -29,12 +30,12 @@ class AuthenticatedIncidentRemoteCreator(
     private val authRepository: AuthRepository,
     private val remoteDataSource: IncidentRemoteDataSource,
     private val activeTripRemoteResolver: ActiveTripRemoteResolver,
+    private val remoteTripSessionStore: RemoteTripSessionStore? = null,
     private val remoteIncidentLinkStore: RemoteIncidentLinkStore = InMemoryRemoteIncidentLinkStore(),
     private val logger: IncidentRemoteLogger = NoOpIncidentRemoteLogger,
     private val nowUtc: () -> Instant = { Instant.now() }
 ) : IncidentRemoteCreator {
     override suspend fun createIncident(incident: LocalIncident): LocalIncident {
-        if (incident.cause != IncidentCause.Timeout) return incident
         val clientIncidentId = incident.stableClientIncidentUuid()
         remoteIncidentLinkStore.read(clientIncidentId)
             ?.takeIf {
@@ -70,7 +71,10 @@ class AuthenticatedIncidentRemoteCreator(
                 logger.incidentCreationFailed()
             }
         }
-        val remoteTripId = when (val trip = activeTripRemoteResolver.resolveActiveTrip()) {
+        val persistedRemoteTripId = remoteTripSessionStore?.remoteTripId?.value
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+        val remoteTripId = persistedRemoteTripId ?: when (val trip = activeTripRemoteResolver.resolveActiveTrip()) {
             is ActiveTripLookupResult.Found -> trip.remoteTripId
             ActiveTripLookupResult.NoActiveTrip -> return incident.copy(
                 clientIncidentId = clientIncidentId,
@@ -120,7 +124,8 @@ class AuthenticatedIncidentRemoteCreator(
             ).also { logger.incidentCreationFailed() }
         }
         logger.remoteIncidentRequestStarted()
-        val status = remoteDataSource.createIncident("Bearer $token", request)
+        val firstStatus = remoteDataSource.createIncident("Bearer $token", request)
+        val status = retryOnceAfterUnauthorized(firstStatus, request)
         return when (status) {
             is IncidentRemoteCreationStatus.Success -> {
                 val durable = remoteIncidentLinkStore.save(
@@ -149,6 +154,19 @@ class AuthenticatedIncidentRemoteCreator(
         }
     }
 
+    private suspend fun retryOnceAfterUnauthorized(
+        first: IncidentRemoteCreationStatus,
+        request: CreateIncidentRequestDto
+    ): IncidentRemoteCreationStatus {
+        if (first !is IncidentRemoteCreationStatus.HttpError || first.statusCode != 401) return first
+        if (authRepository.refreshSession() !is AuthResult.Success) return first
+        val refreshedToken = when (val result = authRepository.ensureValidAccessToken()) {
+            is AuthResult.Success -> result.value.reveal()
+            is AuthFailure -> return result.toIncidentRemoteStatus()
+        }
+        return remoteDataSource.createIncident("Bearer $refreshedToken", request)
+    }
+
     private fun AuthFailure.toIncidentRemoteStatus(): IncidentRemoteCreationStatus = when (this) {
         is NetworkUnavailable -> IncidentRemoteCreationStatus.NetworkUnavailable(sanitizedMessage ?: "network_unavailable")
         is Timeout -> IncidentRemoteCreationStatus.Timeout(sanitizedMessage ?: "network_timeout")
@@ -160,21 +178,37 @@ class AuthenticatedIncidentRemoteCreator(
         return CreateIncidentRequestDto(
             tripId = remoteTripId,
             clientIncidentId = clientIncidentId,
-            source = "MobileDetection",
-            cause = "CountdownTimeout",
+            source = if (cause == IncidentCause.ManualSos) "ManualSos" else "MobileDetection",
+            cause = when (cause) {
+                IncidentCause.Timeout -> "CountdownTimeout"
+                IncidentCause.UserRequestedHelp -> "UserRequestedHelp"
+                IncidentCause.CriticalPhysicalEvent -> "CriticalEvent"
+                IncidentCause.ManualSos -> "ManualSos"
+            },
             riskLevel = riskLevel.name,
-            score = score,
-            confidence = confidence,
-            gpsQuality = gpsQuality.name,
-            ruleSetVersion = ruleSetVersion,
-            validationPolicyVersion = validationPolicyVersion,
-            occurredAtUtc = occurredAtUtc.toString()
+            occurredAtUtc = occurredAtUtc.toString(),
+            location = null,
+            evidenceSummary = if (hasAssessmentEvidence) {
+                IncidentEvidenceSummaryDto(
+                    assessmentId = assessmentId,
+                    windowId = windowId,
+                    triggeredRules = relevantOutcomes.map { it.ruleId.name },
+                    hasLocation = false
+                )
+            } else {
+                null
+            }
         )
     }
 
-    private fun LocalIncident.stableClientIncidentUuid(): String = UUID.nameUUIDFromBytes(
-        "motosos:$sessionId:$assessmentId:$windowId".toByteArray(StandardCharsets.UTF_8)
-    ).toString()
+    private fun LocalIncident.stableClientIncidentUuid(): String {
+        val existing = clientIncidentId
+            ?.trim()
+            ?.let { candidate -> runCatching { UUID.fromString(candidate).toString() }.getOrNull() }
+        return existing ?: UUID.nameUUIDFromBytes(
+            "motosos:$cause:$sessionId:$assessmentId:$windowId".toByteArray(StandardCharsets.UTF_8)
+        ).toString()
+    }
 }
 
 interface IncidentRemoteLogger {
