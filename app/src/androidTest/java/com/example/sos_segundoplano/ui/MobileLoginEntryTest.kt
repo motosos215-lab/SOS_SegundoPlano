@@ -162,6 +162,7 @@ class MobileLoginEntryTest {
         composeRule.onNodeWithText("Sesión Monitor activa").assertIsDisplayed()
         composeRule.onNodeWithText("Cerrar sesión").assertIsDisplayed()
         composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("monitoring_readiness_card").assertCountEquals(0)
         composeRule.onAllNodesWithText("Monitoreo").assertCountEquals(0)
         assertEquals(0, riderCompositionCount)
     }

@@ -13,6 +13,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.example.sos_segundoplano.R
+import com.example.sos_segundoplano.domain.monitoring.MonitoringReadiness
+import com.example.sos_segundoplano.domain.monitoring.MonitoringRequirementStatus
 import com.example.sos_segundoplano.ui.components.MotoBottomBar
 import com.example.sos_segundoplano.ui.components.MotoBottomBarItem
 import com.example.sos_segundoplano.ui.components.MotoHeroTripCard
@@ -26,6 +28,14 @@ import com.example.sos_segundoplano.ui.theme.MotoBackground
 @Composable
 fun HomeScreen(
     onStartTrip: () -> Unit,
+    monitoringReadiness: MonitoringReadiness = MonitoringReadiness(
+        location = MonitoringRequirementStatus.Available,
+        notifications = MonitoringRequirementStatus.Available,
+        bluetooth = MonitoringRequirementStatus.Available
+    ),
+    onLocationReadinessAction: () -> Unit = {},
+    onNotificationReadinessAction: () -> Unit = {},
+    onBluetoothReadinessAction: () -> Unit = {},
     onProfileSelected: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -57,6 +67,12 @@ fun HomeScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             MotoHeroTripCard(onStartTrip = onStartTrip)
+            MonitoringReadinessCard(
+                readiness = monitoringReadiness,
+                onLocationAction = onLocationReadinessAction,
+                onNotificationAction = onNotificationReadinessAction,
+                onBluetoothAction = onBluetoothReadinessAction
+            )
             MotoInformationCard(
                 title = stringResource(R.string.emergency_contact),
                 state = stringResource(R.string.no_contact_configured),

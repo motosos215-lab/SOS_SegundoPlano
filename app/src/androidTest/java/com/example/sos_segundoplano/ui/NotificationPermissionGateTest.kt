@@ -20,6 +20,7 @@ import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatusP
 import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -28,7 +29,7 @@ class NotificationPermissionGateTest {
     val composeRule = createComposeRule()
 
     @Test
-    fun withoutClickDoesNotCheckNotificationsOrShowDialog() {
+    fun withoutClickChecksNotificationsForReadinessButDoesNotShowDialog() {
         val notificationProvider = FakeAppNotificationStatusProvider(AppNotificationStatus.Disabled)
         var notificationSettingsOpenCount = 0
 
@@ -43,7 +44,7 @@ class NotificationPermissionGateTest {
         composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
         composeRule.onAllNodesWithTag("notification_permission_dialog").assertCountEquals(0)
         composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
-        assertEquals(0, notificationProvider.invocationCount)
+        assertTrue(notificationProvider.invocationCount > 0)
         assertEquals(0, notificationSettingsOpenCount)
     }
 
@@ -55,11 +56,12 @@ class NotificationPermissionGateTest {
         var monitoringStarterCallCount = 0
         var startTripCallCount = 0
 
+        val notificationProvider = FakeAppNotificationStatusProvider(AppNotificationStatus.Disabled)
         setAppContent(
             locationProvider = FakeNotificationGateLocationPermissionStatusProvider(
                 BackgroundLocationPermissionStatus.Granted
             ),
-            notificationProvider = FakeAppNotificationStatusProvider(AppNotificationStatus.Disabled),
+            notificationProvider = notificationProvider,
             bluetoothProvider = bluetoothProvider,
             monitoringServiceStarter = MonitoringServiceStarter {
                 monitoringStarterCallCount++
@@ -74,13 +76,16 @@ class NotificationPermissionGateTest {
             }
         )
 
+        composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
+        val bluetoothReadinessCallCount = bluetoothProvider.invocationCount
+
         composeRule.onNodeWithTag("start_trip_button").performClick()
 
         composeRule.onNodeWithTag("notification_permission_dialog").assertIsDisplayed()
         composeRule.onNodeWithText("Notificaciones requeridas").assertIsDisplayed()
         composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
         composeRule.onAllNodesWithText("Monitoreo").assertCountEquals(0)
-        assertEquals(0, bluetoothProvider.invocationCount)
+        assertEquals(bluetoothReadinessCallCount, bluetoothProvider.invocationCount)
         assertEquals(0, monitoringStarterCallCount)
         assertEquals(0, startTripCallCount)
     }
@@ -187,12 +192,15 @@ class NotificationPermissionGateTest {
             notificationProvider = notificationProvider
         )
 
+        composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
+        val readinessCallCount = notificationProvider.invocationCount
+
         composeRule.onNodeWithTag("start_trip_button").performClick()
 
         composeRule.onNodeWithTag("location_permission_dialog").assertIsDisplayed()
         composeRule.onAllNodesWithTag("notification_permission_dialog").assertCountEquals(0)
         composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
-        assertEquals(0, notificationProvider.invocationCount)
+        assertEquals(readinessCallCount, notificationProvider.invocationCount)
     }
 
     @Test

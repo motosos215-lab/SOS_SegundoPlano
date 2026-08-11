@@ -199,19 +199,27 @@ class TripFinishFlowTest {
             monitoringServiceStopper = stopper
         )
 
+        composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
+        val locationReadinessCallCount = locationProvider.invocationCount
+        val notificationReadinessCallCount = notificationProvider.invocationCount
+        val bluetoothReadinessCallCount = bluetoothProvider.invocationCount
+
         composeRule.onNodeWithTag("start_trip_button").performClick()
-        assertEquals(1, locationProvider.invocationCount)
-        assertEquals(1, notificationProvider.invocationCount)
-        assertEquals(1, bluetoothProvider.invocationCount)
+        assertEquals(locationReadinessCallCount + 1, locationProvider.invocationCount)
+        assertEquals(notificationReadinessCallCount + 1, notificationProvider.invocationCount)
+        assertEquals(bluetoothReadinessCallCount + 1, bluetoothProvider.invocationCount)
+        val locationCallsAfterStart = locationProvider.invocationCount
+        val notificationCallsAfterStart = notificationProvider.invocationCount
+        val bluetoothCallsAfterStart = bluetoothProvider.invocationCount
 
         locationProvider.updateStatus(BackgroundLocationPermissionStatus.BackgroundMissing)
         notificationProvider.updateStatus(AppNotificationStatus.Disabled)
         bluetoothProvider.updateStatus(BluetoothRequirementStatus.Disabled)
         composeRule.onNodeWithTag("finish_trip_button").performScrollTo().performClick()
 
-        assertEquals(1, locationProvider.invocationCount)
-        assertEquals(1, notificationProvider.invocationCount)
-        assertEquals(1, bluetoothProvider.invocationCount)
+        assertEquals(locationCallsAfterStart, locationProvider.invocationCount)
+        assertEquals(notificationCallsAfterStart, notificationProvider.invocationCount)
+        assertEquals(bluetoothCallsAfterStart, bluetoothProvider.invocationCount)
         assertEquals(1, stopper.invocationCount)
         composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
         assertSummaryThenReturnHome()

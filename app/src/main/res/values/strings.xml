@@ -49,6 +49,16 @@
     <string name="trip_summary_duration_label">Duración del viaje</string>
     <string name="trip_summary_duration_unknown">Duración no disponible</string>
     <string name="trip_summary_return_home">Volver al inicio</string>
+    <string name="monitoring_readiness_title">Estado para monitoreo</string>
+    <string name="monitoring_readiness_ready">Listo para iniciar viaje</string>
+    <string name="monitoring_readiness_needs_attention">Requiere atención antes de iniciar</string>
+    <string name="monitoring_readiness_location">Ubicación</string>
+    <string name="monitoring_readiness_notifications">Notificaciones</string>
+    <string name="monitoring_readiness_bluetooth">Bluetooth</string>
+    <string name="monitoring_readiness_available">Disponible</string>
+    <string name="monitoring_readiness_requires_attention">Requiere atención</string>
+    <string name="monitoring_readiness_not_available">No disponible</string>
+    <string name="monitoring_readiness_review">Revisar</string>
     <string name="speed_unit">km/h</string>
     <string name="finish_trip">Finalizar viaje</string>
     <string name="trips">Viajes</string>
