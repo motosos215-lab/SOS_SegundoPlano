@@ -36,6 +36,7 @@ fun HomeScreen(
     onLocationReadinessAction: () -> Unit = {},
     onNotificationReadinessAction: () -> Unit = {},
     onBluetoothReadinessAction: () -> Unit = {},
+    onSosSelected: () -> Unit = {},
     onProfileSelected: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -53,7 +54,8 @@ fun HomeScreen(
         bottomBar = {
             MotoBottomBar(
                 selectedItem = MotoBottomBarItem.Home,
-                enabledItems = setOf(MotoBottomBarItem.Home, MotoBottomBarItem.Profile),
+                enabledItems = setOf(MotoBottomBarItem.Home, MotoBottomBarItem.Sos, MotoBottomBarItem.Profile),
+                onSosSelected = onSosSelected,
                 onProfileSelected = onProfileSelected
             )
         }

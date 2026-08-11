@@ -79,6 +79,7 @@ fun ProfileRoute(
     profileRepository: ProfileRepository,
     authRepository: AuthRepository,
     onHomeSelected: () -> Unit,
+    onSosSelected: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showWatchConnection by rememberSaveable { mutableStateOf(false) }
@@ -108,6 +109,7 @@ fun ProfileRoute(
     ProfileScreen(
         state = state,
         onHomeSelected = onHomeSelected,
+        onSosSelected = onSosSelected,
         onRetry = viewModel::retry,
         onLogoutSelected = viewModel::showLogoutDialog,
         onLogoutDismissed = viewModel::dismissLogoutDialog,
@@ -121,6 +123,7 @@ fun ProfileRoute(
 fun ProfileScreen(
     state: ProfileUiState,
     onHomeSelected: () -> Unit,
+    onSosSelected: () -> Unit = {},
     onRetry: () -> Unit,
     onLogoutSelected: () -> Unit,
     onLogoutDismissed: () -> Unit,
@@ -145,8 +148,9 @@ fun ProfileScreen(
             MotoBottomBar(
                 selectedItem = MotoBottomBarItem.Profile,
                 onHomeSelected = onHomeSelected,
+                onSosSelected = onSosSelected,
                 onProfileSelected = {},
-                enabledItems = setOf(MotoBottomBarItem.Home, MotoBottomBarItem.Profile)
+                enabledItems = setOf(MotoBottomBarItem.Home, MotoBottomBarItem.Sos, MotoBottomBarItem.Profile)
             )
         }
     ) { innerPadding ->
