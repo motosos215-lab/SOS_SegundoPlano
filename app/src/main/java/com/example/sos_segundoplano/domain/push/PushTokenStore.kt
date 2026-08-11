@@ -37,6 +37,8 @@ class PushTokenCoordinator(private val store: PushTokenStore) {
     }
 
     fun state(): PushTokenStoreResult<PushTokenState> = store.read()
+
+    internal fun store(): PushTokenStore = store
 }
 
 class PushTokenHandler(private val coordinator: PushTokenCoordinator) {

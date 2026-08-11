@@ -4,6 +4,7 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import com.example.sos_segundoplano.data.remote.incident.IncidentsApi
 import com.example.sos_segundoplano.data.remote.profile.UsersApi
+import com.example.sos_segundoplano.data.remote.push.PushNotificationTokensApi
 import com.example.sos_segundoplano.data.remote.trip.TripsApi
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
@@ -44,6 +45,13 @@ object AuthNetworkFactory {
         moshi: Moshi = createMoshi(),
         client: OkHttpClient = createClient()
     ): TripsApi = createRetrofit(baseUrl, moshi, client).create(TripsApi::class.java)
+
+    fun createPushNotificationTokensApi(
+        baseUrl: String,
+        moshi: Moshi = createMoshi(),
+        client: OkHttpClient = createClient()
+    ): PushNotificationTokensApi =
+        createRetrofit(baseUrl, moshi, client).create(PushNotificationTokensApi::class.java)
 
     private fun createRetrofit(
         baseUrl: String,
