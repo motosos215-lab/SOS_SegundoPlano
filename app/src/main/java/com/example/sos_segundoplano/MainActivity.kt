@@ -10,6 +10,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.WindowCompat
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -18,6 +20,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.tooling.preview.Preview
 import com.example.sos_segundoplano.core.background.AndroidMonitoringServiceStarter
 import com.example.sos_segundoplano.core.background.AndroidMonitoringServiceStopper
@@ -47,6 +53,7 @@ import com.example.sos_segundoplano.data.trip.TripSessionStoreProvider
 import com.example.sos_segundoplano.data.trip.AndroidElapsedRealtimeClock
 import com.example.sos_segundoplano.data.trip.TripTimingStoreProvider
 import com.example.sos_segundoplano.domain.model.TripSessionState
+import com.example.sos_segundoplano.domain.monitoring.MonitoringReadinessFactory
 import com.example.sos_segundoplano.domain.offline.OfflineQueueSummary
 import com.example.sos_segundoplano.domain.rules.RiskAssessmentState
 import com.example.sos_segundoplano.domain.signals.TripSignalSnapshot
@@ -193,6 +200,7 @@ fun MotoSosApp(
     onOpenAppSettings: () -> Unit = {},
     onOpenNotificationSettings: () -> Unit = {},
     onOpenBluetoothSettings: () -> Unit = {},
+    readinessLifecycleOwner: LifecycleOwner = LocalLifecycleOwner.current,
     profileContent: (@Composable (() -> Unit) -> Unit)? = null
 ) {
     val resolvedTripSessionStore = tripSessionStore ?: remember { InMemoryTripSessionStore() }
@@ -211,12 +219,49 @@ fun MotoSosApp(
     var monitoringStopFailureVisible by remember { mutableStateOf(false) }
     var tripSummaryVisible by rememberSaveable { mutableStateOf(false) }
     var tripSummaryDuration by rememberSaveable { mutableStateOf<String?>(null) }
+    var monitoringReadiness by remember {
+        mutableStateOf(
+            MonitoringReadinessFactory.create(
+                locationPermissionStatusProvider.getStatus(),
+                notificationStatusProvider.getStatus(),
+                bluetoothRequirementStatusProvider.getStatus()
+            )
+        )
+    }
     val currentState = resolvedTripSessionStore.states.collectAsState().value
     val validationState = validationStates.collectAsState().value
     val offlineQueueSummary = (offlineQueueSummaries ?: kotlinx.coroutines.flow.flowOf(OfflineQueueSummary()))
         .collectAsState(OfflineQueueSummary())
         .value
     var dismissedEmergencyStateKey by remember { mutableStateOf<String?>(null) }
+
+    fun refreshMonitoringReadiness() {
+        monitoringReadiness = MonitoringReadinessFactory.create(
+            locationPermissionStatusProvider.getStatus(),
+            notificationStatusProvider.getStatus(),
+            bluetoothRequirementStatusProvider.getStatus()
+        )
+    }
+
+    DisposableEffect(readinessLifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                refreshMonitoringReadiness()
+            }
+        }
+        readinessLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { readinessLifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(selectedScreen, currentState, tripSummaryVisible) {
+        if (
+            selectedScreen == MotoSosAppScreen.Home &&
+            currentState == TripSessionState.Idle &&
+            !tripSummaryVisible
+        ) {
+            refreshMonitoringReadiness()
+        }
+    }
 
     if (currentState == TripSessionState.Active && selectedScreen != MotoSosAppScreen.Home) {
         selectedScreen = MotoSosAppScreen.Home
@@ -303,6 +348,33 @@ fun MotoSosApp(
         }
     }
 
+    fun showLocationReadinessAction() {
+        isTripStartPending = false
+        val status = locationPermissionStatusProvider.getStatus()
+        refreshMonitoringReadiness()
+        permissionDialogStatus = status.takeUnless { it == BackgroundLocationPermissionStatus.Granted }
+        isNotificationDialogVisible = false
+        bluetoothDialogStatus = null
+    }
+
+    fun showNotificationReadinessAction() {
+        isTripStartPending = false
+        val status = notificationStatusProvider.getStatus()
+        refreshMonitoringReadiness()
+        permissionDialogStatus = null
+        isNotificationDialogVisible = status == AppNotificationStatus.Disabled
+        bluetoothDialogStatus = null
+    }
+
+    fun showBluetoothReadinessAction() {
+        isTripStartPending = false
+        val status = bluetoothRequirementStatusProvider.getStatus()
+        refreshMonitoringReadiness()
+        permissionDialogStatus = null
+        isNotificationDialogVisible = false
+        bluetoothDialogStatus = status.takeUnless { it == BluetoothRequirementStatus.Enabled }
+    }
+
     fun finishActiveTrip() {
         if (currentState != TripSessionState.Active || isTripFinishInProgress) {
             return
@@ -322,9 +394,9 @@ fun MotoSosApp(
             MonitoringServiceStopResult.AlreadyStopped -> {
                 resolvedTripTimingStore?.clear()
                 val nextState = finishTripUseCase(currentState)
-                resolvedTripSessionStore.setState(nextState)
                 tripSummaryDuration = frozenSummary?.durationText
                 tripSummaryVisible = frozenSummary != null
+                resolvedTripSessionStore.setState(nextState)
                 isTripFinishInProgress = false
                 monitoringStopFailureVisible = false
                 isTripStartPending = false
@@ -368,7 +440,14 @@ fun MotoSosApp(
                     isTripStartPending = true
                     validateTripStartRequirements()
                 },
-                onProfileSelected = { selectedScreen = MotoSosAppScreen.Profile },
+                monitoringReadiness = monitoringReadiness,
+                onLocationReadinessAction = ::showLocationReadinessAction,
+                onNotificationReadinessAction = ::showNotificationReadinessAction,
+                onBluetoothReadinessAction = ::showBluetoothReadinessAction,
+                onProfileSelected = {
+                    refreshMonitoringReadiness()
+                    selectedScreen = MotoSosAppScreen.Profile
+                },
                 modifier = modifier
             )
 
@@ -378,6 +457,10 @@ fun MotoSosApp(
                         isTripStartPending = true
                         validateTripStartRequirements()
                     },
+                    monitoringReadiness = monitoringReadiness,
+                    onLocationReadinessAction = ::showLocationReadinessAction,
+                    onNotificationReadinessAction = ::showNotificationReadinessAction,
+                    onBluetoothReadinessAction = ::showBluetoothReadinessAction,
                     onProfileSelected = { selectedScreen = MotoSosAppScreen.Profile },
                     modifier = modifier
                 )
@@ -402,7 +485,11 @@ fun MotoSosApp(
             status = status,
             onOpenSettings = onOpenAppSettings,
             onRecheckPermissions = {
-                validateTripStartRequirements()
+                if (isTripStartPending) {
+                    validateTripStartRequirements()
+                } else {
+                    showLocationReadinessAction()
+                }
             },
             onDismiss = {
                 isTripStartPending = false
@@ -418,7 +505,11 @@ fun MotoSosApp(
         NotificationPermissionDialog(
             onOpenSettings = onOpenNotificationSettings,
             onRecheckPermissions = {
-                validateTripStartRequirements()
+                if (isTripStartPending) {
+                    validateTripStartRequirements()
+                } else {
+                    showNotificationReadinessAction()
+                }
             },
             onDismiss = {
                 isTripStartPending = false
@@ -436,7 +527,11 @@ fun MotoSosApp(
             onOpenAppSettings = onOpenAppSettings,
             onOpenBluetoothSettings = onOpenBluetoothSettings,
             onRecheckRequirements = {
-                validateTripStartRequirements()
+                if (isTripStartPending) {
+                    validateTripStartRequirements()
+                } else {
+                    showBluetoothReadinessAction()
+                }
             },
             onDismiss = {
                 isTripStartPending = false

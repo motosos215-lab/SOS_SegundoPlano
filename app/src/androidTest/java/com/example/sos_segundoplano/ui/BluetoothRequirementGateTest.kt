@@ -20,6 +20,7 @@ import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatusP
 import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -28,7 +29,7 @@ class BluetoothRequirementGateTest {
     val composeRule = createComposeRule()
 
     @Test
-    fun withoutClickDoesNotCheckBluetoothOrShowDialog() {
+    fun withoutClickChecksBluetoothForReadinessButDoesNotShowDialog() {
         val bluetoothProvider = FakeBluetoothRequirementStatusProvider(BluetoothRequirementStatus.Disabled)
         var appSettingsOpenCount = 0
         var bluetoothSettingsOpenCount = 0
@@ -46,7 +47,7 @@ class BluetoothRequirementGateTest {
         composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
         composeRule.onAllNodesWithTag("bluetooth_requirement_dialog").assertCountEquals(0)
         composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
-        assertEquals(0, bluetoothProvider.invocationCount)
+        assertTrue(bluetoothProvider.invocationCount > 0)
         assertEquals(0, appSettingsOpenCount)
         assertEquals(0, bluetoothSettingsOpenCount)
     }
@@ -63,12 +64,15 @@ class BluetoothRequirementGateTest {
             bluetoothProvider = bluetoothProvider
         )
 
+        composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
+        val readinessCallCount = bluetoothProvider.invocationCount
+
         composeRule.onNodeWithTag("start_trip_button").performClick()
 
         composeRule.onNodeWithTag("location_permission_dialog").assertIsDisplayed()
         composeRule.onAllNodesWithTag("bluetooth_requirement_dialog").assertCountEquals(0)
         composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
-        assertEquals(0, bluetoothProvider.invocationCount)
+        assertEquals(readinessCallCount, bluetoothProvider.invocationCount)
     }
 
     @Test
@@ -83,12 +87,15 @@ class BluetoothRequirementGateTest {
             bluetoothProvider = bluetoothProvider
         )
 
+        composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
+        val readinessCallCount = bluetoothProvider.invocationCount
+
         composeRule.onNodeWithTag("start_trip_button").performClick()
 
         composeRule.onNodeWithTag("notification_permission_dialog").assertIsDisplayed()
         composeRule.onAllNodesWithTag("bluetooth_requirement_dialog").assertCountEquals(0)
         composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
-        assertEquals(0, bluetoothProvider.invocationCount)
+        assertEquals(readinessCallCount, bluetoothProvider.invocationCount)
     }
 
     @Test
