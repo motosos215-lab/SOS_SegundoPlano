@@ -29,7 +29,7 @@ class RiderSosScreenTest {
         var helpRequests = 0
         composeRule.setContent {
             SOS_SegundoPlanoTheme {
-                MotoSosApp(onRequestHelp = { _, _, _ -> helpRequests++ })
+                MotoSosApp(onManualSos = { helpRequests++ })
             }
         }
 
@@ -51,7 +51,7 @@ class RiderSosScreenTest {
         var helpRequests = 0
         composeRule.setContent {
             SOS_SegundoPlanoTheme {
-                MotoSosApp(onRequestHelp = { _, _, _ -> helpRequests++ })
+                MotoSosApp(onManualSos = { helpRequests++ })
             }
         }
 
@@ -67,8 +67,8 @@ class RiderSosScreenTest {
         composeRule.setContent {
             SOS_SegundoPlanoTheme {
                 RiderSosScreen(
-                    canRequestLocalHelp = true,
-                    onRequestLocalHelp = { helpRequests++ },
+                    canSubmitManualSos = true,
+                    onSubmitManualSos = { helpRequests++ },
                     onNavigateBack = {}
                 )
             }
@@ -83,12 +83,30 @@ class RiderSosScreenTest {
         assertEquals(1, helpRequests)
     }
 
-    @Test fun sendIsSafelyBlockedWithoutActiveLocalValidation() {
+    @Test fun manualSosDoesNotRequireValidationAndNeverUsesRequestHelp() {
+        var manualRequests = 0
+        composeRule.setContent {
+            SOS_SegundoPlanoTheme {
+                MotoSosApp(
+                    onManualSos = { manualRequests++ },
+                    onRequestHelp = { _, _, _ -> error("Manual SOS must not use UserRequestedHelp") }
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("bottom_nav_sos").performClick()
+        composeRule.onNodeWithTag("send_sos_button").performClick()
+
+        composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
+        assertEquals(1, manualRequests)
+    }
+
+    @Test fun explicitlyUnavailableActionShowsMessageWithoutInvokingCallback() {
         composeRule.setContent {
             SOS_SegundoPlanoTheme {
                 RiderSosScreen(
-                    canRequestLocalHelp = false,
-                    onRequestLocalHelp = { error("Blocked SOS must not request help") },
+                    canSubmitManualSos = false,
+                    onSubmitManualSos = { error("Unavailable SOS must not submit") },
                     onNavigateBack = {}
                 )
             }

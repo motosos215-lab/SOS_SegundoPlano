@@ -74,7 +74,7 @@ enum class ValidationDecisionReason {
 enum class UserResponseSource { Mobile, Wear, ForegroundNotification }
 enum class ValidationOrigin { Mobile, Wear, ForegroundNotification, Timeout, System }
 enum class MinorEventType { Bump, RoadIrregularity }
-enum class IncidentCause { UserRequestedHelp, Timeout, CriticalPhysicalEvent }
+enum class IncidentCause { UserRequestedHelp, Timeout, CriticalPhysicalEvent, ManualSos }
 enum class AlertPriority { Normal, High, Critical }
 enum class AlertDeliveryStatus { Pending }
 enum class AlertRetryState { NotStarted }
@@ -154,6 +154,7 @@ data class LocalIncident(
     val ruleSetVersion: String,
     val validationPolicyVersion: String,
     val gpsQuality: GpsQualityStatus,
+    val hasAssessmentEvidence: Boolean = true,
     val remoteTripId: String? = null,
     val clientIncidentId: String? = null,
     val remoteIncidentId: String? = null,

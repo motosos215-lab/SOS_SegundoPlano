@@ -61,8 +61,8 @@ private val SosNavRed = lerp(MotoAlert, Color.Black, 0.72f)
 
 @Composable
 fun RiderSosScreen(
-    canRequestLocalHelp: Boolean,
-    onRequestLocalHelp: () -> Unit,
+    canSubmitManualSos: Boolean,
+    onSubmitManualSos: () -> Unit,
     onNavigateBack: () -> Unit,
     onHomeSelected: () -> Unit = onNavigateBack,
     onProfileSelected: () -> Unit = onNavigateBack,
@@ -127,10 +127,10 @@ fun RiderSosScreen(
             Spacer(Modifier.height(28.dp))
             Button(
                 onClick = {
-                    if (canRequestLocalHelp && !requestAccepted) {
+                    if (canSubmitManualSos && !requestAccepted) {
+                        onSubmitManualSos()
                         requestAccepted = true
-                        onRequestLocalHelp()
-                    } else if (!canRequestLocalHelp) {
+                    } else if (!canSubmitManualSos) {
                         showUnavailable = true
                     }
                 },

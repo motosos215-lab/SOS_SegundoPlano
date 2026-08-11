@@ -463,7 +463,6 @@ class FalsePositiveValidationCoordinator(
     }
 
     private suspend fun createRemoteIncidentOnce(event: PendingOfflineEvent.IncidentBundleEvent): LocalIncident {
-        if (event.incident.cause != IncidentCause.Timeout) return event.incident
         val firstAttempt = mutex.withLock { remoteIncidentAttempts.add(event.key) }
         if (!firstAttempt) return event.incident.copy(
             remoteCreationStatus = IncidentRemoteCreationStatus.DuplicateAttempt

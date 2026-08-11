@@ -158,6 +158,7 @@ class MonitoringNotificationFactory(
             IncidentCause.UserRequestedHelp -> appContext.getString(R.string.validation_help_requested)
             IncidentCause.Timeout -> appContext.getString(R.string.validation_timeout_escalated)
             IncidentCause.CriticalPhysicalEvent -> appContext.getString(R.string.validation_immediate_alert_requested)
+            IncidentCause.ManualSos -> appContext.getString(R.string.validation_help_requested)
         }
         is FalsePositiveValidationState.HelpRequested -> appContext.getString(R.string.validation_help_requested)
         is FalsePositiveValidationState.ImmediateAlertRequested -> appContext.getString(R.string.validation_immediate_alert_requested)

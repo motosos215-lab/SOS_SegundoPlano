@@ -247,7 +247,8 @@ class FalsePositiveValidationCoordinatorTest {
             assertEquals(AlertRetryState.NotStarted, state.dispatchRequest.retryState)
             assertEquals(1, fixture.incidents.items.value.size)
             assertEquals(1, fixture.requests.items.value.size)
-            assertEquals(0, fixture.remoteCreator.calls)
+            assertEquals(1, fixture.remoteCreator.calls)
+            assertEquals("remote-incident-1", state.incident.remoteIncidentId)
         } finally {
             fixture.close()
             runCurrent()
@@ -327,6 +328,9 @@ class FalsePositiveValidationCoordinatorTest {
             runCurrent()
             assertTrue(fixture.validation.states.value is FalsePositiveValidationState.ImmediateAlertRequested)
             assertEquals(1, fixture.requests.items.value.size)
+            assertEquals(1, fixture.remoteCreator.calls)
+            val state = fixture.validation.states.value as FalsePositiveValidationState.ImmediateAlertRequested
+            assertEquals("remote-incident-1", state.incident.remoteIncidentId)
         } finally {
             fixture.close()
             runCurrent()
