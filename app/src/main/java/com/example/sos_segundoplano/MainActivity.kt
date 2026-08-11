@@ -79,11 +79,13 @@ import com.example.sos_segundoplano.features.permissions.MonitoringStopFailureDi
 import com.example.sos_segundoplano.features.permissions.NotificationPermissionDialog
 import com.example.sos_segundoplano.features.permissions.NotificationRuntimePermissionGate
 import com.example.sos_segundoplano.features.profile.ProfileRoute
+import com.example.sos_segundoplano.features.sos.RiderSosScreen
 import com.example.sos_segundoplano.features.trip.HomeScreen
 import com.example.sos_segundoplano.features.trip.TripLocalSummaryScreen
 import com.example.sos_segundoplano.push.MonitorAlertIntent
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
 import kotlinx.coroutines.flow.StateFlow
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -117,11 +119,12 @@ class MainActivity : ComponentActivity() {
                                 tripSessionStore = TripSessionStoreProvider.store,
                                 tripTimingStore = TripTimingStoreProvider.store,
                                 offlineQueueSummaries = OfflineQueueProvider.get(applicationContext).repository.observeSummary(),
-                                profileContent = { onHomeSelected ->
+                                profileContent = { onHomeSelected, onSosSelected ->
                                     ProfileRoute(
                                         profileRepository = ProfileProvider.get(applicationContext),
                                         authRepository = authRepository,
-                                        onHomeSelected = onHomeSelected
+                                        onHomeSelected = onHomeSelected,
+                                        onSosSelected = onSosSelected
                                     )
                                 },
                                 onOpenAppSettings = ::openAppSettings,
@@ -215,11 +218,12 @@ fun MotoSosApp(
     onOpenNotificationSettings: () -> Unit = {},
     onOpenBluetoothSettings: () -> Unit = {},
     readinessLifecycleOwner: LifecycleOwner = LocalLifecycleOwner.current,
-    profileContent: (@Composable (() -> Unit) -> Unit)? = null
+    profileContent: (@Composable (() -> Unit, () -> Unit) -> Unit)? = null
 ) {
     val resolvedTripSessionStore = tripSessionStore ?: remember { InMemoryTripSessionStore() }
     val resolvedTripTimingStore = tripTimingStore
     var selectedScreen by remember { mutableStateOf(MotoSosAppScreen.Home) }
+    var sosReturnScreen by remember { mutableStateOf(MotoSosAppScreen.Home) }
     var isTripStartPending by remember { mutableStateOf(false) }
     var permissionDialogStatus by remember {
         mutableStateOf<BackgroundLocationPermissionStatus?>(null)
@@ -277,7 +281,26 @@ fun MotoSosApp(
         }
     }
 
-    if (currentState == TripSessionState.Active && selectedScreen != MotoSosAppScreen.Home) {
+    fun openManualSos() {
+        if (selectedScreen != MotoSosAppScreen.Sos) {
+            sosReturnScreen = if (currentState == TripSessionState.Active) {
+                MotoSosAppScreen.Home
+            } else {
+                selectedScreen
+            }
+            selectedScreen = MotoSosAppScreen.Sos
+        }
+    }
+
+    fun closeManualSos() {
+        selectedScreen = if (currentState == TripSessionState.Active) {
+            MotoSosAppScreen.Home
+        } else {
+            sosReturnScreen
+        }
+    }
+
+    if (currentState == TripSessionState.Active && selectedScreen == MotoSosAppScreen.Profile) {
         selectedScreen = MotoSosAppScreen.Home
     }
 
@@ -434,18 +457,43 @@ fun MotoSosApp(
             onReturnHome = ::dismissTripSummary,
             modifier = modifier
         )
+    } else if (currentState == TripSessionState.Active && emergencyStateKey != null && emergencyStateKey != dismissedEmergencyStateKey) {
+        AccidentCountdownScreen(
+            state = validationState,
+            modifier = modifier,
+            onContinueTrip = { dismissedEmergencyStateKey = emergencyStateKey }
+        )
+    } else if (selectedScreen == MotoSosAppScreen.Sos) {
+        val activeCountdown = validationState as? FalsePositiveValidationState.CountdownActive
+        RiderSosScreen(
+            canRequestLocalHelp = activeCountdown != null,
+            onRequestLocalHelp = {
+                activeCountdown?.let { countdown ->
+                    onRequestHelp(
+                        countdown.assessment.sessionId,
+                        countdown.assessment.assessmentId,
+                        UUID.randomUUID().toString()
+                    )
+                    selectedScreen = MotoSosAppScreen.Home
+                }
+            },
+            onNavigateBack = ::closeManualSos,
+            onHomeSelected = { selectedScreen = MotoSosAppScreen.Home },
+            onProfileSelected = {
+                selectedScreen = if (currentState == TripSessionState.Idle) {
+                    MotoSosAppScreen.Profile
+                } else {
+                    MotoSosAppScreen.Home
+                }
+            },
+            modifier = modifier
+        )
     } else if (validationState is FalsePositiveValidationState.CountdownActive) {
         AccidentCountdownScreen(
             state = validationState,
             modifier = modifier,
             onConfirmSafe = onConfirmSafe,
             onRequestHelp = onRequestHelp
-        )
-    } else if (currentState == TripSessionState.Active && emergencyStateKey != null && emergencyStateKey != dismissedEmergencyStateKey) {
-        AccidentCountdownScreen(
-            state = validationState,
-            modifier = modifier,
-            onContinueTrip = { dismissedEmergencyStateKey = emergencyStateKey }
         )
     } else when (currentState) {
         TripSessionState.Idle -> when (selectedScreen) {
@@ -458,6 +506,7 @@ fun MotoSosApp(
                 onLocationReadinessAction = ::showLocationReadinessAction,
                 onNotificationReadinessAction = ::showNotificationReadinessAction,
                 onBluetoothReadinessAction = ::showBluetoothReadinessAction,
+                onSosSelected = ::openManualSos,
                 onProfileSelected = {
                     refreshMonitoringReadiness()
                     selectedScreen = MotoSosAppScreen.Profile
@@ -465,7 +514,10 @@ fun MotoSosApp(
                 modifier = modifier
             )
 
-            MotoSosAppScreen.Profile -> profileContent?.invoke { selectedScreen = MotoSosAppScreen.Home }
+            MotoSosAppScreen.Profile -> profileContent?.invoke(
+                { selectedScreen = MotoSosAppScreen.Home },
+                ::openManualSos
+            )
                 ?: HomeScreen(
                     onStartTrip = {
                         isTripStartPending = true
@@ -475,9 +527,12 @@ fun MotoSosApp(
                     onLocationReadinessAction = ::showLocationReadinessAction,
                     onNotificationReadinessAction = ::showNotificationReadinessAction,
                     onBluetoothReadinessAction = ::showBluetoothReadinessAction,
+                    onSosSelected = ::openManualSos,
                     onProfileSelected = { selectedScreen = MotoSosAppScreen.Profile },
                     modifier = modifier
                 )
+
+            MotoSosAppScreen.Sos -> Unit
         }
 
         TripSessionState.Active -> MonitoringScreen(
@@ -487,6 +542,7 @@ fun MotoSosApp(
             snapshot = signalSnapshots.collectAsState().value,
             riskAssessmentState = riskAssessmentStates.collectAsState().value,
             offlineQueueSummary = offlineQueueSummary,
+            onSosSelected = ::openManualSos,
             onFinishTrip = {
                 finishActiveTrip()
             },
@@ -601,7 +657,7 @@ private fun FalsePositiveValidationState.canShowNormalTripSummary(): Boolean = w
     else -> true
 }
 
-private enum class MotoSosAppScreen { Home, Profile }
+private enum class MotoSosAppScreen { Home, Profile, Sos }
 
 @Preview(showBackground = true)
 @Composable

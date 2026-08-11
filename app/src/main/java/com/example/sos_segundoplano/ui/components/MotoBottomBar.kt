@@ -48,18 +48,23 @@ fun MotoBottomBar(
     modifier: Modifier = Modifier,
     enabledItems: Set<MotoBottomBarItem> = setOf(MotoBottomBarItem.Home),
     onHomeSelected: () -> Unit = {},
-    onProfileSelected: () -> Unit = {}
+    onSosSelected: () -> Unit = {},
+    onProfileSelected: () -> Unit = {},
+    containerColor: Color = MotoSurface,
+    contentColor: Color = MotoTextSecondary,
+    selectedColor: Color = MotoPrimaryDark,
+    dividerColor: Color = MotoDivider
 ) {
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(MotoSurface)
+            .background(containerColor)
     ) {
         Spacer(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(1.dp)
-                .background(MotoDivider)
+                .background(dividerColor)
         )
         Row(
             modifier = Modifier
@@ -78,7 +83,9 @@ fun MotoBottomBar(
                 selected = selectedItem == MotoBottomBarItem.Home,
                 enabled = MotoBottomBarItem.Home in enabledItems,
                 onClick = onHomeSelected,
-                testTag = "bottom_nav_home"
+                testTag = "bottom_nav_home",
+                contentColor = contentColor,
+                selectedColor = selectedColor
             )
             BottomItem(
                 label = stringResource(R.string.trips),
@@ -88,9 +95,16 @@ fun MotoBottomBar(
                 selected = selectedItem == MotoBottomBarItem.Trips,
                 enabled = MotoBottomBarItem.Trips in enabledItems,
                 onClick = {},
-                testTag = "bottom_nav_trips"
+                testTag = "bottom_nav_trips",
+                contentColor = contentColor,
+                selectedColor = selectedColor
             )
-            SosItem()
+            SosItem(
+                selected = selectedItem == MotoBottomBarItem.Sos,
+                enabled = MotoBottomBarItem.Sos in enabledItems,
+                onClick = onSosSelected,
+                labelColor = if (selectedItem == MotoBottomBarItem.Sos) selectedColor else contentColor
+            )
             BottomItem(
                 label = stringResource(R.string.map),
                 iconRes = R.drawable.ic_location_pin,
@@ -99,7 +113,9 @@ fun MotoBottomBar(
                 selected = selectedItem == MotoBottomBarItem.Map,
                 enabled = MotoBottomBarItem.Map in enabledItems,
                 onClick = {},
-                testTag = "bottom_nav_map"
+                testTag = "bottom_nav_map",
+                contentColor = contentColor,
+                selectedColor = selectedColor
             )
             BottomItem(
                 label = stringResource(R.string.profile),
@@ -109,7 +125,9 @@ fun MotoBottomBar(
                 selected = selectedItem == MotoBottomBarItem.Profile,
                 enabled = MotoBottomBarItem.Profile in enabledItems,
                 onClick = onProfileSelected,
-                testTag = "bottom_nav_profile"
+                testTag = "bottom_nav_profile",
+                contentColor = contentColor,
+                selectedColor = selectedColor
             )
         }
     }
@@ -118,6 +136,7 @@ fun MotoBottomBar(
 enum class MotoBottomBarItem {
     Home,
     Trips,
+    Sos,
     Map,
     Profile
 }
@@ -131,9 +150,11 @@ private fun BottomItem(
     selected: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
-    testTag: String
+    testTag: String,
+    contentColor: Color,
+    selectedColor: Color
 ) {
-    val color = if (selected) MotoPrimaryDark else MotoTextSecondary
+    val color = if (selected) selectedColor else contentColor
     Column(
         modifier = Modifier
             .size(width = 56.dp, height = 58.dp)
@@ -172,16 +193,30 @@ private fun BottomItem(
 }
 
 @Composable
-private fun SosItem() {
+private fun SosItem(
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    labelColor: Color
+) {
     val contentDescription = stringResource(R.string.sos)
     Column(
         modifier = Modifier
             .size(width = 68.dp, height = 70.dp)
             .offset(y = (-6).dp)
             .testTag("bottom_nav_sos")
+            .then(
+                if (enabled) {
+                    Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+                } else {
+                    Modifier
+                }
+            )
             .semantics {
                 this.contentDescription = contentDescription
-                disabled()
+                role = androidx.compose.ui.semantics.Role.Button
+                this.selected = selected
+                if (!enabled) disabled()
             },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -189,8 +224,14 @@ private fun SosItem() {
         MotoAssetIcon(
             iconRes = R.drawable.ic_sos_badge,
             contentDescription = null,
-            viewportSize = 64.dp,
-            assetSize = 82.dp
+            viewportSize = 52.dp,
+            assetSize = 76.dp
+        )
+        Text(
+            text = contentDescription,
+            style = MaterialTheme.typography.labelSmall,
+            color = labelColor,
+            fontWeight = FontWeight.SemiBold
         )
     }
 }

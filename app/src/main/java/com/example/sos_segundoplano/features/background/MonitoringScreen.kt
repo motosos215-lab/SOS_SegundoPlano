@@ -73,6 +73,7 @@ fun MonitoringScreen(
     tripTimingStates: StateFlow<TripTimingState>? = null,
     elapsedRealtimeClock: ElapsedRealtimeClock = AndroidElapsedRealtimeClock,
     onFinishTrip: () -> Unit = {},
+    onSosSelected: () -> Unit = {},
     isFinishTripEnabled: Boolean = true
 ) {
     val timingState = tripTimingStates?.let { states ->
@@ -92,7 +93,11 @@ fun MonitoringScreen(
             )
         },
         bottomBar = {
-            MotoBottomBar(selectedItem = MotoBottomBarItem.Home)
+            MotoBottomBar(
+                selectedItem = MotoBottomBarItem.Home,
+                enabledItems = setOf(MotoBottomBarItem.Home, MotoBottomBarItem.Sos),
+                onSosSelected = onSosSelected
+            )
         }
     ) { innerPadding ->
         Column(

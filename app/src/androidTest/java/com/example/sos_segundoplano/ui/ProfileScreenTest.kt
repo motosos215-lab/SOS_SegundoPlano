@@ -41,10 +41,11 @@ class ProfileScreenTest {
     @Test fun homeBottomBarOpensProfileAndBackReturnsHomeWithoutPermissionsOrService() {
         var starterCalls = 0
         setAppContent(
-            profileContent = { onHome ->
+            profileContent = { onHome, onSos ->
                 ProfileScreen(
                     state = ProfileUiState(profile = profile()),
                     onHomeSelected = onHome,
+                    onSosSelected = onSos,
                     onRetry = {},
                     onLogoutSelected = {},
                     onLogoutDismissed = {},
@@ -61,6 +62,10 @@ class ProfileScreenTest {
         composeRule.onNodeWithText("Perfil").assertIsDisplayed().performClick()
         composeRule.onNodeWithTag("profile_screen").assertIsDisplayed()
         composeRule.onNodeWithTag("profile_full_name").assertIsDisplayed()
+        composeRule.onNodeWithTag("bottom_nav_sos").performClick()
+        composeRule.onNodeWithTag("rider_sos_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("cancel_sos_button").performClick()
+        composeRule.onNodeWithTag("profile_screen").assertIsDisplayed()
         composeRule.onNodeWithText("Inicio").performClick()
         composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
 
@@ -168,7 +173,7 @@ class ProfileScreenTest {
         assertEquals(1, logoutCalls)
     }
 
-    @Test fun disabledBottomItemsAndActiveTripFlowRemainUnchanged() {
+    @Test fun bottomNavigationReflectsSosAvailabilityAndActiveTripRemainsUnchanged() {
         var startTripCalls = 0
         setAppContent(
             startTrip = { state ->
@@ -183,7 +188,7 @@ class ProfileScreenTest {
         composeRule.onNodeWithTag("bottom_nav_home").assertIsEnabled()
         composeRule.onNodeWithTag("bottom_nav_trips").assertIsNotEnabled()
         composeRule.onNodeWithTag("bottom_nav_map").assertIsNotEnabled()
-        composeRule.onNodeWithTag("bottom_nav_sos").assertIsNotEnabled()
+        composeRule.onNodeWithTag("bottom_nav_sos").assertIsEnabled()
         composeRule.onNodeWithTag("bottom_nav_profile").assertIsEnabled()
         composeRule.onNodeWithTag("start_trip_button").performClick()
         composeRule.onNodeWithTag("monitoring_screen").assertIsDisplayed()
@@ -211,7 +216,7 @@ class ProfileScreenTest {
     }
 
     private fun setAppContent(
-        profileContent: (@androidx.compose.runtime.Composable (() -> Unit) -> Unit)? = null,
+        profileContent: (@androidx.compose.runtime.Composable (() -> Unit, () -> Unit) -> Unit)? = null,
         monitoringServiceStarter: MonitoringServiceStarter = MonitoringServiceStarter { MonitoringServiceStartResult.Started },
         startTrip: (TripSessionState) -> TripSessionState = { state ->
             when (state) {

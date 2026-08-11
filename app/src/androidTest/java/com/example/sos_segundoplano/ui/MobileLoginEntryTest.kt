@@ -163,6 +163,8 @@ class MobileLoginEntryTest {
         composeRule.onNodeWithText("Cerrar sesión").assertIsDisplayed()
         composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
         composeRule.onAllNodesWithTag("monitoring_readiness_card").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("rider_sos_screen").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("bottom_nav_sos").assertCountEquals(0)
         composeRule.onAllNodesWithText("Monitoreo").assertCountEquals(0)
         assertEquals(0, riderCompositionCount)
     }
