@@ -30,7 +30,10 @@ import com.example.sos_segundoplano.ui.theme.MotoTextPrimary
 import com.example.sos_segundoplano.ui.theme.MotoTextSecondary
 
 @Composable
-fun MotoMonitoringIndicator(modifier: Modifier = Modifier) {
+fun MotoMonitoringIndicator(
+    durationText: String?,
+    modifier: Modifier = Modifier
+) {
     val contentDescription = stringResource(R.string.cd_monitoring_indicator)
     Box(
         modifier = modifier
@@ -76,7 +79,7 @@ fun MotoMonitoringIndicator(modifier: Modifier = Modifier) {
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = stringResource(R.string.time_placeholder),
+                text = durationText ?: stringResource(R.string.trip_duration_unknown),
                 style = MaterialTheme.typography.headlineMedium,
                 color = MotoTextPrimary,
                 fontWeight = FontWeight.SemiBold,

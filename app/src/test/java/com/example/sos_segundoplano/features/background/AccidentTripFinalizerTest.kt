@@ -12,7 +12,9 @@ import com.example.sos_segundoplano.domain.validation.ValidationDecisionReason
 import com.example.sos_segundoplano.domain.validation.ValidationMetadata
 import com.example.sos_segundoplano.domain.validation.ValidationOrigin
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.example.sos_segundoplano.domain.trip.TripTimingState
 
 class AccidentTripFinalizerTest {
     @Test fun safeConfirmedNeverFinishesTrip() {
@@ -22,6 +24,17 @@ class AccidentTripFinalizerTest {
         finalizer.onValidationStateChanged(FalsePositiveValidationState.SafeConfirmed(metadata(), "safe-1"))
 
         assertEquals(0, finishCount)
+    }
+
+    @Test fun safeConfirmedKeepsTripTimingWhilePersistedAccidentClearsIt() {
+        var timingState: TripTimingState = TripTimingState.Active(1_000L)
+        val finalizer = AccidentTripFinalizer { timingState = TripTimingState.Unknown }
+
+        finalizer.onValidationStateChanged(FalsePositiveValidationState.SafeConfirmed(metadata(), "safe-timing"))
+        assertTrue(timingState is TripTimingState.Active)
+
+        finalizer.onValidationStateChanged(incidentGenerated(IncidentCause.Timeout))
+        assertEquals(TripTimingState.Unknown, timingState)
     }
 
     @Test fun helpRequestedDoesNotFinishBeforePersistence() {

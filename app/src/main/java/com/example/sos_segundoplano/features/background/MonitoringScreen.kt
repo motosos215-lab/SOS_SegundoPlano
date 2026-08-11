@@ -23,6 +23,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -38,6 +44,10 @@ import com.example.sos_segundoplano.domain.signals.CaptureState
 import com.example.sos_segundoplano.domain.signals.TripSignalSnapshot
 import com.example.sos_segundoplano.domain.signals.WearableSample
 import com.example.sos_segundoplano.domain.signals.WearableStatus
+import com.example.sos_segundoplano.data.trip.AndroidElapsedRealtimeClock
+import com.example.sos_segundoplano.domain.trip.ElapsedRealtimeClock
+import com.example.sos_segundoplano.domain.trip.TripDurationFormatter
+import com.example.sos_segundoplano.domain.trip.TripTimingState
 import com.example.sos_segundoplano.ui.components.MotoBottomBar
 import com.example.sos_segundoplano.ui.components.MotoBottomBarItem
 import com.example.sos_segundoplano.ui.components.MotoMetricCard
@@ -51,6 +61,8 @@ import com.example.sos_segundoplano.ui.theme.MotoSurface
 import com.example.sos_segundoplano.ui.theme.MotoSuccess
 import com.example.sos_segundoplano.ui.theme.MotoTextPrimary
 import com.example.sos_segundoplano.ui.theme.MotoTextSecondary
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
 
 @Composable
 fun MonitoringScreen(
@@ -58,9 +70,15 @@ fun MonitoringScreen(
     snapshot: TripSignalSnapshot = TripSignalSnapshot(),
     riskAssessmentState: RiskAssessmentState = RiskAssessmentState.Idle,
     offlineQueueSummary: OfflineQueueSummary = OfflineQueueSummary(),
+    tripTimingStates: StateFlow<TripTimingState>? = null,
+    elapsedRealtimeClock: ElapsedRealtimeClock = AndroidElapsedRealtimeClock,
     onFinishTrip: () -> Unit = {},
     isFinishTripEnabled: Boolean = true
 ) {
+    val timingState = tripTimingStates?.let { states ->
+        states.collectAsState().value
+    } ?: TripTimingState.Unknown
+    val durationText = activeTripDurationText(timingState, elapsedRealtimeClock)
     Scaffold(
         modifier = modifier
             .fillMaxSize()
@@ -86,7 +104,7 @@ fun MonitoringScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            MotoMonitoringIndicator()
+            MotoMonitoringIndicator(durationText = durationText)
             Text(
                 text = stringResource(R.string.background_monitoring_active),
                 style = MaterialTheme.typography.bodyMedium,
@@ -127,6 +145,24 @@ fun MonitoringScreen(
         }
     }
 }
+
+@Composable
+private fun activeTripDurationText(
+    timingState: TripTimingState,
+    clock: ElapsedRealtimeClock
+): String? {
+    var now by remember(timingState) { mutableLongStateOf(clock.nowMillis()) }
+    LaunchedEffect(timingState, clock) {
+        if (timingState !is TripTimingState.Active) return@LaunchedEffect
+        while (true) {
+            now = clock.nowMillis()
+            delay(DURATION_REFRESH_MILLIS)
+        }
+    }
+    return TripDurationFormatter.format(timingState, now)
+}
+
+private const val DURATION_REFRESH_MILLIS = 1_000L
 
 @Composable
 private fun MonitoringStatusPanel(captureState: CaptureState) {

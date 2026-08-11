@@ -43,7 +43,7 @@
     <string name="heart_rate">Frecuencia cardiaca</string>
     <string name="pending">Pendiente</string>
     <string name="not_available_value">--</string>
-    <string name="time_placeholder">--:--:--</string>
+    <string name="trip_duration_unknown">En curso</string>
     <string name="speed_unit">km/h</string>
     <string name="finish_trip">Finalizar viaje</string>
     <string name="trips">Viajes</string>
