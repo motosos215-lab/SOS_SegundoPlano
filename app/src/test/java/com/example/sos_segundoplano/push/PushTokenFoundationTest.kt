@@ -66,6 +66,21 @@ class PushTokenFoundationTest {
         }
     }
 
+    @Test fun initialOrRotatedTokenCanScheduleRegistrationAfterItIsPersisted() {
+        val store = FakePushTokenStore()
+        var syncCalls = 0
+        val bootstrap = PushTokenBootstrap(
+            coordinator = PushTokenCoordinator(store),
+            fetcher = InitialPushTokenFetcher { callback -> callback(ROTATED_FAKE_TOKEN) },
+            onTokenRecorded = { syncCalls++ }
+        )
+
+        bootstrap.start()
+
+        assertEquals(ROTATED_FAKE_TOKEN, store.state.pendingToken)
+        assertEquals(1, syncCalls)
+    }
+
     private companion object {
         const val FIRST_FAKE_TOKEN = "fake-fcm-token-v1-not-real"
         const val ROTATED_FAKE_TOKEN = "fake-fcm-token-v2-not-real"

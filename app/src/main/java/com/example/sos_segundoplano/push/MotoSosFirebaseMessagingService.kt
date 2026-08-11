@@ -3,6 +3,7 @@ package com.example.sos_segundoplano.push
 import android.util.Log
 import com.example.sos_segundoplano.BuildConfig
 import com.example.sos_segundoplano.core.push.PushTokenProvider
+import com.example.sos_segundoplano.core.push.PushTokenRegistrationProvider
 import com.example.sos_segundoplano.domain.push.PushTokenHandler
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
@@ -10,6 +11,7 @@ import com.google.firebase.messaging.RemoteMessage
 class MotoSosFirebaseMessagingService : FirebaseMessagingService() {
     override fun onNewToken(token: String) {
         PushTokenHandler(PushTokenProvider.get(applicationContext)).onNewToken(token)
+        PushTokenRegistrationProvider.scheduleSync()
         if (BuildConfig.DEBUG) Log.d(TAG, PushDiagnostics.tokenUpdated())
     }
 

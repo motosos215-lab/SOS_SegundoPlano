@@ -6,6 +6,7 @@ import com.example.sos_segundoplano.data.local.auth.KeystoreEncryptedSessionStor
 import com.example.sos_segundoplano.data.remote.auth.AuthNetworkFactory
 import com.example.sos_segundoplano.data.remote.auth.RetrofitAuthRemoteDataSource
 import com.example.sos_segundoplano.data.repository.DefaultAuthRepository
+import com.example.sos_segundoplano.core.push.PushTokenRegistrationProvider
 import com.example.sos_segundoplano.domain.auth.SystemAuthClock
 import com.example.sos_segundoplano.domain.repository.AuthRepository
 import com.example.sos_segundoplano.domain.auth.AuthResult
@@ -40,10 +41,15 @@ object AuthProvider {
     private fun create(context: Context): AuthRepository {
         val moshi = AuthNetworkFactory.createMoshi()
         val api = AuthNetworkFactory.createApi(BuildConfig.MOTOSOS_API_BASE_URL, moshi)
-        return DefaultAuthRepository(
+        val baseRepository = DefaultAuthRepository(
             remoteDataSource = RetrofitAuthRemoteDataSource(api, moshi),
             sessionStore = KeystoreEncryptedSessionStore(context, moshi),
             clock = SystemAuthClock
+        )
+        return PushAwareAuthRepository(
+            delegate = baseRepository,
+            onMonitorSessionAvailable = PushTokenRegistrationProvider::scheduleSync,
+            beforeMonitorLogout = { PushTokenRegistrationProvider.revokeBeforeLogout() }
         )
     }
 }

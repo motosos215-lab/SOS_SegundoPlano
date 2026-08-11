@@ -1,8 +1,10 @@
 package com.example.sos_segundoplano.core.push
 
 import android.content.Context
+import com.example.sos_segundoplano.core.auth.AuthProvider
 import com.example.sos_segundoplano.data.local.push.KeystoreEncryptedPushTokenStore
 import com.example.sos_segundoplano.domain.push.PushTokenCoordinator
+import com.example.sos_segundoplano.domain.push.PushTokenStoreResult
 import com.google.firebase.messaging.FirebaseMessaging
 
 fun interface InitialPushTokenFetcher {
@@ -19,11 +21,16 @@ class FirebaseInitialPushTokenFetcher : InitialPushTokenFetcher {
 
 class PushTokenBootstrap(
     private val coordinator: PushTokenCoordinator,
-    private val fetcher: InitialPushTokenFetcher
+    private val fetcher: InitialPushTokenFetcher,
+    private val onTokenRecorded: () -> Unit = {}
 ) {
     fun start() {
         runCatching {
-            fetcher.fetch { token -> coordinator.recordToken(token) }
+            fetcher.fetch { token ->
+                if (coordinator.recordToken(token) is PushTokenStoreResult.Success) {
+                    onTokenRecorded()
+                }
+            }
         }
     }
 }
@@ -33,7 +40,15 @@ object PushTokenProvider {
 
     fun initialize(context: Context) {
         val installed = get(context)
-        PushTokenBootstrap(installed, FirebaseInitialPushTokenFetcher()).start()
+        PushTokenRegistrationProvider.initialize(
+            authRepository = AuthProvider.get(context.applicationContext),
+            store = installed.store()
+        )
+        PushTokenBootstrap(
+            installed,
+            FirebaseInitialPushTokenFetcher(),
+            PushTokenRegistrationProvider::scheduleSync
+        ).start()
     }
 
     fun get(context: Context): PushTokenCoordinator = coordinator ?: synchronized(this) {
