@@ -9,8 +9,8 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import com.example.sos_segundoplano.data.signals.TripSignalCaptureCoordinator
 import com.example.sos_segundoplano.data.remote.trip.TripRemoteSessionProvider
+import com.example.sos_segundoplano.data.signals.TripSignalCaptureCoordinator
 import com.example.sos_segundoplano.data.trip.TripSessionStoreProvider
 import com.example.sos_segundoplano.data.trip.TripTimingStoreProvider
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationLogger
@@ -100,7 +100,6 @@ class MonitoringForegroundService : Service() {
         captureCoordinator.stop()
         TripTimingStoreProvider.store.clear()
         TripSessionStoreProvider.store.setState(TripSessionState.Idle)
-        TripRemoteSessionProvider.get(applicationContext).store.clearRemoteTripId()
         super.onDestroy()
     }
 

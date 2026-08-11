@@ -27,6 +27,7 @@ object IncidentRemoteProvider {
             authRepository = AuthProvider.get(context),
             remoteDataSource = RetrofitIncidentRemoteDataSource(api, moshi),
             activeTripRemoteResolver = tripSession.reconciler,
+            remoteIncidentLinkStore = SharedPreferencesRemoteIncidentLinkStore(context),
             logger = AndroidIncidentRemoteLogger
         )
     }
@@ -47,6 +48,10 @@ private object AndroidIncidentRemoteLogger : IncidentRemoteLogger {
 
     override fun incidentCreationFailed() {
         Log.w(TAG, "incident creation failed")
+    }
+
+    override fun remoteIncidentPersistenceFailed() {
+        Log.w(TAG, "remote incident persistence failed")
     }
 
     private const val TAG = "MotoSOS.IncidentRemote"

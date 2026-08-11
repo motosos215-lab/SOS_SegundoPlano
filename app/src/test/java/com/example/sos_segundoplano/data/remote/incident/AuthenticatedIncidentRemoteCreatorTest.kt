@@ -118,9 +118,105 @@ class AuthenticatedIncidentRemoteCreatorTest {
         }
     }
 
+    @Test fun successfulRemoteIdIsDurableAndPreventsDuplicatePostAfterCreatorRecreation() = runBlocking {
+        val linkStore = InMemoryRemoteIncidentLinkStore()
+        val firstRemote = FakeIncidentRemoteDataSource(IncidentRemoteCreationStatus.Success("incident-remote-1"))
+        val firstCreator = AuthenticatedIncidentRemoteCreator(
+            authRepository = FakeAuthRepository(),
+            remoteDataSource = firstRemote,
+            activeTripRemoteResolver = FakeActiveTripRemoteResolver(ActiveTripLookupResult.Found("remote-trip-1")),
+            remoteIncidentLinkStore = linkStore,
+            nowUtc = { Instant.parse("2026-08-08T14:20:00Z") }
+        )
+
+        val first = firstCreator.createIncident(incident())
+        val secondRemote = FakeIncidentRemoteDataSource(IncidentRemoteCreationStatus.Success("unexpected-duplicate"))
+        val restoredCreator = AuthenticatedIncidentRemoteCreator(
+            authRepository = FakeAuthRepository(),
+            remoteDataSource = secondRemote,
+            activeTripRemoteResolver = FakeActiveTripRemoteResolver(ActiveTripLookupResult.NoActiveTrip),
+            remoteIncidentLinkStore = linkStore
+        )
+
+        val restored = restoredCreator.createIncident(incident())
+
+        assertEquals(1, firstRemote.calls)
+        assertEquals(0, secondRemote.calls)
+        assertEquals(first.clientIncidentId, restored.clientIncidentId)
+        assertEquals("incident-remote-1", restored.remoteIncidentId)
+        assertEquals(RemoteIncidentSyncState.Created, linkStore.read(requireNotNull(first.clientIncidentId))?.syncState)
+    }
+
+    @Test fun failedPostKeepsPendingLinkAndRetryReusesClientIncidentId() = runBlocking {
+        val linkStore = InMemoryRemoteIncidentLinkStore()
+        val failedCreator = AuthenticatedIncidentRemoteCreator(
+            authRepository = FakeAuthRepository(),
+            remoteDataSource = FakeIncidentRemoteDataSource(IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable")),
+            activeTripRemoteResolver = FakeActiveTripRemoteResolver(ActiveTripLookupResult.Found("remote-trip-1")),
+            remoteIncidentLinkStore = linkStore,
+            nowUtc = { Instant.parse("2026-08-08T14:20:00Z") }
+        )
+
+        val failed = failedCreator.createIncident(incident())
+        val pending = linkStore.read(requireNotNull(failed.clientIncidentId))
+        val retryCreator = AuthenticatedIncidentRemoteCreator(
+            authRepository = FakeAuthRepository(),
+            remoteDataSource = FakeIncidentRemoteDataSource(IncidentRemoteCreationStatus.Success("incident-remote-1")),
+            activeTripRemoteResolver = FakeActiveTripRemoteResolver(ActiveTripLookupResult.Found("remote-trip-1")),
+            remoteIncidentLinkStore = linkStore,
+            nowUtc = { Instant.parse("2026-08-08T14:21:00Z") }
+        )
+
+        val retried = retryCreator.createIncident(incident())
+
+        assertEquals(RemoteIncidentSyncState.Pending, pending?.syncState)
+        assertEquals(failed.clientIncidentId, retried.clientIncidentId)
+        assertEquals("incident-remote-1", retried.remoteIncidentId)
+        assertEquals(RemoteIncidentSyncState.Created, linkStore.read(requireNotNull(retried.clientIncidentId))?.syncState)
+    }
+
+    @Test fun persistenceFailurePreventsPostingAnIncidentWithoutDurableLink() = runBlocking {
+        val remote = FakeIncidentRemoteDataSource(IncidentRemoteCreationStatus.Success("incident-remote-1"))
+        val creator = AuthenticatedIncidentRemoteCreator(
+            authRepository = FakeAuthRepository(),
+            remoteDataSource = remote,
+            activeTripRemoteResolver = FakeActiveTripRemoteResolver(ActiveTripLookupResult.Found("remote-trip-1")),
+            remoteIncidentLinkStore = object : RemoteIncidentLinkStore {
+                override fun read(clientIncidentId: String): RemoteIncidentLink? = null
+                override fun save(link: RemoteIncidentLink): Boolean = false
+            }
+        )
+
+        val created = creator.createIncident(incident())
+
+        assertEquals(0, remote.calls)
+        assertEquals(
+            IncidentRemoteCreationStatus.InvalidResponse("incident_link_persistence_failed"),
+            created.remoteCreationStatus
+        )
+    }
+
+    @Test fun unconfirmedHelpAndCriticalWireCausesRemainBlockedWithoutInventedPosts() = runBlocking {
+        listOf(IncidentCause.UserRequestedHelp, IncidentCause.CriticalPhysicalEvent).forEach { cause ->
+            val remote = FakeIncidentRemoteDataSource(IncidentRemoteCreationStatus.Success("unexpected-remote-id"))
+            val creator = AuthenticatedIncidentRemoteCreator(
+                authRepository = FakeAuthRepository(),
+                remoteDataSource = remote,
+                activeTripRemoteResolver = FakeActiveTripRemoteResolver(ActiveTripLookupResult.Found("remote-trip-1"))
+            )
+
+            val unchanged = creator.createIncident(incident(cause = cause))
+
+            assertEquals(0, remote.calls)
+            assertEquals(IncidentRemoteCreationStatus.NotRequested, unchanged.remoteCreationStatus)
+            assertEquals(null, unchanged.clientIncidentId)
+        }
+    }
+
     private class FakeIncidentRemoteDataSource(
         private val status: IncidentRemoteCreationStatus
     ) : IncidentRemoteDataSource {
+        var calls = 0
         var authorization: String? = null
         var request: CreateIncidentRequestDto? = null
 
@@ -128,6 +224,7 @@ class AuthenticatedIncidentRemoteCreatorTest {
             authorization: String,
             request: CreateIncidentRequestDto
         ): IncidentRemoteCreationStatus {
+            calls++
             this.authorization = authorization
             this.request = request
             return status
@@ -151,13 +248,16 @@ class AuthenticatedIncidentRemoteCreatorTest {
         override suspend fun resolveActiveTrip(): ActiveTripLookupResult = result
     }
 
-    private fun incident(score: Int? = 75): LocalIncident = LocalIncident(
+    private fun incident(
+        score: Int? = 75,
+        cause: IncidentCause = IncidentCause.Timeout
+    ): LocalIncident = LocalIncident(
         incidentId = 1L,
         sessionId = 1L,
         assessmentId = 2L,
         windowId = 3L,
         createdAtElapsedRealtimeNanos = 4L,
-        cause = IncidentCause.Timeout,
+        cause = cause,
         score = score,
         riskLevel = RiskLevel.High,
         confidence = 0.8,
