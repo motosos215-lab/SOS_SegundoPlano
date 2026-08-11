@@ -61,6 +61,7 @@ class TripSessionRestorationTest {
 
         composeRule.onNodeWithTag("monitoring_screen").assertIsDisplayed()
         composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("trip_local_summary_screen").assertCountEquals(0)
     }
 
     @Test fun activeSessionWithCountdownOpensAccidentScreenFirst() {
@@ -72,6 +73,7 @@ class TripSessionRestorationTest {
         composeRule.onNodeWithTag("accident_countdown_screen").assertIsDisplayed()
         composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
         composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("trip_local_summary_screen").assertCountEquals(0)
     }
 
     @Test fun safeConfirmedKeepsActiveSessionOnMonitoring() {
@@ -84,6 +86,7 @@ class TripSessionRestorationTest {
         composeRule.onNodeWithTag("monitoring_screen").assertIsDisplayed()
         composeRule.onAllNodesWithTag("accident_countdown_screen").assertCountEquals(0)
         composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("trip_local_summary_screen").assertCountEquals(0)
         assertEquals(TripSessionState.Active, store.states.value)
     }
 
@@ -118,7 +121,7 @@ class TripSessionRestorationTest {
         assertEquals(1, starter.invocationCount)
     }
 
-    @Test fun successfulFinishMarksIdleAndReturnsHome() {
+    @Test fun successfulFinishMarksIdleShowsSummaryAndReturnsHome() {
         val store = InMemoryTripSessionStore(TripSessionState.Active)
         setAppContent(
             store = store,
@@ -127,12 +130,18 @@ class TripSessionRestorationTest {
 
         composeRule.onNodeWithTag("finish_trip_button").performScrollTo().performClick()
 
-        composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("trip_local_summary_screen").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
         composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
         assertEquals(TripSessionState.Idle, store.states.value)
+
+        composeRule.onNodeWithTag("trip_summary_return_home").performClick()
+
+        composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("trip_local_summary_screen").assertCountEquals(0)
     }
 
-    @Test fun alreadyStoppedFinishMarksIdleAndReturnsHome() {
+    @Test fun alreadyStoppedFinishMarksIdleShowsSummaryAndReturnsHome() {
         val store = InMemoryTripSessionStore(TripSessionState.Active)
         setAppContent(
             store = store,
@@ -141,9 +150,15 @@ class TripSessionRestorationTest {
 
         composeRule.onNodeWithTag("finish_trip_button").performScrollTo().performClick()
 
-        composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("trip_local_summary_screen").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
         composeRule.onAllNodesWithTag("monitoring_screen").assertCountEquals(0)
         assertEquals(TripSessionState.Idle, store.states.value)
+
+        composeRule.onNodeWithTag("trip_summary_return_home").performClick()
+
+        composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("trip_local_summary_screen").assertCountEquals(0)
     }
 
     @Test fun successfulFinishClearsActiveTripTiming() {
@@ -162,7 +177,14 @@ class TripSessionRestorationTest {
         composeRule.onNodeWithTag("finish_trip_button").performScrollTo().performClick()
 
         assertEquals(TripTimingState.Unknown, timingStore.states.value)
+        assertEquals(TripSessionState.Idle, sessionStore.states.value)
+        composeRule.onNodeWithTag("trip_local_summary_screen").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
+
+        composeRule.onNodeWithTag("trip_summary_return_home").performClick()
+
         composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("trip_local_summary_screen").assertCountEquals(0)
     }
 
     @Test fun failedFinishKeepsActiveMonitoring() {

@@ -15,6 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.activity.compose.BackHandler
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
@@ -52,6 +53,9 @@ import com.example.sos_segundoplano.domain.signals.TripSignalSnapshot
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
 import com.example.sos_segundoplano.domain.validation.UserResponseSource
 import com.example.sos_segundoplano.domain.trip.ElapsedRealtimeClock
+import com.example.sos_segundoplano.domain.trip.TripLocalSummary
+import com.example.sos_segundoplano.domain.trip.TripLocalSummaryFactory
+import com.example.sos_segundoplano.domain.trip.TripTimingState
 import com.example.sos_segundoplano.domain.trip.TripTimingStore
 import com.example.sos_segundoplano.features.background.AccidentCountdownScreen
 import com.example.sos_segundoplano.domain.usecase.FinishTripUseCase
@@ -68,6 +72,7 @@ import com.example.sos_segundoplano.features.permissions.NotificationPermissionD
 import com.example.sos_segundoplano.features.permissions.NotificationRuntimePermissionGate
 import com.example.sos_segundoplano.features.profile.ProfileRoute
 import com.example.sos_segundoplano.features.trip.HomeScreen
+import com.example.sos_segundoplano.features.trip.TripLocalSummaryScreen
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
 import kotlinx.coroutines.flow.StateFlow
 
@@ -204,6 +209,8 @@ fun MotoSosApp(
     var monitoringStartFailureVisible by remember { mutableStateOf(false) }
     var isTripFinishInProgress by remember { mutableStateOf(false) }
     var monitoringStopFailureVisible by remember { mutableStateOf(false) }
+    var tripSummaryVisible by rememberSaveable { mutableStateOf(false) }
+    var tripSummaryDuration by rememberSaveable { mutableStateOf<String?>(null) }
     val currentState = resolvedTripSessionStore.states.collectAsState().value
     val validationState = validationStates.collectAsState().value
     val offlineQueueSummary = (offlineQueueSummaries ?: kotlinx.coroutines.flow.flowOf(OfflineQueueSummary()))
@@ -219,6 +226,12 @@ fun MotoSosApp(
         selectedScreen = MotoSosAppScreen.Home
     }
 
+    fun dismissTripSummary() {
+        tripSummaryVisible = false
+        tripSummaryDuration = null
+        selectedScreen = MotoSosAppScreen.Home
+    }
+
     fun validateTripStartRequirements() {
         when (val locationStatus = locationPermissionStatusProvider.getStatus()) {
             BackgroundLocationPermissionStatus.Granted -> {
@@ -229,6 +242,7 @@ fun MotoSosApp(
                                 if (isTripStartPending && currentState == TripSessionState.Idle) {
                                     when (monitoringServiceStarter.start()) {
                                         MonitoringServiceStartResult.Started -> {
+                                            dismissTripSummary()
                                             val nextState = startTripUseCase(currentState)
                                             resolvedTripSessionStore.setState(nextState)
                                             isTripStartPending = false
@@ -296,6 +310,12 @@ fun MotoSosApp(
 
         isTripFinishInProgress = true
         monitoringStopFailureVisible = false
+        val frozenSummary = if (validationState.canShowNormalTripSummary()) {
+            val timingState = resolvedTripTimingStore?.states?.value ?: TripTimingState.Unknown
+            TripLocalSummaryFactory(elapsedRealtimeClock).capture(timingState)
+        } else {
+            null
+        }
 
         when (monitoringServiceStopper.stop()) {
             MonitoringServiceStopResult.Stopped,
@@ -303,6 +323,8 @@ fun MotoSosApp(
                 resolvedTripTimingStore?.clear()
                 val nextState = finishTripUseCase(currentState)
                 resolvedTripSessionStore.setState(nextState)
+                tripSummaryDuration = frozenSummary?.durationText
+                tripSummaryVisible = frozenSummary != null
                 isTripFinishInProgress = false
                 monitoringStopFailureVisible = false
                 isTripStartPending = false
@@ -320,7 +342,13 @@ fun MotoSosApp(
     }
 
     val emergencyStateKey = validationState.emergencyScreenKey()
-    if (validationState is FalsePositiveValidationState.CountdownActive) {
+    if (tripSummaryVisible && currentState == TripSessionState.Idle) {
+        TripLocalSummaryScreen(
+            summary = TripLocalSummary(tripSummaryDuration),
+            onReturnHome = ::dismissTripSummary,
+            modifier = modifier
+        )
+    } else if (validationState is FalsePositiveValidationState.CountdownActive) {
         AccidentCountdownScreen(
             state = validationState,
             modifier = modifier,
@@ -453,6 +481,15 @@ private fun FalsePositiveValidationState.emergencyScreenKey(): String? = when (t
     is FalsePositiveValidationState.ImmediateAlertRequested -> "immediate-${incident.sessionId}-${incident.assessmentId}-${incident.incidentId}"
     is FalsePositiveValidationState.Error -> "error-${metadata?.sessionId}-${metadata?.assessmentId}-$message"
     else -> null
+}
+
+private fun FalsePositiveValidationState.canShowNormalTripSummary(): Boolean = when (this) {
+    is FalsePositiveValidationState.CountdownActive,
+    is FalsePositiveValidationState.HelpRequested,
+    is FalsePositiveValidationState.IncidentGenerated,
+    is FalsePositiveValidationState.ImmediateAlertRequested,
+    is FalsePositiveValidationState.Error -> false
+    else -> true
 }
 
 private enum class MotoSosAppScreen { Home, Profile }
