@@ -23,7 +23,9 @@ object TripRemoteSessionProvider {
     private fun create(context: Context): TripRemoteSessionDependencies {
         val moshi = AuthNetworkFactory.createMoshi()
         val api = AuthNetworkFactory.createTripsApi(BuildConfig.MOTOSOS_API_BASE_URL, moshi)
-        val store = InMemoryRemoteTripSessionStore()
+        val store = PersistentRemoteTripSessionStore(
+            SharedPreferencesRemoteTripSessionPersistence(context)
+        )
         return TripRemoteSessionDependencies(
             store = store,
             reconciler = TripRemoteSessionReconciler(
@@ -51,6 +53,10 @@ private object AndroidTripRemoteSessionLogger : TripRemoteSessionLogger {
 
     override fun tripLookupFailed() {
         Log.w(TAG, "trip lookup failed")
+    }
+
+    override fun tripPersistenceFailed() {
+        Log.w(TAG, "remote trip persistence failed")
     }
 
     private const val TAG = "MotoSOS.RemoteTrip"

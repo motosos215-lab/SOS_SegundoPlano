@@ -13,7 +13,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class TripRemoteSessionReconcilerTest {
-    @Test fun activeTripLookupStoresRemoteTripIdAndReusesIt() = runBlocking {
+    @Test fun activeTripLookupStoresRemoteTripIdAndReconcilesItAgain() = runBlocking {
         val store = InMemoryRemoteTripSessionStore()
         val remote = FakeTripRemoteDataSource(ActiveTripLookupResult.Found("remote-trip-1"))
         val reconciler = TripRemoteSessionReconciler(FakeAuthRepository(), remote, store)
@@ -21,12 +21,18 @@ class TripRemoteSessionReconcilerTest {
         assertEquals(ActiveTripLookupResult.Found("remote-trip-1"), reconciler.resolveActiveTrip())
         assertEquals("remote-trip-1", store.remoteTripId.value)
         assertEquals(ActiveTripLookupResult.Found("remote-trip-1"), reconciler.resolveActiveTrip())
-        assertEquals(1, remote.calls)
+        assertEquals(2, remote.calls)
     }
 
     @Test fun noActiveTripClearsRemoteTripIdWithoutInventingOne() = runBlocking {
         val store = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("stale-trip") }
-        clearAndLookup(store, ActiveTripLookupResult.NoActiveTrip)
+        val reconciler = TripRemoteSessionReconciler(
+            FakeAuthRepository(),
+            FakeTripRemoteDataSource(ActiveTripLookupResult.NoActiveTrip),
+            store
+        )
+
+        assertEquals(ActiveTripLookupResult.NoActiveTrip, reconciler.resolveActiveTrip())
 
         assertEquals(null, store.remoteTripId.value)
     }
@@ -43,10 +49,50 @@ class TripRemoteSessionReconcilerTest {
         assertEquals(0, remote.calls)
     }
 
-    private suspend fun clearAndLookup(store: InMemoryRemoteTripSessionStore, result: ActiveTripLookupResult) {
-        store.clearRemoteTripId()
-        val reconciler = TripRemoteSessionReconciler(FakeAuthRepository(), FakeTripRemoteDataSource(result), store)
-        assertEquals(result, reconciler.resolveActiveTrip())
+    @Test fun remoteLookupFailurePreservesDurableTripForLaterReconciliation() = runBlocking {
+        val store = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("remote-trip-1") }
+        val reconciler = TripRemoteSessionReconciler(
+            FakeAuthRepository(),
+            FakeTripRemoteDataSource(ActiveTripLookupResult.NetworkUnavailable("network_unavailable")),
+            store
+        )
+
+        assertEquals(
+            ActiveTripLookupResult.NetworkUnavailable("network_unavailable"),
+            reconciler.resolveActiveTrip()
+        )
+        assertEquals("remote-trip-1", store.remoteTripId.value)
+    }
+
+    @Test fun activeTripLookupPersistsRemoteTripIdAcrossStoreRecreation() = runBlocking {
+        val persistence = TestTripPersistence()
+        val store = PersistentRemoteTripSessionStore(persistence, RemoteTripSessionClock { 1234L })
+        val reconciler = TripRemoteSessionReconciler(
+            FakeAuthRepository(),
+            FakeTripRemoteDataSource(ActiveTripLookupResult.Found("remote-trip-1")),
+            store
+        )
+
+        assertEquals(ActiveTripLookupResult.Found("remote-trip-1"), reconciler.resolveActiveTrip())
+
+        val restored = PersistentRemoteTripSessionStore(persistence)
+        assertEquals("remote-trip-1", restored.remoteTripId.value)
+    }
+
+    @Test fun activeTripIsNotExposedWhenDurablePersistenceFails() = runBlocking {
+        val persistence = TestTripPersistence(saveSucceeds = false)
+        val store = PersistentRemoteTripSessionStore(persistence)
+        val reconciler = TripRemoteSessionReconciler(
+            FakeAuthRepository(),
+            FakeTripRemoteDataSource(ActiveTripLookupResult.Found("remote-trip-1")),
+            store
+        )
+
+        assertEquals(
+            ActiveTripLookupResult.InvalidResponse("remote_trip_persistence_failed"),
+            reconciler.resolveActiveTrip()
+        )
+        assertEquals(null, store.remoteTripId.value)
     }
 
     private class FakeTripRemoteDataSource(
@@ -69,5 +115,23 @@ class TripRemoteSessionReconcilerTest {
         override suspend fun refreshSession(): AuthResult<AuthUser> = error("unused")
         override suspend fun logout(): AuthResult<Unit> = AuthResult.Success(Unit)
         override fun observeSession(): StateFlow<SessionState> = MutableStateFlow(SessionState.LoggedOut)
+    }
+
+    private class TestTripPersistence(
+        private val saveSucceeds: Boolean = true
+    ) : RemoteTripSessionPersistence {
+        var value: PersistedRemoteTripSession? = null
+
+        override fun read(): PersistedRemoteTripSession? = value
+
+        override fun save(session: PersistedRemoteTripSession): Boolean {
+            if (saveSucceeds) value = session
+            return saveSucceeds
+        }
+
+        override fun clear(): Boolean {
+            value = null
+            return true
+        }
     }
 }
