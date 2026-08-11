@@ -36,6 +36,13 @@
         android:usesCleartextTraffic="false"
         android:theme="@style/Theme.SOS_SegundoPlano"
         tools:targetApi="s">
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="motosos_monitor_alerts" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_motosos_notification" />
+
         <service
             android:name=".features.background.MonitoringForegroundService"
             android:exported="false"
