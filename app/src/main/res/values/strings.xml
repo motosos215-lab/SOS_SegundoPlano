@@ -155,6 +155,8 @@
     <string name="validation_local_registration_failed">No se pudo registrar correctamente el evento local. El viaje sigue activo.</string>
     <string name="emergency_notification_channel_name">Alertas de posible accidente</string>
     <string name="emergency_notification_channel_description">Alertas urgentes para confirmar una posible emergencia durante un viaje.</string>
+    <string name="monitor_alert_notification_channel_name">Alertas MotoSOS</string>
+    <string name="monitor_alert_notification_channel_description">Alertas de emergencia recibidas por usuarios Monitor.</string>
     <string name="offline_queue_pending">%1$d evento(s) guardado(s) localmente. Pendiente de sincronización.</string>
     <string name="offline_queue_waiting_connection">%1$d evento(s) esperando conexión para reintento.</string>
     <string name="offline_queue_not_configured">%1$d evento(s) guardado(s). Sincronización remota aún no configurada.</string>

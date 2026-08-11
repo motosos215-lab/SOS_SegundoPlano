@@ -32,6 +32,7 @@ import com.example.sos_segundoplano.core.background.MonitoringServiceStarter
 import com.example.sos_segundoplano.core.background.MonitoringServiceStopResult
 import com.example.sos_segundoplano.core.background.MonitoringServiceStopper
 import com.example.sos_segundoplano.core.auth.AuthProvider
+import com.example.sos_segundoplano.core.push.MonitorAlertProvider
 import com.example.sos_segundoplano.core.profile.ProfileProvider
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatus
 import com.example.sos_segundoplano.core.permissions.AppNotificationStatusChecker
@@ -80,12 +81,14 @@ import com.example.sos_segundoplano.features.permissions.NotificationRuntimePerm
 import com.example.sos_segundoplano.features.profile.ProfileRoute
 import com.example.sos_segundoplano.features.trip.HomeScreen
 import com.example.sos_segundoplano.features.trip.TripLocalSummaryScreen
+import com.example.sos_segundoplano.push.MonitorAlertIntent
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
 import kotlinx.coroutines.flow.StateFlow
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        capturePendingMonitorAlert(intent)
         enableEdgeToEdge()
         WindowCompat.getInsetsController(window, window.decorView).apply {
             isAppearanceLightStatusBars = true
@@ -131,6 +134,17 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        capturePendingMonitorAlert(intent)
+    }
+
+    private fun capturePendingMonitorAlert(intent: Intent?) {
+        val payload = MonitorAlertIntent.parse(intent) ?: return
+        MonitorAlertProvider.get(applicationContext).record(payload)
     }
 
     private fun openAppSettings() {
