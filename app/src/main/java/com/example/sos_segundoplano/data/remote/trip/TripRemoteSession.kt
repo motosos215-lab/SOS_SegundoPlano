@@ -149,7 +149,8 @@ class TripRemoteSessionReconciler(
             is AuthResult.Success -> result.value.reveal()
             is AuthFailure -> return@withLock result.toTripLookupResult().also { logger.tripLookupFailed() }
         }
-        when (val lookup = remoteDataSource.activeTrip("Bearer $token")) {
+        val first = remoteDataSource.activeTrip("Bearer $token")
+        when (val lookup = retryLookupOnceAfterUnauthorized(first)) {
             is ActiveTripLookupResult.Found -> {
                 if (!store.setRemoteTripId(lookup.remoteTripId)) {
                     logger.tripPersistenceFailed()
@@ -172,6 +173,18 @@ class TripRemoteSessionReconciler(
             is ActiveTripLookupResult.Timeout,
             is ActiveTripLookupResult.InvalidResponse -> lookup.also { logger.tripLookupFailed() }
         }
+    }
+
+    private suspend fun retryLookupOnceAfterUnauthorized(
+        first: ActiveTripLookupResult
+    ): ActiveTripLookupResult {
+        if (first !is ActiveTripLookupResult.HttpError || first.statusCode != 401) return first
+        if (authRepository.refreshSession() !is AuthResult.Success) return first
+        val refreshedToken = when (val result = authRepository.ensureValidAccessToken()) {
+            is AuthResult.Success -> result.value.reveal()
+            is AuthFailure -> return result.toTripLookupResult()
+        }
+        return remoteDataSource.activeTrip("Bearer $refreshedToken")
     }
 
     private fun AuthFailure.toTripLookupResult(): ActiveTripLookupResult = when (this) {
