@@ -11,7 +11,8 @@ fun interface MonitoringServiceStarter {
 
 class AndroidMonitoringServiceStarter(
     context: Context,
-    private val notificationFactory: MonitoringNotificationFactory = MonitoringNotificationFactory(context)
+    private val notificationFactory: MonitoringNotificationFactory = MonitoringNotificationFactory(context),
+    private val recoveryStart: Boolean = false
 ) : MonitoringServiceStarter {
     private val appContext = context.applicationContext
 
@@ -21,7 +22,7 @@ class AndroidMonitoringServiceStarter(
             return MonitoringServiceStartResult.Failed
         }
 
-        val intent = MonitoringForegroundService.createStartIntent(appContext)
+        val intent = MonitoringForegroundService.createStartIntent(appContext, recoveryStart)
         return try {
             ContextCompat.startForegroundService(appContext, intent)
             MonitoringServiceStartResult.Started

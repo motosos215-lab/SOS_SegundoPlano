@@ -83,6 +83,20 @@ class TripRemoteMutationsTest {
         assertEquals("remote-trip-1", store.remoteTripId.value)
     }
 
+    @Test fun finishAfterProcessRecoveryUsesTheRecoveredRemoteTripId() = runBlocking {
+        val store = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("recovered-trip-7") }
+        val remote = FakeTripRemoteDataSource(
+            finishResult = TripMutationResult.Success("recovered-trip-7", "Finished")
+        )
+        val finisher = AuthenticatedRemoteTripFinisher(FakeAuthRepository(), remote, store)
+
+        val result = finisher.finishTrip(FinishTripRequestDto())
+
+        assertEquals(TripMutationResult.Success("recovered-trip-7", "Finished"), result)
+        assertEquals("recovered-trip-7", remote.finishedRemoteTripId)
+        assertEquals(null, store.remoteTripId.value)
+    }
+
     private class FakeTripRemoteDataSource(
         private val startResult: TripMutationResult = TripMutationResult.InvalidResponse("unused"),
         private val finishResult: TripMutationResult = TripMutationResult.InvalidResponse("unused")
@@ -91,6 +105,7 @@ class TripRemoteMutationsTest {
         var authorization: String? = null
         var startRequest: StartTripRequestDto? = null
         var finishRequest: FinishTripRequestDto? = null
+        var finishedRemoteTripId: String? = null
 
         override suspend fun activeTrip(authorization: String): ActiveTripLookupResult = ActiveTripLookupResult.NoActiveTrip
 
@@ -107,6 +122,7 @@ class TripRemoteMutationsTest {
             request: FinishTripRequestDto
         ): TripMutationResult {
             this.authorization = authorization
+            finishedRemoteTripId = remoteTripId
             finishRequest = request
             return finishResult
         }

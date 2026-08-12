@@ -73,9 +73,12 @@ class MonitoringForegroundService : Service() {
             FalsePositiveValidationCoordinatorProvider.setNotifier(WearValidationStatusNotifier(applicationContext))
             FalsePositiveValidationCoordinatorProvider.setLogger(AndroidFalsePositiveValidationLogger)
             promoteToForeground(notificationFactory.buildMonitoringNotification())
-            reconcileRemoteTrip()
+            val recoveryStart = intent.getBooleanExtra(EXTRA_RECOVERY_START, false)
+            if (!recoveryStart) reconcileRemoteTrip()
             captureCoordinator.start()
-            TripTimingStoreProvider.store.beginConfirmedTrip()
+            if (!recoveryStart || TripTimingStoreProvider.store.states.value !is com.example.sos_segundoplano.domain.trip.TripTimingState.Active) {
+                TripTimingStoreProvider.store.beginConfirmedTrip()
+            }
             TripSessionStoreProvider.store.setState(TripSessionState.Active)
             accidentTripFinalizer.reset()
             startNotificationUpdates()
@@ -180,9 +183,11 @@ class MonitoringForegroundService : Service() {
         const val EXTRA_SESSION_ID = "com.example.sos_segundoplano.extra.SESSION_ID"
         const val EXTRA_ASSESSMENT_ID = "com.example.sos_segundoplano.extra.ASSESSMENT_ID"
         const val EXTRA_RESPONSE_ID = "com.example.sos_segundoplano.extra.RESPONSE_ID"
+        const val EXTRA_RECOVERY_START = "com.example.sos_segundoplano.extra.RECOVERY_START"
 
-        fun createStartIntent(context: Context): Intent = Intent(context, MonitoringForegroundService::class.java)
+        fun createStartIntent(context: Context, recoveryStart: Boolean = false): Intent = Intent(context, MonitoringForegroundService::class.java)
             .setAction(ACTION_START_MONITORING)
+            .putExtra(EXTRA_RECOVERY_START, recoveryStart)
     }
 }
 

@@ -294,4 +294,7 @@
     <string name="watch_notice_invalid_request">El reloj no pudo procesar la solicitud.</string>
     <string name="watch_notice_internal_error">El reloj reportó un error interno.</string>
     <string name="allow_notifications">Permitir notificaciones</string>
+    <string name="trip_recovery_checking">Comprobando viaje activo…</string>
+    <string name="trip_recovery_failed">No pudimos comprobar el viaje activo. Revisa tu conexión e inténtalo de nuevo.</string>
+    <string name="trip_recovery_retry">Reintentar</string>
 </resources>

@@ -5,6 +5,7 @@ import com.example.sos_segundoplano.domain.auth.AuthResult
 import com.example.sos_segundoplano.domain.auth.AuthUser
 import com.example.sos_segundoplano.domain.auth.NetworkUnavailable
 import com.example.sos_segundoplano.domain.auth.SessionState
+import com.example.sos_segundoplano.domain.auth.UserRole
 import com.example.sos_segundoplano.domain.repository.AuthRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -79,6 +80,23 @@ class TripRemoteSessionReconcilerTest {
         assertEquals("remote-trip-1", restored.remoteTripId.value)
     }
 
+    @Test fun unauthorizedLookupRefreshesOnceAndRetriesWithoutStartingTrip() = runBlocking {
+        val store = InMemoryRemoteTripSessionStore()
+        val remote = SequencedTripRemoteDataSource(
+            listOf(
+                ActiveTripLookupResult.HttpError(401, "unauthorized"),
+                ActiveTripLookupResult.Found("remote-trip-1")
+            )
+        )
+        val auth = RefreshingFakeAuthRepository()
+        val reconciler = TripRemoteSessionReconciler(auth, remote, store)
+
+        assertEquals(ActiveTripLookupResult.Found("remote-trip-1"), reconciler.resolveActiveTrip())
+        assertEquals(listOf("Bearer access-token", "Bearer refreshed-token"), remote.authorizations)
+        assertEquals(1, auth.refreshCalls)
+        assertEquals("remote-trip-1", store.remoteTripId.value)
+    }
+
     @Test fun activeTripIsNotExposedWhenDurablePersistenceFails() = runBlocking {
         val persistence = TestTripPersistence(saveSucceeds = false)
         val store = PersistentRemoteTripSessionStore(persistence)
@@ -104,6 +122,34 @@ class TripRemoteSessionReconcilerTest {
             assertEquals("Bearer access-token", authorization)
             return result
         }
+    }
+
+    private class SequencedTripRemoteDataSource(
+        results: List<ActiveTripLookupResult>
+    ) : TripRemoteDataSource {
+        private val remaining = ArrayDeque(results)
+        val authorizations = mutableListOf<String>()
+        override suspend fun activeTrip(authorization: String): ActiveTripLookupResult {
+            authorizations += authorization
+            return remaining.removeFirst()
+        }
+    }
+
+    private class RefreshingFakeAuthRepository : AuthRepository {
+        var refreshCalls = 0
+        private var refreshed = false
+        override suspend fun login(email: String, password: String, rememberMe: Boolean): AuthResult<AuthUser> = error("unused")
+        override suspend fun restoreSession(): AuthResult<AuthUser?> = AuthResult.Success(null)
+        override suspend fun ensureValidAccessToken(): AuthResult<AccessToken> = AuthResult.Success(
+            AccessToken(if (refreshed) "refreshed-token" else "access-token")
+        )
+        override suspend fun refreshSession(): AuthResult<AuthUser> {
+            refreshCalls++
+            refreshed = true
+            return AuthResult.Success(AuthUser("rider-1", "rider@example.com", "Rider", "", UserRole.Rider, true))
+        }
+        override suspend fun logout(): AuthResult<Unit> = AuthResult.Success(Unit)
+        override fun observeSession(): StateFlow<SessionState> = MutableStateFlow(SessionState.LoggedOut)
     }
 
     private class FakeAuthRepository(
