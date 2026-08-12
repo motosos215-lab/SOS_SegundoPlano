@@ -124,6 +124,16 @@ fun RiderSosScreen(
                     modifier = Modifier.testTag("sos_local_unavailable")
                 )
             }
+            if (requestAccepted) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = stringResource(R.string.sos_manual_request_received),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MotoSurface,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.testTag("sos_request_received")
+                )
+            }
             Spacer(Modifier.height(28.dp))
             Button(
                 onClick = {

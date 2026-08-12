@@ -65,11 +65,12 @@
     <string name="sos">SOS</string>
     <string name="sos_manual_title">SOS Manual</string>
     <string name="sos_manual_help_title">¿Necesitas ayuda?</string>
-    <string name="sos_manual_description">Al presionar el botón se enviará\nuna alerta inmediata a tu contacto\nde emergencia.</string>
+    <string name="sos_manual_description">Al presionar el botón se registrará\nuna alerta para preparar el aviso\na tu contacto de emergencia.</string>
     <string name="sos_manual_send">Enviar alerta SOS</string>
     <string name="sos_manual_cancel">Cancelar</string>
     <string name="sos_manual_local_unavailable">La solicitud local de ayuda está disponible durante una validación de seguridad activa.</string>
-    <string name="sos_manual_send_cd">Enviar alerta SOS mediante el flujo local de ayuda</string>
+    <string name="sos_manual_request_received">Solicitud SOS recibida. Se verificará la ubicación y la conexión antes de registrarla.</string>
+    <string name="sos_manual_send_cd">Registrar alerta SOS de emergencia</string>
     <string name="sos_manual_cancel_cd">Cancelar SOS y volver</string>
     <string name="sos_manual_badge_cd">Botón visual SOS con anillos de alerta</string>
     <string name="map">Mapa</string>

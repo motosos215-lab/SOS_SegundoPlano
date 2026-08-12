@@ -31,7 +31,8 @@ class PushTokenFoundationTest {
             PushTokenState(
                 currentToken = FIRST_FAKE_TOKEN,
                 pendingToken = FIRST_FAKE_TOKEN,
-                remoteRegistrationId = "fake-registration-id"
+                remoteRegistrationId = "fake-registration-id",
+                remoteRegistrationOwnerUserId = "monitor-user-fixture"
             )
         )
         val handler = PushTokenHandler(PushTokenCoordinator(store))
@@ -41,6 +42,7 @@ class PushTokenFoundationTest {
         assertEquals(ROTATED_FAKE_TOKEN, store.state.currentToken)
         assertEquals(ROTATED_FAKE_TOKEN, store.state.pendingToken)
         assertNull(store.state.remoteRegistrationId)
+        assertNull(store.state.remoteRegistrationOwnerUserId)
     }
 
     @Test fun tokenIsNeverPrintedByStateOrDiagnostics() {

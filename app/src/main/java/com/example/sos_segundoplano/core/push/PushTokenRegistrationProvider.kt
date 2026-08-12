@@ -10,6 +10,7 @@ import com.example.sos_segundoplano.data.repository.PushAppMetadataProvider
 import com.example.sos_segundoplano.domain.push.PushTokenRepository
 import com.example.sos_segundoplano.domain.push.PushTokenStore
 import com.example.sos_segundoplano.domain.push.PushTokenSyncResult
+import com.example.sos_segundoplano.domain.auth.AuthSessionIdentity
 import com.example.sos_segundoplano.domain.repository.AuthRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,6 +53,8 @@ object PushTokenRegistrationProvider {
         applicationScope.launch { installed.syncPendingMonitorToken() }
     }
 
-    suspend fun revokeBeforeLogout(): PushTokenSyncResult =
-        repository?.revokeMonitorRegistration() ?: PushTokenSyncResult.NothingPending
+    suspend fun revokeBeforeLogout(ownerSession: AuthSessionIdentity): PushTokenSyncResult =
+        repository?.revokeMonitorRegistration(ownerSession)
+        ?: PushTokenSyncResult.NothingPending
+
 }

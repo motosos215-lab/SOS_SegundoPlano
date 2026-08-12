@@ -11,6 +11,7 @@ import com.example.sos_segundoplano.data.remote.trip.RemoteTripSessionClock
 import com.example.sos_segundoplano.data.remote.trip.SharedPreferencesRemoteTripSessionPersistence
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -72,6 +73,53 @@ class RemoteLifecyclePersistenceInstrumentedTest {
         val restored = SharedPreferencesRemoteIncidentLinkStore(context, INCIDENT_PREFERENCES)
             .read("pending-client-incident-id")
         assertEquals(pending, restored)
+    }
+
+    @Test fun pendingManualSosCorrelationAndDetectedTimeSurviveStoreRecreation() {
+        val first = SharedPreferencesRemoteIncidentLinkStore(context, INCIDENT_PREFERENCES)
+        val pending = RemoteIncidentLink(
+            localIncidentId = 9L,
+            clientIncidentId = "123e4567-e89b-12d3-a456-426614174009",
+            remoteTripId = "remote-trip-fixture",
+            remoteIncidentId = null,
+            syncState = RemoteIncidentSyncState.Pending,
+            updatedAtEpochMillis = 3456L,
+            clientAlertRequestId = "223e4567-e89b-12d3-a456-426614174009",
+            detectedAtUtc = "2026-08-11T15:55:00Z"
+        )
+
+        assertTrue(first.save(pending))
+
+        val restored = SharedPreferencesRemoteIncidentLinkStore(context, INCIDENT_PREFERENCES)
+            .readPendingManualSos()
+        assertEquals(pending, restored)
+    }
+
+    @Test fun completedManualSosPersistsIncidentAndAlertDispatchAndClearsPendingPointer() {
+        val first = SharedPreferencesRemoteIncidentLinkStore(context, INCIDENT_PREFERENCES)
+        val pending = RemoteIncidentLink(
+            localIncidentId = 10L,
+            clientIncidentId = "123e4567-e89b-12d3-a456-426614174010",
+            remoteTripId = "remote-trip-fixture",
+            remoteIncidentId = null,
+            syncState = RemoteIncidentSyncState.Pending,
+            updatedAtEpochMillis = 4567L,
+            clientAlertRequestId = "223e4567-e89b-12d3-a456-426614174010",
+            detectedAtUtc = "2026-08-11T15:56:00Z"
+        )
+        assertTrue(first.save(pending))
+        val completed = pending.copy(
+            remoteIncidentId = "incident-fixture",
+            remoteAlertDispatchId = "dispatch-fixture",
+            syncState = RemoteIncidentSyncState.Created,
+            updatedAtEpochMillis = 5678L
+        )
+
+        assertTrue(first.save(completed))
+
+        val restoredStore = SharedPreferencesRemoteIncidentLinkStore(context, INCIDENT_PREFERENCES)
+        assertEquals(completed, restoredStore.read(completed.clientIncidentId))
+        assertNull(restoredStore.readPendingManualSos())
     }
 
     private companion object {

@@ -83,16 +83,19 @@ class KeystoreEncryptedPushTokenStore(context: Context) : PushTokenStore {
             output.writeNullableUtf(state.currentToken)
             output.writeNullableUtf(state.pendingToken)
             output.writeNullableUtf(state.remoteRegistrationId)
+            output.writeNullableUtf(state.remoteRegistrationOwnerUserId)
         }
         bytes.toByteArray()
     }
 
     private fun decode(bytes: ByteArray): PushTokenState = DataInputStream(ByteArrayInputStream(bytes)).use { input ->
-        require(input.readInt() == FORMAT_VERSION)
+        val version = input.readInt()
+        require(version == LEGACY_FORMAT_VERSION || version == FORMAT_VERSION)
         PushTokenState(
             currentToken = input.readNullableUtf(),
             pendingToken = input.readNullableUtf(),
-            remoteRegistrationId = input.readNullableUtf()
+            remoteRegistrationId = input.readNullableUtf(),
+            remoteRegistrationOwnerUserId = if (version >= FORMAT_VERSION) input.readNullableUtf() else null
         )
     }
 
@@ -123,7 +126,8 @@ class KeystoreEncryptedPushTokenStore(context: Context) : PushTokenStore {
         const val KEY_CIPHERTEXT = "encrypted_state"
         const val KEY_NONCE = "nonce"
         const val KEY_ALIAS = "motosos_push_token_aes_gcm_v1"
-        const val FORMAT_VERSION = 1
+        const val LEGACY_FORMAT_VERSION = 1
+        const val FORMAT_VERSION = 2
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val TAG_SIZE_BITS = 128
         const val NONCE_SIZE_BYTES = 12

@@ -49,7 +49,7 @@ object AuthProvider {
         return PushAwareAuthRepository(
             delegate = baseRepository,
             onMonitorSessionAvailable = PushTokenRegistrationProvider::scheduleSync,
-            beforeMonitorLogout = { PushTokenRegistrationProvider.revokeBeforeLogout() }
+            beforeMonitorLogout = PushTokenRegistrationProvider::revokeBeforeLogout
         )
     }
 }

@@ -8,23 +8,101 @@ import com.example.sos_segundoplano.domain.rules.RiskLevel
 import com.example.sos_segundoplano.domain.validation.IncidentCause
 import com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus
 import com.example.sos_segundoplano.domain.validation.LocalIncident
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.CancellationException
+import java.time.Instant
 import java.util.UUID
 
 class ManualSosIncidentCoordinator(
-    private val remoteCreator: IncidentRemoteCreator,
+    private val remoteCreator: ManualSosAlertCreator,
     private val offlineEventSink: OfflineEventSink,
+    private val remoteIncidentLinkStore: RemoteIncidentLinkStore,
     private val incidentStore: LocalIncidentStore = IncidentStoreProvider.incidents,
     private val nextIncidentId: () -> Long = { IncidentStoreProvider.incidentIds.incrementAndGet() },
     private val nextClientIncidentId: () -> String = { UUID.randomUUID().toString() },
+    private val nextClientAlertRequestId: () -> String = { UUID.randomUUID().toString() },
+    private val nowUtc: () -> Instant = Instant::now,
     private val nowElapsedRealtimeNanos: () -> Long = System::nanoTime
 ) {
     private val mutex = Mutex()
+    private val inFlightLock = Any()
+    private var inFlight: CompletableDeferred<LocalIncident>? = null
 
-    suspend fun requestManualSos(): LocalIncident = mutex.withLock {
-        val localIncidentId = nextIncidentId()
-        val incident = LocalIncident(
+    suspend fun requestManualSos(): LocalIncident {
+        val (request, owner) = synchronized(inFlightLock) {
+            val existing = inFlight
+            if (existing != null) {
+                existing to false
+            } else {
+                val created = CompletableDeferred<LocalIncident>()
+                inFlight = created
+                created to true
+            }
+        }
+        if (!owner) return request.await()
+        return try {
+            performRequest().also(request::complete)
+        } catch (failure: Throwable) {
+            request.completeExceptionally(failure)
+            throw failure
+        } finally {
+            synchronized(inFlightLock) {
+                if (inFlight === request) inFlight = null
+            }
+        }
+    }
+
+    private suspend fun performRequest(): LocalIncident = mutex.withLock {
+        val pendingLink = remoteIncidentLinkStore.readPendingManualSos()
+        val incident = if (pendingLink != null) {
+            pendingLink.toLocalIncident()
+        } else {
+            createAndPersistLocalAttempt()
+        }
+        if (incident.remoteCreationStatus is IncidentRemoteCreationStatus.InvalidResponse) {
+            return@withLock incidentStore.add(incident)
+        }
+        if (pendingLink == null) enqueueOfflineWithoutBlocking(incident)
+        val result = remoteCreator.createManualSosAlert(incident)
+        incidentStore.add(result)
+        result
+    }
+
+    private fun createAndPersistLocalAttempt(): LocalIncident {
+        val detectedAtUtc = nowUtc()
+        val incident = newLocalIncident(
+            localIncidentId = nextIncidentId(),
+            clientIncidentId = nextClientIncidentId()
+        )
+        val persisted = remoteIncidentLinkStore.save(
+            RemoteIncidentLink(
+                localIncidentId = incident.incidentId,
+                clientIncidentId = requireNotNull(incident.clientIncidentId),
+                remoteTripId = null,
+                remoteIncidentId = null,
+                syncState = RemoteIncidentSyncState.Pending,
+                updatedAtEpochMillis = detectedAtUtc.toEpochMilli(),
+                clientAlertRequestId = nextClientAlertRequestId(),
+                detectedAtUtc = detectedAtUtc.toString(),
+                remoteAlertDispatchId = null
+            )
+        )
+        return if (persisted) incident else incident.copy(
+            remoteCreationStatus = IncidentRemoteCreationStatus.InvalidResponse("manual_sos_link_persistence_failed")
+        )
+    }
+
+    private fun RemoteIncidentLink.toLocalIncident(): LocalIncident = newLocalIncident(
+        localIncidentId = localIncidentId,
+        clientIncidentId = clientIncidentId
+    )
+
+    private fun newLocalIncident(
+        localIncidentId: Long,
+        clientIncidentId: String
+    ): LocalIncident = LocalIncident(
             incidentId = localIncidentId,
             sessionId = MANUAL_CONTEXT_ID,
             assessmentId = MANUAL_CONTEXT_ID,
@@ -39,17 +117,18 @@ class ManualSosIncidentCoordinator(
             validationPolicyVersion = MANUAL_POLICY_VERSION,
             gpsQuality = GpsQualityStatus.Unavailable,
             hasAssessmentEvidence = false,
-            clientIncidentId = nextClientIncidentId(),
+            clientIncidentId = clientIncidentId,
             remoteCreationStatus = IncidentRemoteCreationStatus.Pending
         )
+
+    private suspend fun enqueueOfflineWithoutBlocking(incident: LocalIncident) {
         try {
             offlineEventSink.enqueueIncident(incident)
-        } catch (_: IllegalStateException) {
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: RuntimeException) {
             Unit
         }
-        val result = remoteCreator.createIncident(incident)
-        incidentStore.add(result)
-        result
     }
 
     private companion object {
