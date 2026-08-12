@@ -5,11 +5,13 @@ import com.example.sos_segundoplano.data.remote.profile.ProfileUserDto
 import com.example.sos_segundoplano.domain.auth.AccessDenied
 import com.example.sos_segundoplano.domain.auth.AuthFailure
 import com.example.sos_segundoplano.domain.auth.AuthResult
+import com.example.sos_segundoplano.domain.auth.AuthSessionIdentity
 import com.example.sos_segundoplano.domain.auth.InactiveAccount
 import com.example.sos_segundoplano.domain.auth.InvalidResponse
 import com.example.sos_segundoplano.domain.auth.NetworkUnavailable
 import com.example.sos_segundoplano.domain.auth.RateLimited
 import com.example.sos_segundoplano.domain.auth.ServerFailure
+import com.example.sos_segundoplano.domain.auth.authenticatedIdentityOrNull
 import com.example.sos_segundoplano.domain.auth.SessionExpired
 import com.example.sos_segundoplano.domain.auth.StorageFailure
 import com.example.sos_segundoplano.domain.auth.Timeout
@@ -39,21 +41,23 @@ class DefaultProfileRepository(
     private val authRepository: AuthRepository
 ) : ProfileRepository {
     override suspend fun loadProfile(): ProfileResult<RiderProfile> = try {
+        val sessionIdentity = currentSessionIdentity() ?: return ProfileSessionExpired
         val firstToken = when (val token = authRepository.ensureValidAccessToken()) {
             is AuthResult.Success -> token.value.reveal()
             is AuthFailure -> return token.toProfileFailure()
         }
 
         when (val first = remoteDataSource.me(firstToken.asBearer())) {
-            is ProfileResult.Success -> first.value.toDomainOrFailure()
-            ProfileUnauthorized -> loadAfterSingleRefresh()
-            is ProfileFailure -> handleTerminalOrRecoverable(first)
+            is ProfileResult.Success -> first.value.toDomainOrFailure(sessionIdentity)
+            ProfileUnauthorized -> loadAfterSingleRefresh(sessionIdentity)
+            is ProfileFailure -> handleTerminalOrRecoverable(first, sessionIdentity)
         }
     } catch (cancelled: CancellationException) {
         throw cancelled
     }
 
-    private suspend fun loadAfterSingleRefresh(): ProfileResult<RiderProfile> {
+    private suspend fun loadAfterSingleRefresh(sessionIdentity: AuthSessionIdentity): ProfileResult<RiderProfile> {
+        if (!isCurrentSession(sessionIdentity)) return ProfileSessionExpired
         when (val refreshed = authRepository.refreshSession()) {
             is AuthResult.Success -> Unit
             is AuthFailure -> return refreshed.toProfileFailure()
@@ -63,23 +67,26 @@ class DefaultProfileRepository(
             is AuthFailure -> return token.toProfileFailure()
         }
         return when (val second = remoteDataSource.me(refreshedToken.asBearer())) {
-            is ProfileResult.Success -> second.value.toDomainOrFailure()
+            is ProfileResult.Success -> second.value.toDomainOrFailure(sessionIdentity)
             ProfileUnauthorized -> {
-                authRepository.logout()
+                logoutIfCurrentSession(sessionIdentity)
                 ProfileUnauthorized
             }
-            is ProfileFailure -> handleTerminalOrRecoverable(second)
+            is ProfileFailure -> handleTerminalOrRecoverable(second, sessionIdentity)
         }
     }
 
-    private suspend fun handleTerminalOrRecoverable(failure: ProfileFailure): ProfileFailure {
+    private suspend fun handleTerminalOrRecoverable(
+        failure: ProfileFailure,
+        sessionIdentity: AuthSessionIdentity
+    ): ProfileFailure {
         if (failure == ProfileAccountUnavailable || failure == ProfileInactiveAccount || failure == ProfileAccessDenied) {
-            authRepository.logout()
+            logoutIfCurrentSession(sessionIdentity)
         }
         return failure
     }
 
-    private suspend fun ProfileUserDto.toDomainOrFailure(): ProfileResult<RiderProfile> {
+    private suspend fun ProfileUserDto.toDomainOrFailure(sessionIdentity: AuthSessionIdentity): ProfileResult<RiderProfile> {
         val normalizedId = id?.trim().orEmpty()
         val normalizedEmail = email?.trim().orEmpty()
         val normalizedFullName = fullName?.trim().orEmpty()
@@ -88,11 +95,10 @@ class DefaultProfileRepository(
             return ProfileInvalidResponse
         }
         if (isActive != true) {
-            authRepository.logout()
+            logoutIfCurrentSession(sessionIdentity)
             return ProfileInactiveAccount
         }
         if (apiRole != RIDER_ROLE) {
-            authRepository.logout()
             return ProfileAccessDenied
         }
         val created = createdAtUtc.parseInstantOrNull() ?: return ProfileInvalidResponse
@@ -121,6 +127,19 @@ class DefaultProfileRepository(
     }
 
     private fun String.asBearer(): String = "Bearer $this"
+
+    private fun currentSessionIdentity(): AuthSessionIdentity? =
+        authRepository.observeSession().value.authenticatedIdentityOrNull()
+            ?.takeIf { it.userId.isNotBlank() }
+
+    private fun isCurrentSession(expected: AuthSessionIdentity): Boolean =
+        currentSessionIdentity() == expected
+
+    private suspend fun logoutIfCurrentSession(expected: AuthSessionIdentity) {
+        if (isCurrentSession(expected)) {
+            authRepository.logoutIfCurrent(expected)
+        }
+    }
 
     private fun AuthFailure.toProfileFailure(): ProfileFailure = when (this) {
         is Unauthorized -> ProfileUnauthorized

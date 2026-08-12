@@ -82,18 +82,43 @@ class DefaultProfileRepositoryTest {
         }
     }
 
-    @Test fun unavailableInactiveAndWrongRoleInvalidateSession() = runBlocking {
-        val cases = listOf(
+    @Test fun unavailableAndInactiveInvalidateButSupportedMonitorRoleDoesNotLogout() = runBlocking {
+        val terminalCases = listOf(
             FakeProfileRemoteDataSource(ProfileAccountUnavailable) to ProfileAccountUnavailable,
-            FakeProfileRemoteDataSource(ProfileResult.Success(validDto().copy(isActive = false))) to ProfileInactiveAccount,
-            FakeProfileRemoteDataSource(ProfileResult.Success(validDto().copy(role = "Monitor"))) to ProfileAccessDenied,
-            FakeProfileRemoteDataSource(ProfileResult.Success(validDto().copy(role = " Rider "))) to ProfileAccessDenied
+            FakeProfileRemoteDataSource(ProfileResult.Success(validDto().copy(isActive = false))) to ProfileInactiveAccount
         )
-        cases.forEach { (remote, expected) ->
+        terminalCases.forEach { (remote, expected) ->
             val auth = FakeProfileAuthRepository()
             assertEquals(expected, DefaultProfileRepository(remote, auth).loadProfile())
             assertEquals(1, auth.logoutCalls)
         }
+        val roleCases = listOf(
+            FakeProfileRemoteDataSource(ProfileResult.Success(validDto().copy(role = "Monitor"))) to ProfileAccessDenied,
+            FakeProfileRemoteDataSource(ProfileResult.Success(validDto().copy(role = " Rider "))) to ProfileAccessDenied
+        )
+        roleCases.forEach { (remote, expected) ->
+            val auth = FakeProfileAuthRepository()
+            assertEquals(expected, DefaultProfileRepository(remote, auth).loadProfile())
+            assertEquals(0, auth.logoutCalls)
+        }
+    }
+
+    @Test fun delayedRiderProfileCallbackCannotLogoutReplacementMonitorSession() = runBlocking {
+        val auth = FakeProfileAuthRepository()
+        val remote = object : ProfileRemoteDataSource {
+            override suspend fun me(authorization: String): ProfileResult<ProfileUserDto> {
+                auth.switchTo(profileAuthUser().copy(role = UserRole.Monitor))
+                return ProfileResult.Success(validDto().copy(isActive = false))
+            }
+        }
+
+        assertEquals(ProfileInactiveAccount, DefaultProfileRepository(remote, auth).loadProfile())
+
+        assertEquals(0, auth.logoutCalls)
+        val current = auth.observeSession().value as SessionState.Authenticated
+        assertEquals("rider-id", current.user.id)
+        assertEquals(UserRole.Monitor, current.user.role)
+        assertEquals(2L, current.generation)
     }
 
     @Test fun invalidRequiredFieldsAreInvalidResponse() = runBlocking {
@@ -129,6 +154,9 @@ private class FakeProfileAuthRepository(
     private val tokens: MutableList<String> = mutableListOf("access-token-1"),
     private val refreshResult: AuthResult<AuthUser> = AuthResult.Success(profileAuthUser())
 ) : AuthRepository {
+    private val state = MutableStateFlow<SessionState>(
+        SessionState.Authenticated(profileAuthUser(), java.time.Instant.MAX, true, generation = 1L)
+    )
     val events = mutableListOf<String>()
     var refreshCalls = 0
     var logoutCalls = 0
@@ -146,9 +174,15 @@ private class FakeProfileAuthRepository(
     }
     override suspend fun logout(): AuthResult<Unit> {
         logoutCalls++
+        state.value = SessionState.LoggedOut
         return AuthResult.Success(Unit)
     }
-    override fun observeSession(): StateFlow<SessionState> = MutableStateFlow(SessionState.LoggedOut)
+    override fun observeSession(): StateFlow<SessionState> = state
+
+    fun switchTo(user: AuthUser) {
+        val nextGeneration = ((state.value as? SessionState.Authenticated)?.generation ?: 0L) + 1L
+        state.value = SessionState.Authenticated(user, java.time.Instant.MAX, true, nextGeneration)
+    }
 }
 
 private fun validDto(): ProfileUserDto = ProfileUserDto(

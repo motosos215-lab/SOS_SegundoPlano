@@ -102,7 +102,7 @@ class DefaultAuthRepository(
                     mutableSessionState.value = SessionState.StorageUnavailable
                     RestoreDecision.Completed(StorageFailure(stored.reason))
                 }
-                is SessionStoreResult.Success -> processStoredSessionLocked(stored.value)
+            is SessionStoreResult.Success -> processStoredSessionLocked(stored.value)
             }
         }
         return when (decision) {
@@ -178,8 +178,9 @@ class DefaultAuthRepository(
             )
         }
 
+        sessionGeneration++
         currentSession = session
-        mutableSessionState.value = session.toAuthenticatedState()
+        mutableSessionState.value = session.toAuthenticatedState(sessionGeneration)
         return if (isNearExpiry(session.accessTokenExpiresAt)) {
             RestoreDecision.Refresh(session)
         } else {
@@ -196,7 +197,8 @@ class DefaultAuthRepository(
             mutableSessionState.value = SessionState.Refreshing(
                 latest.user,
                 latest.accessTokenExpiresAt,
-                latest.rememberMe
+                latest.rememberMe,
+                sessionGeneration
             )
             RefreshPreparation.Ready(latest)
         }
@@ -224,7 +226,7 @@ class DefaultAuthRepository(
             }
             is AuthFailure -> sessionMutationMutex.withLock {
                 if (currentSession === latest) {
-                    mutableSessionState.value = latest.toAuthenticatedState()
+                    mutableSessionState.value = latest.toAuthenticatedState(sessionGeneration)
                 }
                 remoteResult
             }
@@ -257,7 +259,7 @@ class DefaultAuthRepository(
         }
 
         currentSession = refreshed
-        mutableSessionState.value = refreshed.toAuthenticatedState()
+        mutableSessionState.value = refreshed.toAuthenticatedState(sessionGeneration)
         return AuthResult.Success(refreshed.user)
     }
 
@@ -279,7 +281,7 @@ class DefaultAuthRepository(
             return@withLock StorageFailure(reason)
         }
         currentSession = session
-        mutableSessionState.value = session.toAuthenticatedState()
+        mutableSessionState.value = session.toAuthenticatedState(expectedGeneration)
         AuthResult.Success(session.user)
     }
 
@@ -406,10 +408,11 @@ class DefaultAuthRepository(
         }
     }
 
-    private fun AuthSession.toAuthenticatedState(): SessionState.Authenticated = SessionState.Authenticated(
+    private fun AuthSession.toAuthenticatedState(generation: Long): SessionState.Authenticated = SessionState.Authenticated(
         user = user,
         accessTokenExpiresAt = accessTokenExpiresAt,
-        rememberMe = rememberMe
+        rememberMe = rememberMe,
+        generation = generation
     )
 
     private fun AuthFailure.toRemoteLogoutFailure(): RemoteLogoutFailed = when (this) {

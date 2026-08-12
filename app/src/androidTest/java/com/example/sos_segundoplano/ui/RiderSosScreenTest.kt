@@ -77,8 +77,10 @@ class RiderSosScreenTest {
         composeRule.onNodeWithContentDescription("Botón visual SOS con anillos de alerta").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Regresar").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Cancelar SOS y volver").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Registrar alerta SOS de emergencia").assertIsDisplayed()
         composeRule.onNodeWithTag("send_sos_button").assertIsEnabled().performTouchInput { doubleClick() }
         composeRule.onNodeWithTag("send_sos_button").assertIsNotEnabled()
+        composeRule.onNodeWithTag("sos_request_received").assertIsDisplayed()
 
         assertEquals(1, helpRequests)
     }
@@ -97,7 +99,8 @@ class RiderSosScreenTest {
         composeRule.onNodeWithTag("bottom_nav_sos").performClick()
         composeRule.onNodeWithTag("send_sos_button").performClick()
 
-        composeRule.onNodeWithTag("home_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("rider_sos_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("sos_request_received").assertIsDisplayed()
         assertEquals(1, manualRequests)
     }
 

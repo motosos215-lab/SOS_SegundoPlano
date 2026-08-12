@@ -6,8 +6,10 @@ import com.example.sos_segundoplano.data.remote.push.PushTokenRemoteDataSource
 import com.example.sos_segundoplano.data.remote.push.PushTokenRemoteResult
 import com.example.sos_segundoplano.data.remote.push.RegisterPushTokenRequestDto
 import com.example.sos_segundoplano.domain.auth.AuthResult
+import com.example.sos_segundoplano.domain.auth.AuthSessionIdentity
 import com.example.sos_segundoplano.domain.auth.SessionState
 import com.example.sos_segundoplano.domain.auth.UserRole
+import com.example.sos_segundoplano.domain.auth.authenticatedIdentityOrNull
 import com.example.sos_segundoplano.domain.push.PushTokenRepository
 import com.example.sos_segundoplano.domain.push.PushTokenState
 import com.example.sos_segundoplano.domain.push.PushTokenStore
@@ -32,20 +34,36 @@ class DefaultPushTokenRepository(
     private val operationMutex = Mutex()
 
     override suspend fun syncPendingMonitorToken(): PushTokenSyncResult = operationMutex.withLock {
-        if (!hasMonitorSession()) return PushTokenSyncResult.NoMonitorSession
+        val ownerSession = currentMonitorIdentity() ?: return PushTokenSyncResult.NoMonitorSession
+        val ownerUserId = ownerSession.userId.trim().takeIf { it.isNotEmpty() }
+            ?: return PushTokenSyncResult.NoMonitorSession
         val state = readState() ?: return PushTokenSyncResult.StorageUnavailable
         val token = state.pendingToken?.takeIf { it.isNotBlank() }
+            ?: state.currentToken?.takeIf {
+                it.isNotBlank() && state.remoteRegistrationOwnerUserId != ownerUserId
+            }
             ?: return PushTokenSyncResult.NothingPending
         when (val result = register(token)) {
-            is PushTokenRemoteResult.Registered -> persistRegistration(state, token, result.token)
+            is PushTokenRemoteResult.Registered -> {
+                if (currentMonitorIdentity() != ownerSession) return PushTokenSyncResult.NoMonitorSession
+                val latest = readState() ?: return PushTokenSyncResult.StorageUnavailable
+                val tokenIsStillCurrent = latest.pendingToken == token || latest.currentToken == token
+                if (!tokenIsStillCurrent) return PushTokenSyncResult.NothingPending
+                persistRegistration(latest, token, ownerUserId, result.token)
+            }
             else -> mapFailure(result)
         }
     }
 
-    override suspend fun revokeMonitorRegistration(): PushTokenSyncResult = operationMutex.withLock {
-        if (!hasMonitorSession()) return PushTokenSyncResult.NoMonitorSession
+    override suspend fun revokeMonitorRegistration(
+        ownerSession: AuthSessionIdentity
+    ): PushTokenSyncResult = operationMutex.withLock {
+        val normalizedOwnerUserId = ownerSession.userId.trim().takeIf { it.isNotEmpty() }
+            ?: return PushTokenSyncResult.NoMonitorSession
+        if (currentMonitorIdentity() != ownerSession) return PushTokenSyncResult.NoMonitorSession
         var state = readState() ?: return PushTokenSyncResult.StorageUnavailable
-        var registrationId = state.remoteRegistrationId?.takeIf { it.isNotBlank() }
+        var registrationId = state.remoteRegistrationId
+            ?.takeIf { it.isNotBlank() && state.remoteRegistrationOwnerUserId == normalizedOwnerUserId }
 
         if (registrationId == null) {
             val localToken = state.pendingToken?.takeIf { it.isNotBlank() }
@@ -58,7 +76,8 @@ class DefaultPushTokenRepository(
                     state = state.copy(
                         currentToken = localToken,
                         pendingToken = null,
-                        remoteRegistrationId = registrationId
+                        remoteRegistrationId = registrationId,
+                        remoteRegistrationOwnerUserId = normalizedOwnerUserId
                     )
                     if (store.save(state) !is PushTokenStoreResult.Success) {
                         return PushTokenSyncResult.StorageUnavailable
@@ -69,6 +88,7 @@ class DefaultPushTokenRepository(
         }
 
         val resolvedRegistrationId = registrationId ?: return PushTokenSyncResult.NothingPending
+        if (currentMonitorIdentity() != ownerSession) return PushTokenSyncResult.NoMonitorSession
         when (val result = callWithRefresh { authorization ->
             remoteDataSource.revoke(authorization, resolvedRegistrationId)
         }) {
@@ -76,10 +96,14 @@ class DefaultPushTokenRepository(
                 if (!result.token.status.equals(STATUS_REVOKED, ignoreCase = true)) {
                     PushTokenSyncResult.RemoteFailure()
                 } else {
-                    markRevoked(state, notFound = false)
+                    markRevoked(normalizedOwnerUserId, resolvedRegistrationId, notFound = false)
                 }
             }
-            is PushTokenRemoteResult.NotFound -> markRevoked(state, notFound = true)
+            is PushTokenRemoteResult.NotFound -> markRevoked(
+                normalizedOwnerUserId,
+                resolvedRegistrationId,
+                notFound = true
+            )
             else -> mapFailure(result)
         }
     }
@@ -101,6 +125,7 @@ class DefaultPushTokenRepository(
     private fun persistRegistration(
         state: PushTokenState,
         token: String,
+        ownerUserId: String,
         remote: PushNotificationTokenDto
     ): PushTokenSyncResult {
         val registrationId = remote.id.takeIf { it.isNotBlank() }
@@ -109,7 +134,8 @@ class DefaultPushTokenRepository(
             state.copy(
                 currentToken = token,
                 pendingToken = null,
-                remoteRegistrationId = registrationId
+                remoteRegistrationId = registrationId,
+                remoteRegistrationOwnerUserId = ownerUserId
             )
         )
         return if (saved is PushTokenStoreResult.Success) {
@@ -149,22 +175,34 @@ class DefaultPushTokenRepository(
         is PushTokenRemoteResult.Revoked -> PushTokenSyncResult.RemoteFailure()
     }
 
-    private fun markRevoked(state: PushTokenState, notFound: Boolean): PushTokenSyncResult {
+    private fun markRevoked(
+        ownerUserId: String,
+        registrationId: String,
+        notFound: Boolean
+    ): PushTokenSyncResult {
+        val latest = readState() ?: return PushTokenSyncResult.StorageUnavailable
+        if (
+            latest.remoteRegistrationId != registrationId ||
+            latest.remoteRegistrationOwnerUserId != ownerUserId
+        ) {
+            return PushTokenSyncResult.NoMonitorSession
+        }
         val saved = store.save(
-            state.copy(
-                pendingToken = state.currentToken,
-                remoteRegistrationId = null
+            latest.copy(
+                pendingToken = latest.currentToken,
+                remoteRegistrationId = null,
+                remoteRegistrationOwnerUserId = null
             )
         )
         if (saved !is PushTokenStoreResult.Success) return PushTokenSyncResult.StorageUnavailable
         return if (notFound) PushTokenSyncResult.NotFound else PushTokenSyncResult.Revoked
     }
 
-    private fun hasMonitorSession(): Boolean = when (val session = authRepository.observeSession().value) {
-        is SessionState.Authenticated -> session.user.role == UserRole.Monitor
-        is SessionState.Refreshing -> session.user.role == UserRole.Monitor
-        else -> false
-    }
+    private fun currentMonitorIdentity(): AuthSessionIdentity? = when (val session = authRepository.observeSession().value) {
+        is SessionState.Authenticated -> session.takeIf { it.user.role == UserRole.Monitor }?.authenticatedIdentityOrNull()
+        is SessionState.Refreshing -> session.takeIf { it.user.role == UserRole.Monitor }?.authenticatedIdentityOrNull()
+        else -> null
+    }?.takeIf { it.userId.isNotBlank() }
 
     private fun readState(): PushTokenState? =
         (store.read() as? PushTokenStoreResult.Success)?.value

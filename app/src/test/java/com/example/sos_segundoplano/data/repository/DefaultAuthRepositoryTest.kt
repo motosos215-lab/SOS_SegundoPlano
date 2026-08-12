@@ -238,6 +238,24 @@ class DefaultAuthRepositoryTest {
         assertEquals(SessionExpired, repo.ensureValidAccessToken())
     }
 
+    @Test fun successfulRefreshPreservesLogicalSessionGeneration() = runBlocking {
+        val remote = FakeAuthRemoteDataSource(
+            loginResult = AuthResult.Success(validLoginData(now.plusSeconds(300)))
+        )
+        val repo = repository(remote, FakeSessionStore())
+        assertTrue(repo.login("rider@example.com", "password", true) is AuthResult.Success)
+        val before = repo.observeSession().value as SessionState.Authenticated
+        remote.refreshResult = AuthResult.Success(
+            RefreshDataDto("new-access-token", "new-refresh-token", now.plusSeconds(900).toString())
+        )
+
+        assertTrue(repo.refreshSession() is AuthResult.Success)
+
+        val after = repo.observeSession().value as SessionState.Authenticated
+        assertEquals(before.generation, after.generation)
+        assertTrue(after.generation > 0L)
+    }
+
     @Test fun logoutDuringRefreshCannotRestoreTheOldSession() = runBlocking {
         val remote = FakeAuthRemoteDataSource(AuthResult.Success(validLoginData(now.plusSeconds(30))))
         val refreshStarted = CompletableDeferred<Unit>()

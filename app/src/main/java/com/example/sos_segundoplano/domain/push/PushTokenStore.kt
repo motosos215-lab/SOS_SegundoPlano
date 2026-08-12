@@ -3,11 +3,13 @@ package com.example.sos_segundoplano.domain.push
 data class PushTokenState(
     val currentToken: String? = null,
     val pendingToken: String? = null,
-    val remoteRegistrationId: String? = null
+    val remoteRegistrationId: String? = null,
+    val remoteRegistrationOwnerUserId: String? = null
 ) {
     override fun toString(): String =
         "PushTokenState(currentToken=[REDACTED], pendingToken=[REDACTED], " +
-            "remoteRegistrationId=${if (remoteRegistrationId == null) "null" else "[REDACTED]"})"
+            "remoteRegistrationId=${if (remoteRegistrationId == null) "null" else "[REDACTED]"}, " +
+            "remoteRegistrationOwnerUserId=${if (remoteRegistrationOwnerUserId == null) "null" else "[REDACTED]"})"
 }
 
 sealed interface PushTokenStoreResult<out T> {
@@ -31,7 +33,8 @@ class PushTokenCoordinator(private val store: PushTokenStore) {
             previous.copy(
                 currentToken = token,
                 pendingToken = token,
-                remoteRegistrationId = null
+                remoteRegistrationId = null,
+                remoteRegistrationOwnerUserId = null
             )
         )
     }

@@ -6,6 +6,7 @@ import com.example.sos_segundoplano.data.remote.push.PushTokenRemoteResult
 import com.example.sos_segundoplano.data.remote.push.RegisterPushTokenRequestDto
 import com.example.sos_segundoplano.domain.auth.AccessToken
 import com.example.sos_segundoplano.domain.auth.AuthResult
+import com.example.sos_segundoplano.domain.auth.AuthSessionIdentity
 import com.example.sos_segundoplano.domain.auth.AuthUser
 import com.example.sos_segundoplano.domain.auth.SessionState
 import com.example.sos_segundoplano.domain.auth.UserRole
@@ -17,6 +18,9 @@ import com.example.sos_segundoplano.domain.push.PushTokenSyncResult
 import com.example.sos_segundoplano.domain.repository.AuthRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -46,6 +50,8 @@ class DefaultPushTokenRepositoryTest {
         assertEquals(FAKE_TOKEN, store.state.currentToken)
         assertNull(store.state.pendingToken)
         assertEquals(FIRST_REGISTRATION_ID, store.state.remoteRegistrationId)
+        assertEquals(MONITOR_USER_ID, store.state.remoteRegistrationOwnerUserId)
+        assertEquals(0, remote.revokedIds.size)
     }
 
     @Test fun repeatedPostForSameTokenKeepsBackendIdWithoutLocalDuplicateState() = runBlocking {
@@ -75,6 +81,8 @@ class DefaultPushTokenRepositoryTest {
         assertEquals(ROTATED_FAKE_TOKEN, store.state.currentToken)
         assertNull(store.state.pendingToken)
         assertEquals(SECOND_REGISTRATION_ID, store.state.remoteRegistrationId)
+        assertEquals(MONITOR_USER_ID, store.state.remoteRegistrationOwnerUserId)
+        assertEquals(0, remote.revokedIds.size)
     }
 
     @Test fun riderDoesNotRegisterAutomatically() = runBlocking {
@@ -116,25 +124,125 @@ class DefaultPushTokenRepositoryTest {
         assertEquals(PushTokenSyncResult.Registered, result)
         assertEquals(listOf("Bearer access-token", "Bearer refreshed-access-token"), remote.authorizations)
         assertEquals(1, auth.refreshCalls)
+        assertEquals(0, remote.revokedIds.size)
+    }
+
+    @Test fun concurrentReconciliationsAreSingleFlightAndNeverRevoke() = runBlocking {
+        val remote = FakePushRemote()
+        val store = FakePushStore(PushTokenState(FAKE_TOKEN, FAKE_TOKEN))
+        val repository = repository(FakeAuthRepository(UserRole.Monitor), store, remote)
+
+        val results = coroutineScope {
+            listOf(
+                async { repository.syncPendingMonitorToken() },
+                async { repository.syncPendingMonitorToken() }
+            ).awaitAll()
+        }
+
+        assertTrue(results.contains(PushTokenSyncResult.Registered))
+        assertTrue(results.contains(PushTokenSyncResult.NothingPending))
+        assertEquals(1, remote.registerCalls)
+        assertTrue(remote.revokedIds.isEmpty())
+    }
+
+    @Test fun recreationAndRefreshWithRegisteredTokenNeverRevoke() = runBlocking {
+        val remote = FakePushRemote()
+        val store = FakePushStore(
+            PushTokenState(FAKE_TOKEN, null, FIRST_REGISTRATION_ID, MONITOR_USER_ID)
+        )
+        val auth = FakeAuthRepository(UserRole.Monitor)
+        val firstRepository = repository(auth, store, remote)
+        val recreatedRepository = repository(auth, store, remote)
+
+        assertEquals(PushTokenSyncResult.NothingPending, firstRepository.syncPendingMonitorToken())
+        assertTrue(auth.refreshSession() is AuthResult.Success)
+        assertEquals(PushTokenSyncResult.NothingPending, recreatedRepository.syncPendingMonitorToken())
+        assertEquals(0, remote.registerCalls)
+        assertEquals(0, remote.revokedIds.size)
+        assertEquals(FIRST_REGISTRATION_ID, store.state.remoteRegistrationId)
+    }
+
+    @Test fun previousSessionCleanupCannotRevokeCurrentMonitorRegistration() = runBlocking {
+        val remote = FakePushRemote()
+        val store = FakePushStore(
+            PushTokenState(FAKE_TOKEN, null, SECOND_REGISTRATION_ID, MONITOR_USER_ID)
+        )
+        val repository = repository(FakeAuthRepository(UserRole.Monitor), store, remote)
+
+        val staleCleanup = repository.revokeMonitorRegistration(
+            AuthSessionIdentity(MONITOR_USER_ID, generation = 99L)
+        )
+
+        assertEquals(PushTokenSyncResult.NoMonitorSession, staleCleanup)
+        assertEquals(0, remote.revokedIds.size)
+        assertEquals(SECOND_REGISTRATION_ID, store.state.remoteRegistrationId)
+        assertEquals(MONITOR_USER_ID, store.state.remoteRegistrationOwnerUserId)
+    }
+
+    @Test fun logoutNeverUsesRegistrationIdOwnedByAnotherUser() = runBlocking {
+        val remote = FakePushRemote(registerResult = registered(SECOND_REGISTRATION_ID))
+        val store = FakePushStore(
+            PushTokenState(FAKE_TOKEN, null, FIRST_REGISTRATION_ID, "previous-monitor-fixture")
+        )
+        val repository = repository(FakeAuthRepository(UserRole.Monitor), store, remote)
+
+        assertEquals(PushTokenSyncResult.Revoked, repository.revokeMonitorRegistration(monitorSession()))
+
+        assertEquals(1, remote.registerCalls)
+        assertEquals(listOf(SECOND_REGISTRATION_ID), remote.revokedIds)
+        assertFalse(remote.revokedIds.contains(FIRST_REGISTRATION_ID))
+    }
+
+    @Test fun legacyRegistrationWithoutOwnerIsNotRevokedUntilOwnershipIsReestablished() = runBlocking {
+        val remote = FakePushRemote(registerResult = registered(SECOND_REGISTRATION_ID))
+        val store = FakePushStore(
+            PushTokenState(FAKE_TOKEN, null, FIRST_REGISTRATION_ID, remoteRegistrationOwnerUserId = null)
+        )
+        val repository = repository(FakeAuthRepository(UserRole.Monitor), store, remote)
+
+        assertEquals(
+            PushTokenSyncResult.Revoked,
+            repository.revokeMonitorRegistration(monitorSession())
+        )
+
+        assertEquals(1, remote.registerCalls)
+        assertEquals(listOf(SECOND_REGISTRATION_ID), remote.revokedIds)
+        assertFalse(remote.revokedIds.contains(FIRST_REGISTRATION_ID))
+    }
+
+    @Test fun explicitLogoutThenLaterLoginCanRegisterActiveTokenAgain() = runBlocking {
+        val remote = FakePushRemote(registerResult = registered(SECOND_REGISTRATION_ID))
+        val store = FakePushStore(
+            PushTokenState(FAKE_TOKEN, null, FIRST_REGISTRATION_ID, MONITOR_USER_ID)
+        )
+        val repository = repository(FakeAuthRepository(UserRole.Monitor), store, remote)
+
+        assertEquals(PushTokenSyncResult.Revoked, repository.revokeMonitorRegistration(monitorSession()))
+        assertEquals(PushTokenSyncResult.Registered, repository.syncPendingMonitorToken())
+
+        assertEquals(listOf(FIRST_REGISTRATION_ID), remote.revokedIds)
+        assertEquals(SECOND_REGISTRATION_ID, store.state.remoteRegistrationId)
+        assertEquals(MONITOR_USER_ID, store.state.remoteRegistrationOwnerUserId)
+        assertNull(store.state.pendingToken)
     }
 
     @Test fun revokeUsesKnownIdAndOnlyClearsItAfterConfirmedRevokedResponse() = runBlocking {
-        val successStore = FakePushStore(PushTokenState(FAKE_TOKEN, null, FIRST_REGISTRATION_ID))
+        val successStore = FakePushStore(PushTokenState(FAKE_TOKEN, null, FIRST_REGISTRATION_ID, MONITOR_USER_ID))
         val successRemote = FakePushRemote()
         val success = repository(FakeAuthRepository(UserRole.Monitor), successStore, successRemote)
-            .revokeMonitorRegistration()
+            .revokeMonitorRegistration(monitorSession())
 
         assertEquals(PushTokenSyncResult.Revoked, success)
         assertEquals(FIRST_REGISTRATION_ID, successRemote.revokedIds.single())
         assertNull(successStore.state.remoteRegistrationId)
         assertEquals(FAKE_TOKEN, successStore.state.pendingToken)
 
-        val failedStore = FakePushStore(PushTokenState(FAKE_TOKEN, null, FIRST_REGISTRATION_ID))
+        val failedStore = FakePushStore(PushTokenState(FAKE_TOKEN, null, FIRST_REGISTRATION_ID, MONITOR_USER_ID))
         val failure = repository(
             FakeAuthRepository(UserRole.Monitor),
             failedStore,
             FakePushRemote(revokeResult = PushTokenRemoteResult.NetworkFailure)
-        ).revokeMonitorRegistration()
+        ).revokeMonitorRegistration(monitorSession())
 
         assertTrue(failure is PushTokenSyncResult.RemoteFailure)
         assertEquals(FIRST_REGISTRATION_ID, failedStore.state.remoteRegistrationId)
@@ -145,7 +253,7 @@ class DefaultPushTokenRepositoryTest {
         val store = FakePushStore(PushTokenState(FAKE_TOKEN, null, null))
 
         val result = repository(FakeAuthRepository(UserRole.Monitor), store, remote)
-            .revokeMonitorRegistration()
+            .revokeMonitorRegistration(monitorSession())
 
         assertEquals(PushTokenSyncResult.Revoked, result)
         assertEquals(1, remote.registerCalls)
@@ -157,19 +265,19 @@ class DefaultPushTokenRepositoryTest {
 
     @Test fun revokeIsSafeForAlreadyRevokedAndNotFoundRegistrations() = runBlocking {
         val idempotentRemote = FakePushRemote()
-        val idempotentStore = FakePushStore(PushTokenState(FAKE_TOKEN, null, FIRST_REGISTRATION_ID))
+        val idempotentStore = FakePushStore(PushTokenState(FAKE_TOKEN, null, FIRST_REGISTRATION_ID, MONITOR_USER_ID))
         val repository = repository(FakeAuthRepository(UserRole.Monitor), idempotentStore, idempotentRemote)
 
-        assertEquals(PushTokenSyncResult.Revoked, repository.revokeMonitorRegistration())
-        assertEquals(PushTokenSyncResult.Revoked, repository.revokeMonitorRegistration())
+        assertEquals(PushTokenSyncResult.Revoked, repository.revokeMonitorRegistration(monitorSession()))
+        assertEquals(PushTokenSyncResult.Revoked, repository.revokeMonitorRegistration(monitorSession()))
         assertEquals(2, idempotentRemote.revokedIds.size)
 
-        val notFoundStore = FakePushStore(PushTokenState(FAKE_TOKEN, null, FIRST_REGISTRATION_ID))
+        val notFoundStore = FakePushStore(PushTokenState(FAKE_TOKEN, null, FIRST_REGISTRATION_ID, MONITOR_USER_ID))
         val notFound = repository(
             FakeAuthRepository(UserRole.Monitor),
             notFoundStore,
             FakePushRemote(revokeResult = PushTokenRemoteResult.NotFound("push_notification_token_not_available"))
-        ).revokeMonitorRegistration()
+        ).revokeMonitorRegistration(monitorSession())
 
         assertEquals(PushTokenSyncResult.NotFound, notFound)
         assertNull(notFoundStore.state.remoteRegistrationId)
@@ -192,8 +300,14 @@ class DefaultPushTokenRepositoryTest {
         const val ROTATED_FAKE_TOKEN = "fake-monitor-fcm-token-v2-not-real"
         const val FIRST_REGISTRATION_ID = "registration-test-id"
         const val SECOND_REGISTRATION_ID = "registration-test-id-v2"
+        const val MONITOR_USER_ID = "monitor-user-fixture"
     }
 }
+
+private fun monitorSession(): AuthSessionIdentity = AuthSessionIdentity(
+    userId = "monitor-user-fixture",
+    generation = 0L
+)
 
 private fun registered(id: String): PushTokenRemoteResult.Registered =
     PushTokenRemoteResult.Registered(tokenDto(id, "Active"))
@@ -268,7 +382,7 @@ private class FakePushStore(initial: PushTokenState) : PushTokenStore {
 }
 
 private class FakeAuthRepository(role: UserRole) : AuthRepository {
-    private val user = AuthUser("user-id", "monitor@example.com", "Monitor Test", "+520000000000", role, true)
+    private val user = AuthUser("monitor-user-fixture", "monitor@example.com", "Monitor Test", "+520000000000", role, true)
     private val state = MutableStateFlow<SessionState>(SessionState.Authenticated(user, Instant.MAX, true))
     private var accessToken = "access-token"
     var refreshCalls = 0

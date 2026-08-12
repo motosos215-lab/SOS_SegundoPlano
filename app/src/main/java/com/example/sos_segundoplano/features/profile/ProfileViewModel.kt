@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.sos_segundoplano.domain.auth.SessionState
+import com.example.sos_segundoplano.domain.auth.AuthSessionIdentity
+import com.example.sos_segundoplano.domain.auth.UserRole
 import com.example.sos_segundoplano.domain.profile.ProfileAccessDenied
 import com.example.sos_segundoplano.domain.profile.ProfileAccountUnavailable
 import com.example.sos_segundoplano.domain.profile.ProfileInactiveAccount
@@ -62,7 +64,7 @@ class ProfileViewModel(
     val uiState: StateFlow<ProfileUiState> = mutableUiState.asStateFlow()
 
     private var loadJob: Job? = null
-    private var servingSessionUserId: String? = null
+    private var servingSession: AuthSessionIdentity? = null
     private var sessionEpoch: Long = 0L
 
     init {
@@ -73,7 +75,11 @@ class ProfileViewModel(
 
     private fun onSessionEmitted(state: SessionState) {
         when (state) {
-            is SessionState.Authenticated -> ensureSession(state.user.id)
+            is SessionState.Authenticated -> if (state.user.role == UserRole.Rider) {
+                ensureSession(AuthSessionIdentity(state.user.id, state.generation))
+            } else {
+                clearForLoggedOut()
+            }
             SessionState.LoggedOut,
             SessionState.Expired,
             is SessionState.AccessDenied,
@@ -84,16 +90,16 @@ class ProfileViewModel(
         }
     }
 
-    private fun ensureSession(userId: String) {
-        if (servingSessionUserId == userId) return
-        beginSession(userId)
+    private fun ensureSession(session: AuthSessionIdentity) {
+        if (servingSession == session) return
+        beginSession(session)
     }
 
-    private fun beginSession(userId: String) {
+    private fun beginSession(session: AuthSessionIdentity) {
         loadJob?.cancel()
         sessionEpoch++
         val myEpoch = sessionEpoch
-        servingSessionUserId = userId
+        servingSession = session
         mutableUiState.value = ProfileUiState(loading = true)
         loadJob = viewModelScope.launch {
             val result = try {
@@ -103,7 +109,7 @@ class ProfileViewModel(
             } catch (_: RuntimeException) {
                 ProfileInvalidResponse
             }
-            if (sessionEpoch != myEpoch || servingSessionUserId != userId) return@launch
+            if (sessionEpoch != myEpoch || servingSession != session) return@launch
             applyProfileResult(result)
         }
     }
@@ -112,14 +118,14 @@ class ProfileViewModel(
         sessionEpoch++
         loadJob?.cancel()
         loadJob = null
-        servingSessionUserId = null
+        servingSession = null
         mutableUiState.value = ProfileUiState()
     }
 
     fun retry() {
         val current = mutableUiState.value
         if (current.loading || current.isRetrying || current.isLoggingOut) return
-        val userId = servingSessionUserId ?: return
+        val session = servingSession ?: return
         loadJob?.cancel()
         sessionEpoch++
         val myEpoch = sessionEpoch
@@ -134,7 +140,7 @@ class ProfileViewModel(
             } catch (_: RuntimeException) {
                 ProfileInvalidResponse
             }
-            if (sessionEpoch != myEpoch || servingSessionUserId != userId) return@launch
+            if (sessionEpoch != myEpoch || servingSession != session) return@launch
             applyProfileResult(result)
         }
     }
@@ -153,11 +159,11 @@ class ProfileViewModel(
 
     fun confirmLogout() {
         if (mutableUiState.value.isLoggingOut) return
-        if (servingSessionUserId == null) return
+        val session = servingSession ?: return
         mutableUiState.update { it.copy(isLoggingOut = true, isLogoutDialogVisible = false) }
         viewModelScope.launch {
             try {
-                authRepository.logout()
+                authRepository.logoutIfCurrent(session)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: RuntimeException) {

@@ -1,5 +1,7 @@
 package com.example.sos_segundoplano.domain.push
 
+import com.example.sos_segundoplano.domain.auth.AuthSessionIdentity
+
 sealed interface PushTokenSyncResult {
     data object NoMonitorSession : PushTokenSyncResult
     data object NothingPending : PushTokenSyncResult
@@ -16,5 +18,5 @@ sealed interface PushTokenSyncResult {
 
 interface PushTokenRepository {
     suspend fun syncPendingMonitorToken(): PushTokenSyncResult
-    suspend fun revokeMonitorRegistration(): PushTokenSyncResult
+    suspend fun revokeMonitorRegistration(ownerSession: AuthSessionIdentity): PushTokenSyncResult
 }

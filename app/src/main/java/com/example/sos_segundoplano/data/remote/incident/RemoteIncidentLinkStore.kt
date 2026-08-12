@@ -10,11 +10,15 @@ data class RemoteIncidentLink(
     val remoteTripId: String?,
     val remoteIncidentId: String?,
     val syncState: RemoteIncidentSyncState,
-    val updatedAtEpochMillis: Long
+    val updatedAtEpochMillis: Long,
+    val clientAlertRequestId: String? = null,
+    val detectedAtUtc: String? = null,
+    val remoteAlertDispatchId: String? = null
 )
 
 interface RemoteIncidentLinkStore {
     fun read(clientIncidentId: String): RemoteIncidentLink?
+    fun readPendingManualSos(): RemoteIncidentLink? = null
     fun save(link: RemoteIncidentLink): Boolean
 }
 
@@ -23,6 +27,14 @@ class InMemoryRemoteIncidentLinkStore : RemoteIncidentLinkStore {
 
     override fun read(clientIncidentId: String): RemoteIncidentLink? = synchronized(links) {
         links[clientIncidentId]
+    }
+
+    override fun readPendingManualSos(): RemoteIncidentLink? = synchronized(links) {
+        links.values.lastOrNull {
+            it.syncState == RemoteIncidentSyncState.Pending &&
+                !it.clientAlertRequestId.isNullOrBlank() &&
+                !it.detectedAtUtc.isNullOrBlank()
+        }
     }
 
     override fun save(link: RemoteIncidentLink): Boolean = synchronized(links) {
@@ -55,26 +67,54 @@ class SharedPreferencesRemoteIncidentLinkStore(
             remoteTripId = remoteTripId,
             remoteIncidentId = preferences.getString("$keyPrefix.$KEY_REMOTE_INCIDENT_ID", null).normalized(),
             syncState = state,
-            updatedAtEpochMillis = updatedAt
+            updatedAtEpochMillis = updatedAt,
+            clientAlertRequestId = preferences.getString("$keyPrefix.$KEY_CLIENT_ALERT_REQUEST_ID", null).normalized(),
+            detectedAtUtc = preferences.getString("$keyPrefix.$KEY_DETECTED_AT_UTC", null).normalized(),
+            remoteAlertDispatchId = preferences.getString("$keyPrefix.$KEY_REMOTE_ALERT_DISPATCH_ID", null).normalized()
         )
+    }
+
+    override fun readPendingManualSos(): RemoteIncidentLink? = synchronized(lock) {
+        val clientIncidentId = preferences.getString(KEY_PENDING_MANUAL_SOS_CLIENT_INCIDENT_ID, null).normalized()
+            ?: return@synchronized null
+        read(clientIncidentId)?.takeIf {
+            it.syncState == RemoteIncidentSyncState.Pending &&
+                !it.clientAlertRequestId.isNullOrBlank() &&
+                !it.detectedAtUtc.isNullOrBlank()
+        }
     }
 
     override fun save(link: RemoteIncidentLink): Boolean = synchronized(lock) {
         val clientIncidentId = link.clientIncidentId.normalized() ?: return@synchronized false
         val remoteTripId = link.remoteTripId.normalized()
         val remoteIncidentId = link.remoteIncidentId?.normalized()
+        val clientAlertRequestId = link.clientAlertRequestId.normalized()
+        val detectedAtUtc = link.detectedAtUtc.normalized()
+        val remoteAlertDispatchId = link.remoteAlertDispatchId.normalized()
         if (link.localIncidentId < 0L || link.updatedAtEpochMillis < 0L) return@synchronized false
         if (link.syncState == RemoteIncidentSyncState.Created && (remoteTripId == null || remoteIncidentId == null)) {
             return@synchronized false
         }
+        if (clientAlertRequestId != null && detectedAtUtc == null) return@synchronized false
+        if (link.syncState == RemoteIncidentSyncState.Created && clientAlertRequestId != null && remoteAlertDispatchId == null) {
+            return@synchronized false
+        }
         val keyPrefix = keyPrefix(clientIncidentId)
-        preferences.edit()
+        val editor = preferences.edit()
             .putLong("$keyPrefix.$KEY_LOCAL_INCIDENT_ID", link.localIncidentId)
             .putNullableString("$keyPrefix.$KEY_REMOTE_TRIP_ID", remoteTripId)
             .putNullableString("$keyPrefix.$KEY_REMOTE_INCIDENT_ID", remoteIncidentId)
+            .putNullableString("$keyPrefix.$KEY_CLIENT_ALERT_REQUEST_ID", clientAlertRequestId)
+            .putNullableString("$keyPrefix.$KEY_DETECTED_AT_UTC", detectedAtUtc)
+            .putNullableString("$keyPrefix.$KEY_REMOTE_ALERT_DISPATCH_ID", remoteAlertDispatchId)
             .putString("$keyPrefix.$KEY_SYNC_STATE", link.syncState.name)
             .putLong("$keyPrefix.$KEY_UPDATED_AT", link.updatedAtEpochMillis)
-            .commit()
+        if (clientAlertRequestId != null && link.syncState == RemoteIncidentSyncState.Pending) {
+            editor.putString(KEY_PENDING_MANUAL_SOS_CLIENT_INCIDENT_ID, clientIncidentId)
+        } else if (preferences.getString(KEY_PENDING_MANUAL_SOS_CLIENT_INCIDENT_ID, null) == clientIncidentId) {
+            editor.remove(KEY_PENDING_MANUAL_SOS_CLIENT_INCIDENT_ID)
+        }
+        editor.commit()
     }
 
     private fun android.content.SharedPreferences.Editor.putNullableString(
@@ -91,6 +131,10 @@ class SharedPreferencesRemoteIncidentLinkStore(
         const val KEY_LOCAL_INCIDENT_ID = "local_incident_id"
         const val KEY_REMOTE_TRIP_ID = "remote_trip_id"
         const val KEY_REMOTE_INCIDENT_ID = "remote_incident_id"
+        const val KEY_CLIENT_ALERT_REQUEST_ID = "client_alert_request_id"
+        const val KEY_DETECTED_AT_UTC = "detected_at_utc"
+        const val KEY_REMOTE_ALERT_DISPATCH_ID = "remote_alert_dispatch_id"
+        const val KEY_PENDING_MANUAL_SOS_CLIENT_INCIDENT_ID = "pending_manual_sos_client_incident_id"
         const val KEY_SYNC_STATE = "sync_state"
         const val KEY_UPDATED_AT = "updated_at_epoch_millis"
     }

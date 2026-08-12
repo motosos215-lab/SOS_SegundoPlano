@@ -516,7 +516,6 @@ fun MotoSosApp(
             canSubmitManualSos = true,
             onSubmitManualSos = {
                 onManualSos()
-                selectedScreen = MotoSosAppScreen.Home
             },
             onNavigateBack = ::closeManualSos,
             onHomeSelected = { selectedScreen = MotoSosAppScreen.Home },

@@ -112,6 +112,19 @@ class ProfileViewModelTest {
         assertNull(viewModel.uiState.value.profile)
     }
 
+    @Test fun monitorSessionNeverStartsRiderProfileLoadOrTriggersLogout() = runTest {
+        val repository = FakeProfileRepository(ProfileResult.Success(validProfile("unexpected")))
+        val auth = FakeAuthRepository(
+            initialSession = SessionState.Authenticated(monitorUser(), expiresAt(), true)
+        )
+        val viewModel = ProfileViewModel(repository, auth)
+
+        assertEquals(0, repository.loadCalls)
+        assertEquals(0, auth.logoutCalls)
+        assertFalse(viewModel.uiState.value.loading)
+        assertNull(viewModel.uiState.value.profile)
+    }
+
     @Test fun staleProfileResultFromPreviousSessionIsDiscarded() = runTest {
         val pending = CompletableDeferred<ProfileResult<RiderProfile>>()
         val repository = object : ProfileRepository {
@@ -262,6 +275,7 @@ private class FakeAuthRepository(
 
 private fun aUser(): AuthUser = authUser("rider-a", "Moto Rider A")
 private fun bUser(): AuthUser = authUser("rider-b", "Moto Rider B")
+private fun monitorUser(): AuthUser = authUser("monitor-fixture", "Monitor Fixture").copy(role = UserRole.Monitor)
 
 private fun authUser(id: String, fullName: String): AuthUser = AuthUser(
     id = id,
