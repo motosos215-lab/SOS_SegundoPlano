@@ -4,6 +4,8 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import com.example.sos_segundoplano.data.remote.incident.IncidentsApi
 import com.example.sos_segundoplano.data.remote.incident.MobileSosAlertsApi
+import com.example.sos_segundoplano.data.remote.emergency.EmergencyContactsApi
+import com.example.sos_segundoplano.data.remote.monitor.MonitorAlertsApi
 import com.example.sos_segundoplano.data.remote.profile.UsersApi
 import com.example.sos_segundoplano.data.remote.push.PushNotificationTokensApi
 import com.example.sos_segundoplano.data.remote.trip.TripsApi
@@ -46,6 +48,18 @@ object AuthNetworkFactory {
         moshi: Moshi = createMoshi(),
         client: OkHttpClient = createClient()
     ): MobileSosAlertsApi = createRetrofit(baseUrl, moshi, client).create(MobileSosAlertsApi::class.java)
+
+    fun createEmergencyContactsApi(
+        baseUrl: String,
+        moshi: Moshi = createMoshi(),
+        client: OkHttpClient = createClient()
+    ): EmergencyContactsApi = createRetrofit(baseUrl, moshi, client).create(EmergencyContactsApi::class.java)
+
+    fun createMonitorAlertsApi(
+        baseUrl: String,
+        moshi: Moshi = createMoshi(),
+        client: OkHttpClient = createClient()
+    ): MonitorAlertsApi = createRetrofit(baseUrl, moshi, client).create(MonitorAlertsApi::class.java)
 
     fun createTripsApi(
         baseUrl: String,

@@ -9,6 +9,10 @@ import com.example.sos_segundoplano.domain.auth.InvalidResponse
 import com.example.sos_segundoplano.domain.auth.NetworkUnavailable
 import com.example.sos_segundoplano.domain.auth.Timeout
 import com.example.sos_segundoplano.domain.repository.AuthRepository
+import com.example.sos_segundoplano.domain.sos.MobileSosIncidentType
+import com.example.sos_segundoplano.domain.sos.MobileSosPriority
+import com.example.sos_segundoplano.domain.sos.MobileSosReason
+import com.example.sos_segundoplano.domain.sos.MobileSosSeverity
 import com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus
 import com.example.sos_segundoplano.domain.validation.LocalIncident
 import java.time.Instant
@@ -85,13 +89,13 @@ class AuthenticatedManualSosAlertCreator(
             tripId = remoteTripId,
             clientIncidentId = clientIncidentId,
             clientAlertRequestId = clientAlertRequestId,
-            incidentType = MANUAL_SOS,
-            severity = HIGH,
+            incidentType = MobileSosIncidentType.ManualSos.apiValue,
+            severity = MobileSosSeverity.High.apiValue,
             detectedAtUtc = detectedAtUtc,
             latitude = location.latitude,
             longitude = location.longitude,
-            priority = HIGH,
-            reason = MANUAL_SOS,
+            priority = MobileSosPriority.High.apiValue,
+            reason = MobileSosReason.ManualSos.apiValue,
             notes = NOTES
         )
         val token = when (val auth = authRepository.ensureValidAccessToken()) {
@@ -176,8 +180,6 @@ class AuthenticatedManualSosAlertCreator(
     }
 
     private companion object {
-        const val MANUAL_SOS = "ManualSos"
-        const val HIGH = "High"
         const val NOTES = "Alerta SOS desde Android"
     }
 }
