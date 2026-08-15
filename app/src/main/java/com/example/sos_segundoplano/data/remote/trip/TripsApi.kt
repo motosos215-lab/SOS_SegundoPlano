@@ -9,6 +9,8 @@ import retrofit2.http.POST
 import retrofit2.http.Path
 
 interface TripsApi {
+    @GET("api/v1/trips")
+    suspend fun listTrips(@Header("Authorization") authorization: String): Response<ApiEnvelopeDto<TripHistoryPageDto>>
     @GET("api/v1/vehicles")
     suspend fun vehicles(
         @Header("Authorization") authorization: String

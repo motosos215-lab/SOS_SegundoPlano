@@ -142,6 +142,41 @@ class ManualSosIncidentCoordinatorTest {
         assertEquals(1, remote.calls)
     }
 
+    @Test fun successfulManualSosClearsPendingSoTheNextSosGetsNewDurableIdentity() = runBlocking {
+        val links = InMemoryRemoteIncidentLinkStore()
+        val remote = PersistingSuccessRemoteCreator(links)
+        val clientIds = listOf(
+            "123e4567-e89b-12d3-a456-426614174045",
+            "123e4567-e89b-12d3-a456-426614174046"
+        ).iterator()
+        val alertIds = listOf(
+            "223e4567-e89b-12d3-a456-426614174045",
+            "223e4567-e89b-12d3-a456-426614174046"
+        ).iterator()
+        val timestamps = listOf(
+            Instant.parse("2026-08-11T15:59:00Z"),
+            Instant.parse("2026-08-11T16:00:00Z")
+        ).iterator()
+        val coordinator = ManualSosIncidentCoordinator(
+            remoteCreator = remote,
+            offlineEventSink = CapturingOfflineEventSink(),
+            remoteIncidentLinkStore = links,
+            incidentStore = InMemoryBoundedValidationStore(4),
+            nextIncidentId = { remote.incidents.size.toLong() + 45L },
+            nextClientIncidentId = { clientIds.next() },
+            nextClientAlertRequestId = { alertIds.next() },
+            nowUtc = { timestamps.next() }
+        )
+
+        coordinator.requestManualSos()
+        coordinator.requestManualSos()
+
+        assertEquals(2, remote.incidents.size)
+        assertEquals(false, remote.incidents[0].clientIncidentId == remote.incidents[1].clientIncidentId)
+        assertEquals(null, links.readPendingManualSos())
+        assertEquals("223e4567-e89b-12d3-a456-426614174046", links.read(remote.incidents[1].clientIncidentId!!)?.clientAlertRequestId)
+    }
+
     private class CapturingOfflineEventSink(
         private val result: OfflineQueueEnqueueResult =
             OfflineQueueEnqueueResult.PersistedAndScheduled(1L, "local-incident:41")
@@ -196,6 +231,30 @@ class ManualSosIncidentCoordinatorTest {
                 remoteTripId = "remote-trip-1",
                 remoteIncidentId = "remote-incident-1",
                 remoteCreationStatus = IncidentRemoteCreationStatus.Success("remote-incident-1")
+            )
+        }
+    }
+
+    private class PersistingSuccessRemoteCreator(
+        private val links: RemoteIncidentLinkStore
+    ) : ManualSosAlertCreator {
+        val incidents = mutableListOf<LocalIncident>()
+
+        override suspend fun createManualSosAlert(incident: LocalIncident): LocalIncident {
+            incidents += incident
+            val link = requireNotNull(links.read(requireNotNull(incident.clientIncidentId)))
+            links.save(
+                link.copy(
+                    remoteTripId = "remote-trip-1",
+                    remoteIncidentId = "remote-incident-${incidents.size}",
+                    remoteAlertDispatchId = "dispatch-${incidents.size}",
+                    syncState = RemoteIncidentSyncState.Created
+                )
+            )
+            return incident.copy(
+                remoteTripId = "remote-trip-1",
+                remoteIncidentId = "remote-incident-${incidents.size}",
+                remoteCreationStatus = IncidentRemoteCreationStatus.Success("remote-incident-${incidents.size}")
             )
         }
     }

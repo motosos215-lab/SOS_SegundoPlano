@@ -11,7 +11,7 @@ import retrofit2.http.Path
 
 interface MonitorAlertsApi {
     @GET("api/v1/monitor/alerts")
-    suspend fun list(@Header("Authorization") authorization: String): Response<ApiEnvelopeDto<Any>>
+    suspend fun list(@Header("Authorization") authorization: String): Response<ApiEnvelopeDto<List<MonitorAlertAcknowledgementDto>>>
 
     @GET("api/v1/monitor/alerts/{notificationDeliveryAttemptId}")
     suspend fun detail(@Header("Authorization") authorization: String, @Path("notificationDeliveryAttemptId") id: String): Response<ApiEnvelopeDto<MonitorAlertDetailDataDto>>

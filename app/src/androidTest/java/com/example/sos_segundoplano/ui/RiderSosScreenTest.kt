@@ -8,13 +8,12 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.test.doubleClick
 import androidx.test.espresso.Espresso.pressBackUnconditionally
 import com.example.sos_segundoplano.MotoSosApp
 import com.example.sos_segundoplano.core.background.MonitoringServiceStopResult
 import com.example.sos_segundoplano.core.background.MonitoringServiceStopper
 import com.example.sos_segundoplano.data.trip.InMemoryTripSessionStore
+import com.example.sos_segundoplano.data.remote.incident.ManualSosRequestState
 import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.features.sos.RiderSosScreen
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
@@ -62,13 +61,14 @@ class RiderSosScreenTest {
         assertEquals(0, helpRequests)
     }
 
-    @Test fun localSendIsSingleShotAndExposesAccessibleActions() {
+    @Test fun preparingManualSosIsNotPresentedAsSentAndBlocksDuplicateTap() {
         var helpRequests = 0
         composeRule.setContent {
             SOS_SegundoPlanoTheme {
                 RiderSosScreen(
                     canSubmitManualSos = true,
                     onSubmitManualSos = { helpRequests++ },
+                    requestState = ManualSosRequestState.WaitingForLocation,
                     onNavigateBack = {}
                 )
             }
@@ -78,11 +78,45 @@ class RiderSosScreenTest {
         composeRule.onNodeWithContentDescription("Regresar").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Cancelar SOS y volver").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Registrar alerta SOS de emergencia").assertIsDisplayed()
-        composeRule.onNodeWithTag("send_sos_button").assertIsEnabled().performTouchInput { doubleClick() }
         composeRule.onNodeWithTag("send_sos_button").assertIsNotEnabled()
-        composeRule.onNodeWithTag("sos_request_received").assertIsDisplayed()
+        composeRule.onNodeWithTag("sos_request_status").assertIsDisplayed()
+        composeRule.onNodeWithText("Obteniendo ubicación para enviar la alerta…").assertIsDisplayed()
+        assertEquals(0, helpRequests)
+    }
+
+    @Test fun sentManualSosShowsRemoteSuccessAndAllowsANewRequest() {
+        var helpRequests = 0
+        composeRule.setContent {
+            SOS_SegundoPlanoTheme {
+                RiderSosScreen(
+                    canSubmitManualSos = true,
+                    onSubmitManualSos = { helpRequests++ },
+                    requestState = ManualSosRequestState.Sent,
+                    onNavigateBack = {}
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Alerta SOS enviada.").assertIsDisplayed()
+        composeRule.onNodeWithTag("send_sos_button").assertIsEnabled().performClick()
 
         assertEquals(1, helpRequests)
+    }
+
+    @Test fun missingLocationShowsRetryableGuidance() {
+        composeRule.setContent {
+            SOS_SegundoPlanoTheme {
+                RiderSosScreen(
+                    canSubmitManualSos = true,
+                    onSubmitManualSos = {},
+                    requestState = ManualSosRequestState.LocationUnavailable,
+                    onNavigateBack = {}
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("No fue posible obtener tu ubicación. Puedes reintentar.").assertIsDisplayed()
+        composeRule.onNodeWithTag("send_sos_button").assertIsEnabled()
     }
 
     @Test fun manualSosDoesNotRequireValidationAndNeverUsesRequestHelp() {
@@ -100,7 +134,6 @@ class RiderSosScreenTest {
         composeRule.onNodeWithTag("send_sos_button").performClick()
 
         composeRule.onNodeWithTag("rider_sos_screen").assertIsDisplayed()
-        composeRule.onNodeWithTag("sos_request_received").assertIsDisplayed()
         assertEquals(1, manualRequests)
     }
 

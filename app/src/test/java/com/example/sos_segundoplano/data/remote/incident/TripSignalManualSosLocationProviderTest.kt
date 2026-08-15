@@ -4,26 +4,97 @@ import com.example.sos_segundoplano.data.signals.InMemoryTripSignalStore
 import com.example.sos_segundoplano.domain.signals.LocationSample
 import com.example.sos_segundoplano.domain.signals.SignalAvailability
 import com.example.sos_segundoplano.domain.signals.SignalReading
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TripSignalManualSosLocationProviderTest {
-    @Test fun returnsRecentRealMonitoringLocation() {
+    @Test fun returnsRecentRealMonitoringLocation() = runBlocking {
         val store = InMemoryTripSignalStore()
         val sample = location(timestampMillis = 10_000L)
         store.updateLocation(SignalReading(SignalAvailability.Available, sample))
+        var fallbackRequests = 0
 
         val result = TripSignalManualSosLocationProvider(
             store = store,
             nowEpochMillis = { 14_999L },
-            maxAgeMillis = 5_000L
+            maxAgeMillis = 5_000L,
+            currentLocationProvider = CurrentManualSosLocationProvider {
+                fallbackRequests++
+                location(timestampMillis = 14_000L)
+            }
         ).currentRealLocation()
 
         assertEquals(sample, result)
+        assertEquals(0, fallbackRequests)
     }
 
-    @Test fun rejectsStaleMockMissingAndZeroFallbackLocations() {
+    @Test fun usesCurrentAndroidLocationWhenSnapshotIsUnavailableOrStale() = runBlocking {
+        val fallback = location(timestampMillis = 14_000L)
+        val store = InMemoryTripSignalStore().apply {
+            updateLocation(SignalReading(SignalAvailability.Waiting, null))
+        }
+        val result = TripSignalManualSosLocationProvider(
+            store = store,
+            nowEpochMillis = { 15_000L },
+            maxAgeMillis = 5_000L,
+            currentLocationProvider = CurrentManualSosLocationProvider { fallback }
+        ).currentRealLocation()
+
+        assertEquals(fallback, result)
+    }
+
+    @Test fun usesCurrentAndroidLocationWhenSnapshotIsStale() = runBlocking {
+        val fallback = location(timestampMillis = 14_000L)
+        val store = InMemoryTripSignalStore().apply {
+            updateLocation(SignalReading(SignalAvailability.Available, location(timestampMillis = 1_000L)))
+        }
+        val result = TripSignalManualSosLocationProvider(
+            store = store,
+            nowEpochMillis = { 15_000L },
+            maxAgeMillis = 5_000L,
+            currentLocationProvider = CurrentManualSosLocationProvider { fallback }
+        ).currentRealLocation()
+
+        assertEquals(fallback, result)
+    }
+
+    @Test fun rejectsMockAndZeroCurrentAndroidLocations() = runBlocking {
+        listOf(
+            location(timestampMillis = 14_000L, isMock = true),
+            location(timestampMillis = 14_000L, latitude = 0.0, longitude = 0.0)
+        ).forEach { fallback ->
+            val result = TripSignalManualSosLocationProvider(
+                store = InMemoryTripSignalStore(),
+                nowEpochMillis = { 15_000L },
+                maxAgeMillis = 5_000L,
+                currentLocationProvider = CurrentManualSosLocationProvider { fallback }
+            ).currentRealLocation()
+
+            assertNull(result)
+        }
+    }
+
+    @Test fun currentAndroidLocationTimeoutReturnsNoLocation() = runBlocking {
+        val result = TripSignalManualSosLocationProvider(
+            store = InMemoryTripSignalStore(),
+            nowEpochMillis = { 15_000L },
+            maxAgeMillis = 5_000L,
+            currentLocationTimeoutMillis = 1L,
+            currentLocationProvider = CurrentManualSosLocationProvider {
+                delay(100L)
+                location(timestampMillis = 14_000L)
+            }
+        ).currentRealLocation()
+
+        assertNull(result)
+    }
+
+    @Test fun rejectsStaleMockMissingAndZeroFallbackLocations() = runBlocking {
         val cases = listOf(
             SignalReading(SignalAvailability.Waiting, location(timestampMillis = 10_000L)),
             SignalReading(SignalAvailability.Available, location(timestampMillis = 9_999L)),
@@ -42,6 +113,25 @@ class TripSignalManualSosLocationProviderTest {
                 ).currentRealLocation()
             )
         }
+    }
+
+    @Test fun realLocationValidationRejectsInvalidSamplesAndAcceptsFreshFix() {
+        val maxAgeMillis = 5_000L
+
+        assertTrue(isValidRealLocation(location(timestampMillis = 14_000L), 1_000L, maxAgeMillis))
+
+        listOf(
+            location(timestampMillis = 14_000L, isMock = true),
+            location(timestampMillis = 14_000L, latitude = 0.0, longitude = 0.0),
+            location(timestampMillis = 14_000L, latitude = 91.0),
+            location(timestampMillis = 14_000L, longitude = -181.0),
+            location(timestampMillis = 14_000L).copy(accuracyMeters = -1f),
+            location(timestampMillis = 14_000L).copy(accuracyMeters = Float.NaN)
+        ).forEach { sample ->
+            assertFalse(isValidRealLocation(sample, 1_000L, maxAgeMillis))
+        }
+
+        assertFalse(isValidRealLocation(location(timestampMillis = 14_000L), 5_001L, maxAgeMillis))
     }
 
     private fun location(

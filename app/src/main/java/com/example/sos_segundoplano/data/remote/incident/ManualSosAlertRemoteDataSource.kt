@@ -50,7 +50,7 @@ class RetrofitManualSosAlertRemoteDataSource(
         request: ManualSosAlertRequestDto
     ): ManualSosAlertSubmissionStatus = executeSafely {
         val response = api.createManualSosAlert(authorization, request)
-        if (response.code() != HTTP_OK) return@executeSafely mapHttpFailure(response)
+        if (!response.isSuccessful) return@executeSafely mapHttpFailure(response)
         val envelope = response.body()
             ?: return@executeSafely ManualSosAlertSubmissionStatus.InvalidResponse("response_body_missing")
         if (!envelope.success) return@executeSafely mapHandledFailure(response.code(), envelope.error)
@@ -136,7 +136,6 @@ class RetrofitManualSosAlertRemoteDataSource(
         ?.take(MAX_SANITIZED_LENGTH)
 
     private companion object {
-        const val HTTP_OK = 200
         const val MAX_SANITIZED_LENGTH = 160
     }
 }

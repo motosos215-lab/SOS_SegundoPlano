@@ -58,7 +58,7 @@ class RetrofitManualSosAlertRemoteDataSourceTest {
         assertEquals(1, mixed.summary?.pushPrepared)
     }
 
-    @Test fun rejectsInconsistentCanonicalIdsAndNon200Success() = runBlocking {
+    @Test fun rejectsInconsistentCanonicalIdsAndAcceptsAnyComplete2xxSuccess() = runBlocking {
         val cases = listOf(
             successBody(tripId = "other-trip") to ManualSosAlertSubmissionStatus.InvalidResponse("incident_trip_id_mismatch"),
             successBody(dispatchIncidentId = "other-incident") to ManualSosAlertSubmissionStatus.InvalidResponse("dispatch_incident_id_mismatch")
@@ -68,8 +68,10 @@ class RetrofitManualSosAlertRemoteDataSourceTest {
             assertEquals(expected, source().createManualSosAlert("Bearer fixture-token", request()))
         }
         server.enqueue(jsonResponse(201, successBody()))
+        assertTrue(source().createManualSosAlert("Bearer fixture-token", request()) is ManualSosAlertSubmissionStatus.Success)
+        server.enqueue(jsonResponse(202, """{"success":true,"data":null,"error":null}"""))
         assertEquals(
-            ManualSosAlertSubmissionStatus.HttpError(201, "request_rejected"),
+            ManualSosAlertSubmissionStatus.InvalidResponse("response_data_missing"),
             source().createManualSosAlert("Bearer fixture-token", request())
         )
     }

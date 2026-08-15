@@ -48,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.sos_segundoplano.R
+import com.example.sos_segundoplano.data.remote.incident.ManualSosRequestState
 import com.example.sos_segundoplano.ui.components.MotoAssetIcon
 import com.example.sos_segundoplano.ui.components.MotoBottomBar
 import com.example.sos_segundoplano.ui.components.MotoBottomBarItem
@@ -63,6 +64,7 @@ private val SosNavRed = lerp(MotoAlert, Color.Black, 0.72f)
 fun RiderSosScreen(
     canSubmitManualSos: Boolean,
     onSubmitManualSos: () -> Unit,
+    requestState: ManualSosRequestState = ManualSosRequestState.Idle,
     onNavigateBack: () -> Unit,
     onHomeSelected: () -> Unit = onNavigateBack,
     onProfileSelected: () -> Unit = onNavigateBack,
@@ -70,8 +72,11 @@ fun RiderSosScreen(
 ) {
     val sendDescription = stringResource(R.string.sos_manual_send_cd)
     val cancelDescription = stringResource(R.string.sos_manual_cancel_cd)
-    var requestAccepted by rememberSaveable { mutableStateOf(false) }
     var showUnavailable by rememberSaveable { mutableStateOf(false) }
+    val isSubmissionInProgress = requestState is ManualSosRequestState.Preparing ||
+        requestState is ManualSosRequestState.Retrying ||
+        requestState is ManualSosRequestState.WaitingForLocation ||
+        requestState is ManualSosRequestState.Sending
     BackHandler(onBack = onNavigateBack)
 
     Column(
@@ -124,27 +129,36 @@ fun RiderSosScreen(
                     modifier = Modifier.testTag("sos_local_unavailable")
                 )
             }
-            if (requestAccepted) {
+            val requestStatus = when (requestState) {
+                ManualSosRequestState.Idle -> null
+                ManualSosRequestState.Preparing -> R.string.sos_manual_preparing
+                ManualSosRequestState.Retrying -> R.string.sos_manual_retrying
+                ManualSosRequestState.WaitingForLocation -> R.string.sos_manual_waiting_for_location
+                ManualSosRequestState.Sending -> R.string.sos_manual_sending
+                ManualSosRequestState.Sent -> R.string.sos_manual_sent
+                ManualSosRequestState.LocationUnavailable -> R.string.sos_manual_location_unavailable
+                ManualSosRequestState.RetryableFailure -> R.string.sos_manual_retryable_failure
+            }
+            if (requestStatus != null) {
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    text = stringResource(R.string.sos_manual_request_received),
+                    text = stringResource(requestStatus),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MotoSurface,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.testTag("sos_request_received")
+                    modifier = Modifier.testTag("sos_request_status")
                 )
             }
             Spacer(Modifier.height(28.dp))
             Button(
                 onClick = {
-                    if (canSubmitManualSos && !requestAccepted) {
+                    if (canSubmitManualSos && !isSubmissionInProgress) {
                         onSubmitManualSos()
-                        requestAccepted = true
                     } else if (!canSubmitManualSos) {
                         showUnavailable = true
                     }
                 },
-                enabled = !requestAccepted,
+                enabled = !isSubmissionInProgress,
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 56.dp)

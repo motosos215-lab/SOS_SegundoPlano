@@ -30,7 +30,9 @@ class ManualSosIncidentCoordinator(
     private val inFlightLock = Any()
     private var inFlight: CompletableDeferred<LocalIncident>? = null
 
-    suspend fun requestManualSos(): LocalIncident {
+    suspend fun requestManualSos(
+        progressReporter: ManualSosProgressReporter = ManualSosProgressReporter {}
+    ): LocalIncident {
         val (request, owner) = synchronized(inFlightLock) {
             val existing = inFlight
             if (existing != null) {
@@ -43,7 +45,7 @@ class ManualSosIncidentCoordinator(
         }
         if (!owner) return request.await()
         return try {
-            performRequest().also(request::complete)
+            performRequest(progressReporter).also(request::complete)
         } catch (failure: Throwable) {
             request.completeExceptionally(failure)
             throw failure
@@ -54,19 +56,25 @@ class ManualSosIncidentCoordinator(
         }
     }
 
-    private suspend fun performRequest(): LocalIncident = mutex.withLock {
+    private suspend fun performRequest(progressReporter: ManualSosProgressReporter): LocalIncident = mutex.withLock {
         val pendingLink = remoteIncidentLinkStore.readPendingManualSos()
+        progressReporter.report(
+            if (pendingLink == null) ManualSosRequestState.Preparing else ManualSosRequestState.Retrying
+        )
         val incident = if (pendingLink != null) {
             pendingLink.toLocalIncident()
         } else {
             createAndPersistLocalAttempt()
         }
         if (incident.remoteCreationStatus is IncidentRemoteCreationStatus.InvalidResponse) {
-            return@withLock incidentStore.add(incident)
+            return@withLock incidentStore.add(incident).also {
+                progressReporter.report(ManualSosRequestState.RetryableFailure)
+            }
         }
         if (pendingLink == null) enqueueOfflineWithoutBlocking(incident)
-        val result = remoteCreator.createManualSosAlert(incident)
+        val result = remoteCreator.createManualSosAlert(incident, progressReporter)
         incidentStore.add(result)
+        progressReporter.report(result.toRequestState())
         result
     }
 
@@ -129,6 +137,16 @@ class ManualSosIncidentCoordinator(
         } catch (_: RuntimeException) {
             Unit
         }
+    }
+
+    private fun LocalIncident.toRequestState(): ManualSosRequestState = when (val status = remoteCreationStatus) {
+        is IncidentRemoteCreationStatus.Success -> ManualSosRequestState.Sent
+        is IncidentRemoteCreationStatus.MissingRequiredData -> if (status.sanitizedMessage == "manual_sos_location_missing") {
+            ManualSosRequestState.LocationUnavailable
+        } else {
+            ManualSosRequestState.RetryableFailure
+        }
+        else -> ManualSosRequestState.RetryableFailure
     }
 
     private companion object {

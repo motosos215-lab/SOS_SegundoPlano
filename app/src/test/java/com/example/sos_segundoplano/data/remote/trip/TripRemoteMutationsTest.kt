@@ -5,6 +5,10 @@ import com.example.sos_segundoplano.domain.auth.AuthResult
 import com.example.sos_segundoplano.domain.auth.AuthUser
 import com.example.sos_segundoplano.domain.auth.SessionState
 import com.example.sos_segundoplano.domain.repository.AuthRepository
+import com.example.sos_segundoplano.data.remote.incident.CurrentManualSosLocationProvider
+import com.example.sos_segundoplano.data.remote.incident.TripSignalManualSosLocationProvider
+import com.example.sos_segundoplano.data.signals.InMemoryTripSignalStore
+import com.example.sos_segundoplano.domain.signals.LocationSample
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
@@ -95,6 +99,43 @@ class TripRemoteMutationsTest {
         assertEquals(TripMutationResult.Success("recovered-trip-7", "Finished"), result)
         assertEquals("recovered-trip-7", remote.finishedRemoteTripId)
         assertEquals(null, store.remoteTripId.value)
+    }
+
+    @Test fun finishContinuesWithNoEndLocationWhenSharedProviderRejectsMockLocation() = runBlocking {
+        val rejectedLocation = TripSignalManualSosLocationProvider(
+            store = InMemoryTripSignalStore(),
+            nowEpochMillis = { 15_000L },
+            currentLocationProvider = CurrentManualSosLocationProvider {
+                LocationSample(
+                    latitude = 19.4350,
+                    longitude = -99.1360,
+                    accuracyMeters = 10f,
+                    timestampMillis = 14_000L,
+                    provider = "gps",
+                    isMock = true
+                )
+            }
+        ).currentRealLocation()
+        val remote = FakeTripRemoteDataSource(
+            finishResult = TripMutationResult.Success("remote-trip-1", "Finished")
+        )
+        val finisher = AuthenticatedRemoteTripFinisher(
+            FakeAuthRepository(),
+            remote,
+            InMemoryRemoteTripSessionStore().apply { setRemoteTripId("remote-trip-1") }
+        )
+
+        val result = finisher.finishTrip(
+            FinishTripRequestDto(
+                clientFinishedAtUtc = "2026-08-12T16:52:16Z",
+                endLocation = rejectedLocation?.toTripLocationDto()
+            )
+        )
+
+        assertEquals(TripMutationResult.Success("remote-trip-1", "Finished"), result)
+        assertEquals("remote-trip-1", remote.finishedRemoteTripId)
+        assertEquals("2026-08-12T16:52:16Z", remote.finishRequest?.clientFinishedAtUtc)
+        assertEquals(null, remote.finishRequest?.endLocation)
     }
 
     private class FakeTripRemoteDataSource(

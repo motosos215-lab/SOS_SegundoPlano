@@ -16,7 +16,8 @@ class MonitorAlertsApiTest {
     @After fun teardown() { server.shutdown() }
 
     @Test fun usesNotificationDeliveryAttemptIdForEveryRoute() = runBlocking {
-        repeat(7) { server.enqueue(json("""{"success":true,"data":{},"error":null}""")) }
+        server.enqueue(json("""{"success":true,"data":[],"error":null}"""))
+        repeat(6) { server.enqueue(json("""{"success":true,"data":{},"error":null}""")) }
         val api = api()
         api.list("Bearer monitor")
         api.detail("Bearer monitor", "attempt-1")

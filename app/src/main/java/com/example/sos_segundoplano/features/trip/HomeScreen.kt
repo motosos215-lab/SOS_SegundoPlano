@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -38,6 +39,8 @@ fun HomeScreen(
     onBluetoothReadinessAction: () -> Unit = {},
     onSosSelected: () -> Unit = {},
     onProfileSelected: () -> Unit = {},
+    onTripsSelected: () -> Unit = {},
+    isTripStartInProgress: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Scaffold(
@@ -54,7 +57,8 @@ fun HomeScreen(
         bottomBar = {
             MotoBottomBar(
                 selectedItem = MotoBottomBarItem.Home,
-                enabledItems = setOf(MotoBottomBarItem.Home, MotoBottomBarItem.Sos, MotoBottomBarItem.Profile),
+                enabledItems = setOf(MotoBottomBarItem.Home, MotoBottomBarItem.Trips, MotoBottomBarItem.Sos, MotoBottomBarItem.Profile),
+                onTripsSelected = onTripsSelected,
                 onSosSelected = onSosSelected,
                 onProfileSelected = onProfileSelected
             )
@@ -68,7 +72,10 @@ fun HomeScreen(
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            MotoHeroTripCard(onStartTrip = onStartTrip)
+            MotoHeroTripCard(
+                onStartTrip = onStartTrip,
+                isStarting = isTripStartInProgress
+            )
             MonitoringReadinessCard(
                 readiness = monitoringReadiness,
                 onLocationAction = onLocationReadinessAction,

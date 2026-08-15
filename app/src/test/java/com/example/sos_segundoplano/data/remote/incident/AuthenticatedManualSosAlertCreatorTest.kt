@@ -3,6 +3,7 @@ package com.example.sos_segundoplano.data.remote.incident
 import com.example.sos_segundoplano.data.remote.trip.ActiveTripLookupResult
 import com.example.sos_segundoplano.data.remote.trip.ActiveTripRemoteResolver
 import com.example.sos_segundoplano.data.remote.trip.InMemoryRemoteTripSessionStore
+import com.example.sos_segundoplano.data.signals.InMemoryTripSignalStore
 import com.example.sos_segundoplano.domain.auth.AccessToken
 import com.example.sos_segundoplano.domain.auth.AuthResult
 import com.example.sos_segundoplano.domain.auth.AuthUser
@@ -91,6 +92,26 @@ class AuthenticatedManualSosAlertCreatorTest {
         assertEquals(0, remote.requests.size)
         assertEquals(CLIENT_ALERT_ID, links.readPendingManualSos()?.clientAlertRequestId)
         assertEquals(DETECTED_AT, links.readPendingManualSos()?.detectedAtUtc)
+    }
+
+    @Test fun missingSnapshotUsesCurrentAndroidLocationAndPosts() = runBlocking {
+        val remote = FakeManualSosRemoteDataSource(success())
+        val locationProvider = TripSignalManualSosLocationProvider(
+            store = InMemoryTripSignalStore(),
+            nowEpochMillis = { 1_723_392_901_000L },
+            maxAgeMillis = 5_000L,
+            currentLocationProvider = CurrentManualSosLocationProvider { location() }
+        )
+
+        creator(
+            remote = remote,
+            links = pendingLinks(),
+            tripStore = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("remote-trip-1") },
+            locationProvider = locationProvider
+        ).createManualSosAlert(incident())
+
+        assertEquals(1, remote.requests.size)
+        assertEquals(19.4326, remote.requests.single().latitude, 0.0)
     }
 
     @Test fun unauthorizedRefreshesOnceAndReusesExactRequest() = runBlocking {

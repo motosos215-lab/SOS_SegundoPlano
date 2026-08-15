@@ -16,7 +16,7 @@ sealed interface MonitorAlertsRemoteResult<out T> {
 }
 
 interface MonitorAlertsRemoteDataSource {
-    suspend fun list(authorization: String): MonitorAlertsRemoteResult<Any>
+    suspend fun list(authorization: String): MonitorAlertsRemoteResult<List<MonitorAlertAcknowledgementDto>>
     suspend fun detail(authorization: String, id: String): MonitorAlertsRemoteResult<MonitorAlertDetailDataDto>
     suspend fun status(authorization: String, id: String): MonitorAlertsRemoteResult<Any>
     suspend fun location(authorization: String, id: String): MonitorAlertsRemoteResult<Any>
