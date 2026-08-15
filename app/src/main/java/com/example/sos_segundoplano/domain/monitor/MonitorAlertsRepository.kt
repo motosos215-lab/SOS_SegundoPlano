@@ -33,6 +33,7 @@ sealed interface MonitorAlertsResult<out T> {
 }
 
 interface MonitorAlertsRepository {
+    suspend fun listAlerts(): MonitorAlertsResult<List<MonitorAlertAcknowledgement>>
     suspend fun getAlerts(): MonitorAlertsResult<MonitorAlertOpaquePayload>
     suspend fun getAlert(id: NotificationDeliveryAttemptId): MonitorAlertsResult<MonitorAlertDetail>
     suspend fun getStatus(id: NotificationDeliveryAttemptId): MonitorAlertsResult<MonitorAlertOpaquePayload>

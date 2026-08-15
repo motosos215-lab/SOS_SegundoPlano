@@ -5,9 +5,12 @@ import com.example.sos_segundoplano.domain.auth.AuthResult
 import com.example.sos_segundoplano.domain.auth.AuthUser
 import com.example.sos_segundoplano.domain.auth.SessionState
 import com.example.sos_segundoplano.domain.repository.AuthRepository
+import com.example.sos_segundoplano.data.remote.incident.ManualSosLocationProvider
+import com.example.sos_segundoplano.domain.signals.LocationSample
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
+import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -99,15 +102,25 @@ class TripStartResourcesResolverTest {
                 order += "start"
                 request = it
                 TripMutationResult.Success("remote-trip-canonical", "Active")
+            },
+            locationProvider = ManualSosLocationProvider {
+                order += "location"
+                location(timestampMillis = 1_723_456_000_000L)
             }
         )
 
         val result = starter.startTrip()
 
-        assertEquals(listOf("vehicles", "devices", "start"), order)
+        assertEquals(listOf("vehicles", "devices", "location", "start"), order)
         assertEquals("vehicle-backend", request?.vehicleId)
         assertEquals("mobile-backend", request?.mobileDeviceId)
         assertNull(request?.smartwatchDeviceId)
+        assertEquals(19.4326, request?.startLocation?.latitude)
+        assertEquals(-99.1332, request?.startLocation?.longitude)
+        assertEquals(8.0, request?.startLocation?.accuracyMeters)
+        assertEquals("gps", request?.startLocation?.provider)
+        assertEquals(Instant.ofEpochMilli(1_723_456_000_000L).toString(), request?.startLocation?.recordedAtUtc)
+        assertEquals(true, request?.clientStartedAtUtc?.endsWith("Z"))
         assertEquals(TripMutationResult.Success("remote-trip-canonical", "Active"), result)
     }
 
@@ -135,6 +148,120 @@ class TripStartResourcesResolverTest {
             assertEquals(expected, starter.startTrip())
             assertEquals(0, startCalls)
         }
+    }
+
+    @Test fun startIncludesValidatedLocationAndUtcTimestamp() = runBlocking {
+        val location = location(timestampMillis = 1_723_456_000_000L)
+        var request: StartTripRequestDto? = null
+        val starter = DefaultResolvedRemoteTripStarter(
+            AuthenticatedTripStartResourcesResolver(FakeAuthRepository(), FakeResourceDataSource(TripStartResourceLookupResult.Success(listOf(vehicle("vehicle", primary = true))), TripStartResourceLookupResult.Success(listOf(device("mobile", "MobileApp", primary = true))))),
+            RemoteTripStarter { request = it; TripMutationResult.Success("remote-trip", "Active") },
+            ManualSosLocationProvider { location }
+        )
+
+        starter.startTrip()
+
+        assertEquals(location.latitude, request?.startLocation?.latitude)
+        assertEquals(location.longitude, request?.startLocation?.longitude)
+        assertEquals(location.accuracyMeters.toDouble(), request?.startLocation?.accuracyMeters)
+        assertEquals("gps", request?.startLocation?.provider)
+        assertEquals(Instant.ofEpochMilli(location.timestampMillis).toString(), request?.startLocation?.recordedAtUtc)
+        assertEquals(true, request?.clientStartedAtUtc?.endsWith("Z"))
+    }
+
+    @Test fun startWaitsForLocationCaptureBeforePostingAndReportsUnavailableLocation() = runBlocking {
+        val order = mutableListOf<String>()
+        var request: StartTripRequestDto? = null
+        val captureStates = mutableListOf<TripStartLocationCaptureState>()
+        val starter = DefaultResolvedRemoteTripStarter(
+            AuthenticatedTripStartResourcesResolver(
+                FakeAuthRepository(),
+                FakeResourceDataSource(
+                    TripStartResourceLookupResult.Success(listOf(vehicle("vehicle", primary = true))),
+                    TripStartResourceLookupResult.Success(listOf(device("mobile", "MobileApp", primary = true))),
+                    order
+                )
+            ),
+            RemoteTripStarter {
+                order += "start"
+                request = it
+                TripMutationResult.Success("remote-trip", "Active")
+            },
+            locationProvider = ManualSosLocationProvider {
+                order += "location"
+                null
+            },
+            onLocationCaptureStateChanged = captureStates::add
+        )
+
+        val result = starter.startTrip()
+
+        assertEquals(TripMutationResult.MissingRequiredData("start_location_unavailable"), result)
+        assertEquals(listOf("vehicles", "devices", "location"), order)
+        assertNull(request)
+        assertEquals(
+            listOf(TripStartLocationCaptureState.Capturing, TripStartLocationCaptureState.Unavailable),
+            captureStates
+        )
+    }
+
+    @Test fun explicitStartWithoutLocationPostsNullLocationOnce() = runBlocking {
+        var startCalls = 0
+        var request: StartTripRequestDto? = null
+        val starter = DefaultResolvedRemoteTripStarter(
+            AuthenticatedTripStartResourcesResolver(
+                FakeAuthRepository(),
+                FakeResourceDataSource(
+                    TripStartResourceLookupResult.Success(listOf(vehicle("vehicle", primary = true))),
+                    TripStartResourceLookupResult.Success(listOf(device("mobile", "MobileApp", primary = true)))
+                )
+            ),
+            RemoteTripStarter {
+                startCalls++
+                request = it
+                TripMutationResult.Success("remote-trip", "Active")
+            },
+            locationProvider = ManualSosLocationProvider { null }
+        )
+
+        val result = starter.startTripWithoutInitialLocation()
+
+        assertEquals(TripMutationResult.Success("remote-trip", "Active"), result)
+        assertEquals(1, startCalls)
+        assertNull(request?.startLocation)
+    }
+
+    @Test fun retryCapturesLocationAgainAndPostsOnlyAfterValidSecondAttempt() = runBlocking {
+        var captureAttempts = 0
+        var startCalls = 0
+        var request: StartTripRequestDto? = null
+        val validLocation = location(timestampMillis = 1_723_456_000_000L)
+        val starter = DefaultResolvedRemoteTripStarter(
+            AuthenticatedTripStartResourcesResolver(
+                FakeAuthRepository(),
+                FakeResourceDataSource(
+                    TripStartResourceLookupResult.Success(listOf(vehicle("vehicle", primary = true))),
+                    TripStartResourceLookupResult.Success(listOf(device("mobile", "MobileApp", primary = true)))
+                )
+            ),
+            RemoteTripStarter {
+                startCalls++
+                request = it
+                TripMutationResult.Success("remote-trip", "Active")
+            },
+            locationProvider = ManualSosLocationProvider {
+                captureAttempts++
+                if (captureAttempts == 1) null else validLocation
+            }
+        )
+
+        assertEquals(TripMutationResult.MissingRequiredData("start_location_unavailable"), starter.startTrip())
+        assertEquals(0, startCalls)
+
+        assertEquals(TripMutationResult.Success("remote-trip", "Active"), starter.startTrip())
+        assertEquals(2, captureAttempts)
+        assertEquals(1, startCalls)
+        assertEquals(validLocation.latitude, request?.startLocation?.latitude)
     }
 
     private fun selectedVehicle(items: List<VehicleResourceDto>): VehicleResourceDto =
@@ -170,6 +297,15 @@ class TripStartResourcesResolverTest {
         primary: Boolean = false,
         active: Boolean = true
     ) = DeviceResourceDto(id, type, linkStatus, parentDeviceId, primary, active)
+
+    private fun location(timestampMillis: Long) = LocationSample(
+        latitude = 19.4326,
+        longitude = -99.1332,
+        accuracyMeters = 8f,
+        timestampMillis = timestampMillis,
+        provider = "gps",
+        isMock = false
+    )
 
     private class FakeResourceDataSource(
         private val vehiclesResult: TripStartResourceLookupResult<List<VehicleResourceDto>>,

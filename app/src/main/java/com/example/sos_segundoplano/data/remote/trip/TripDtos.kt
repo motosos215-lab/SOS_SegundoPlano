@@ -1,6 +1,8 @@
 package com.example.sos_segundoplano.data.remote.trip
 
 import com.squareup.moshi.JsonClass
+import com.example.sos_segundoplano.domain.signals.LocationSample
+import java.time.Instant
 
 @JsonClass(generateAdapter = false)
 data class ActiveTripDataDto(
@@ -46,4 +48,32 @@ data class FinishTripRequestDto(
 @JsonClass(generateAdapter = false)
 data class TripMutationDataDto(
     val trip: RemoteTripDto? = null
+)
+
+@JsonClass(generateAdapter = false)
+data class TripHistoryDto(
+    val id: String? = null,
+    val status: String? = null,
+    val startedAtUtc: String? = null,
+    val finishedAtUtc: String? = null,
+    val clientStartedAtUtc: String? = null,
+    val clientFinishedAtUtc: String? = null,
+    val startLocation: TripLocationDto? = null,
+    val endLocation: TripLocationDto? = null
+)
+
+fun LocationSample.toTripLocationDto(): TripLocationDto = TripLocationDto(
+    latitude = latitude,
+    longitude = longitude,
+    accuracyMeters = accuracyMeters.toDouble(),
+    provider = provider,
+    recordedAtUtc = Instant.ofEpochMilli(timestampMillis).toString()
+)
+
+@JsonClass(generateAdapter = false)
+data class TripHistoryPageDto(
+    val trips: List<TripHistoryDto>? = null,
+    val pageNumber: Int? = null,
+    val pageSize: Int? = null,
+    val totalCount: Int? = null
 )

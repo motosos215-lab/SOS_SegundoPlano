@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.Image
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -38,6 +39,7 @@ import com.example.sos_segundoplano.ui.theme.MotoSurface
 @Composable
 fun MotoHeroTripCard(
     onStartTrip: () -> Unit,
+    isStarting: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val startTripContentDescription = stringResource(R.string.start_trip)
@@ -66,6 +68,7 @@ fun MotoHeroTripCard(
         Spacer(modifier = Modifier.height(4.dp))
         Button(
             onClick = onStartTrip,
+            enabled = !isStarting,
             modifier = Modifier
                 .heightIn(min = 56.dp)
                 .fillMaxWidth()
@@ -76,7 +79,13 @@ fun MotoHeroTripCard(
             colors = ButtonDefaults.buttonColors(containerColor = MotoSuccess),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
         ) {
-            Icon(
+            if (isStarting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(19.dp),
+                    color = MotoSurface,
+                    strokeWidth = 2.dp
+                )
+            } else Icon(
                 painter = painterResource(R.drawable.ic_action_play),
                 contentDescription = null,
                 modifier = Modifier.size(19.dp),
@@ -84,7 +93,7 @@ fun MotoHeroTripCard(
             )
             Spacer(modifier = Modifier.size(8.dp))
             Text(
-                text = stringResource(R.string.start_trip),
+                text = if (isStarting) "Obteniendo ubicación…" else stringResource(R.string.start_trip),
                 style = MaterialTheme.typography.labelLarge,
                 color = MotoSurface
             )

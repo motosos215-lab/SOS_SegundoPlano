@@ -6,6 +6,7 @@ import com.example.sos_segundoplano.domain.auth.InvalidResponse
 import com.example.sos_segundoplano.domain.auth.NetworkUnavailable
 import com.example.sos_segundoplano.domain.auth.Timeout
 import com.example.sos_segundoplano.domain.repository.AuthRepository
+import com.example.sos_segundoplano.data.remote.incident.ManualSosLocationProvider
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -26,7 +27,11 @@ fun interface TripStartResourcesResolver {
 
 fun interface ResolvedRemoteTripStarter {
     suspend fun startTrip(): TripMutationResult
+
+    suspend fun startTripWithoutInitialLocation(): TripMutationResult = startTrip()
 }
+
+enum class TripStartLocationCaptureState { Idle, Capturing, Available, Unavailable }
 
 class AuthenticatedTripStartResourcesResolver(
     private val authRepository: AuthRepository,
@@ -90,19 +95,40 @@ class AuthenticatedTripStartResourcesResolver(
 
 class DefaultResolvedRemoteTripStarter(
     private val resourcesResolver: TripStartResourcesResolver,
-    private val remoteTripStarter: RemoteTripStarter
+    private val remoteTripStarter: RemoteTripStarter,
+    private val locationProvider: ManualSosLocationProvider? = null,
+    private val onLocationCaptureStateChanged: (TripStartLocationCaptureState) -> Unit = {}
 ) : ResolvedRemoteTripStarter {
-    override suspend fun startTrip(): TripMutationResult =
-        when (val result = resourcesResolver.resolveTripStartResources()) {
-            is TripStartResourcesResult.Success -> remoteTripStarter.startTrip(
-                StartTripRequestDto(
-                    vehicleId = result.resources.vehicleId,
-                    mobileDeviceId = result.resources.mobileDeviceId,
-                    smartwatchDeviceId = result.resources.smartwatchDeviceId
+    override suspend fun startTrip(): TripMutationResult = startTrip(allowMissingStartLocation = false)
+
+    override suspend fun startTripWithoutInitialLocation(): TripMutationResult =
+        startTrip(allowMissingStartLocation = true)
+
+    private suspend fun startTrip(allowMissingStartLocation: Boolean): TripMutationResult {
+        return when (val result = resourcesResolver.resolveTripStartResources()) {
+            is TripStartResourcesResult.Success -> {
+                onLocationCaptureStateChanged(TripStartLocationCaptureState.Capturing)
+                val location = locationProvider?.currentRealLocation()?.toTripLocationDto()
+                onLocationCaptureStateChanged(
+                    if (location == null) TripStartLocationCaptureState.Unavailable
+                    else TripStartLocationCaptureState.Available
                 )
-            )
+                if (location == null && !allowMissingStartLocation) {
+                    return TripMutationResult.MissingRequiredData("start_location_unavailable")
+                }
+                remoteTripStarter.startTrip(
+                    StartTripRequestDto(
+                        vehicleId = result.resources.vehicleId,
+                        mobileDeviceId = result.resources.mobileDeviceId,
+                        smartwatchDeviceId = result.resources.smartwatchDeviceId,
+                        clientStartedAtUtc = java.time.Instant.now().toString(),
+                        startLocation = location
+                    )
+                )
+            }
             is TripStartResourcesResult.Failure -> result.result
         }
+    }
 }
 
 internal sealed interface ResourceSelection<out T> {

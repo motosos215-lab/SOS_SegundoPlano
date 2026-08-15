@@ -10,6 +10,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.time.Instant
 
 class RetrofitTripRemoteDataSourceTest {
     private lateinit var server: MockWebServer
@@ -125,6 +126,46 @@ class RetrofitTripRemoteDataSourceTest {
         assertEquals("POST", finish.method)
         assertEquals("/api/v1/trips/remote-trip-1/finish", finish.path)
         assertEquals("{}", finish.body.readUtf8())
+    }
+
+    @Test fun finishUsesExistingRemoteTripIdAndSerializesOptionalEndLocation() = runBlocking {
+        server.enqueue(jsonResponse(200, FINISH_SUCCESS_BODY))
+        val request = FinishTripRequestDto(
+            clientFinishedAtUtc = "2026-08-12T16:52:16Z",
+            endLocation = TripLocationDto(19.4350, -99.1360, 10.0, "gps", "2026-08-12T16:52:16Z")
+        )
+
+        source().finishTrip("Bearer token-de-prueba", "remote-trip-1", request)
+
+        val recorded = server.takeRequest()
+        val body = recorded.body.readUtf8()
+        assertEquals("/api/v1/trips/remote-trip-1/finish", recorded.path)
+        assertTrue(body.contains("\"clientFinishedAtUtc\":\"2026-08-12T16:52:16Z\""))
+        assertTrue(body.contains("\"endLocation\""))
+        assertTrue(body.contains("\"latitude\":19.435"))
+        assertTrue(body.contains("\"longitude\":-99.136"))
+        assertTrue(body.contains("\"accuracyMeters\":10.0"))
+        assertTrue(body.contains("\"provider\":\"gps\""))
+        assertTrue(body.contains("\"recordedAtUtc\":\"2026-08-12T16:52:16Z\""))
+    }
+
+    @Test fun finishWithoutLocationStillSendsUtcTimestampToExistingRemoteTrip() = runBlocking {
+        server.enqueue(jsonResponse(200, FINISH_SUCCESS_BODY))
+
+        val result = source().finishTrip(
+            authorization = "Bearer token-de-prueba",
+            remoteTripId = "remote-trip-1",
+            request = FinishTripRequestDto(clientFinishedAtUtc = "2026-08-12T16:52:16Z")
+        )
+
+        assertEquals(TripMutationResult.Success("remote-trip-1", "Finished"), result)
+        val recorded = server.takeRequest()
+        val body = recorded.body.readUtf8()
+        assertEquals("POST", recorded.method)
+        assertEquals("/api/v1/trips/remote-trip-1/finish", recorded.path)
+        assertTrue(body.contains("\"clientFinishedAtUtc\":\"2026-08-12T16:52:16Z\""))
+        assertFalse(body.contains("endLocation"))
+        assertEquals("2026-08-12T16:52:16Z", Instant.parse("2026-08-12T16:52:16Z").toString())
     }
 
     private fun source(): RetrofitTripRemoteDataSource {

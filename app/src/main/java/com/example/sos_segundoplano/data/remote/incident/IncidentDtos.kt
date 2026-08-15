@@ -63,3 +63,22 @@ data class CreatedIncidentDto(
     val closureReason: String? = null,
     val closureNotes: String? = null
 )
+
+@JsonClass(generateAdapter = false)
+data class IncidentHistoryDto(
+    val id: String? = null,
+    val tripId: String? = null,
+    val cause: String? = null,
+    val riskLevel: String? = null,
+    val status: String? = null,
+    val occurredAtUtc: String? = null,
+    val createdAtUtc: String? = null
+)
+
+@JsonClass(generateAdapter = false)
+data class IncidentHistoryPageDto(
+    val incidents: List<IncidentHistoryDto>? = null,
+    val pageNumber: Int? = null,
+    val pageSize: Int? = null,
+    val totalCount: Int? = null
+)

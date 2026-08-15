@@ -48,6 +48,7 @@ fun MotoBottomBar(
     modifier: Modifier = Modifier,
     enabledItems: Set<MotoBottomBarItem> = setOf(MotoBottomBarItem.Home),
     onHomeSelected: () -> Unit = {},
+    onTripsSelected: () -> Unit = {},
     onSosSelected: () -> Unit = {},
     onProfileSelected: () -> Unit = {},
     containerColor: Color = MotoSurface,
@@ -94,7 +95,7 @@ fun MotoBottomBar(
                 assetSize = 52.dp,
                 selected = selectedItem == MotoBottomBarItem.Trips,
                 enabled = MotoBottomBarItem.Trips in enabledItems,
-                onClick = {},
+                onClick = onTripsSelected,
                 testTag = "bottom_nav_trips",
                 contentColor = contentColor,
                 selectedColor = selectedColor

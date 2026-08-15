@@ -21,6 +21,7 @@ class DefaultMonitorAlertsRepository(
     private val authRepository: AuthRepository,
     private val remote: MonitorAlertsRemoteDataSource
 ) : MonitorAlertsRepository {
+    override suspend fun listAlerts(): MonitorAlertsResult<List<MonitorAlertAcknowledgement>> = monitorCall { remote.list(it) }.alerts()
     override suspend fun getAlerts() = monitorCall { remote.list(it) }.opaque()
     override suspend fun getAlert(id: NotificationDeliveryAttemptId) = monitorCall { remote.detail(it, id.value) }.detail()
     override suspend fun getStatus(id: NotificationDeliveryAttemptId) = monitorCall { remote.status(it, id.value) }.opaque()
@@ -54,6 +55,11 @@ class DefaultMonitorAlertsRepository(
 
     private fun MonitorAlertsRemoteResult<MonitorAlertDetailDataDto>.detail(): MonitorAlertsResult<MonitorAlertDetail> = when (this) {
         is MonitorAlertsRemoteResult.Success -> MonitorAlertsResult.Success(MonitorAlertDetail(data.acknowledgement?.toDomain()))
+        is MonitorAlertsRemoteResult.Failure -> MonitorAlertsResult.Failure(statusCode, errorCode, message)
+    }
+
+    private fun MonitorAlertsRemoteResult<List<MonitorAlertAcknowledgementDto>>.alerts(): MonitorAlertsResult<List<MonitorAlertAcknowledgement>> = when (this) {
+        is MonitorAlertsRemoteResult.Success -> MonitorAlertsResult.Success(data.mapNotNull { it.toDomain() })
         is MonitorAlertsRemoteResult.Failure -> MonitorAlertsResult.Failure(statusCode, errorCode, message)
     }
 

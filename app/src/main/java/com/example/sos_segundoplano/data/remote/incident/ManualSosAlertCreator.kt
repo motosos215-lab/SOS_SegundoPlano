@@ -18,8 +18,13 @@ import com.example.sos_segundoplano.domain.validation.LocalIncident
 import java.time.Instant
 import java.util.UUID
 
-fun interface ManualSosAlertCreator {
+interface ManualSosAlertCreator {
     suspend fun createManualSosAlert(incident: LocalIncident): LocalIncident
+
+    suspend fun createManualSosAlert(
+        incident: LocalIncident,
+        progressReporter: ManualSosProgressReporter
+    ): LocalIncident = createManualSosAlert(incident)
 }
 
 class AuthenticatedManualSosAlertCreator(
@@ -31,7 +36,13 @@ class AuthenticatedManualSosAlertCreator(
     private val locationProvider: ManualSosLocationProvider,
     private val nowEpochMillis: () -> Long = System::currentTimeMillis
 ) : ManualSosAlertCreator {
-    override suspend fun createManualSosAlert(incident: LocalIncident): LocalIncident {
+    override suspend fun createManualSosAlert(incident: LocalIncident): LocalIncident =
+        createManualSosAlert(incident, ManualSosProgressReporter {})
+
+    override suspend fun createManualSosAlert(
+        incident: LocalIncident,
+        progressReporter: ManualSosProgressReporter
+    ): LocalIncident {
         val clientIncidentId = incident.clientIncidentId.validUuid()
             ?: return incident.failed(IncidentRemoteCreationStatus.InvalidResponse("client_incident_id_invalid"))
         val link = remoteIncidentLinkStore.read(clientIncidentId)
@@ -71,6 +82,7 @@ class AuthenticatedManualSosAlertCreator(
                     IncidentRemoteCreationStatus.InvalidResponse(lookup.sanitizedMessage)
                 )
             }
+        progressReporter.report(ManualSosRequestState.WaitingForLocation)
         val location = locationProvider.currentRealLocation()
             ?: return incident.copy(
                 remoteTripId = remoteTripId,
@@ -102,6 +114,7 @@ class AuthenticatedManualSosAlertCreator(
             is AuthResult.Success -> auth.value.reveal()
             is AuthFailure -> return incident.copy(remoteTripId = remoteTripId).failed(auth.toRemoteStatus())
         }
+        progressReporter.report(ManualSosRequestState.Sending)
         val first = remoteDataSource.createManualSosAlert("Bearer $token", request)
         val status = retryOnceAfterUnauthorized(first, request)
         return when (status) {

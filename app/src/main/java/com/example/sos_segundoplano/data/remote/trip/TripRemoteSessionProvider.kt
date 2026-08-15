@@ -5,12 +5,18 @@ import android.util.Log
 import com.example.sos_segundoplano.BuildConfig
 import com.example.sos_segundoplano.core.auth.AuthProvider
 import com.example.sos_segundoplano.data.remote.auth.AuthNetworkFactory
+import com.example.sos_segundoplano.data.remote.incident.AndroidCurrentManualSosLocationProvider
+import com.example.sos_segundoplano.data.remote.incident.TripSignalManualSosLocationProvider
+import com.example.sos_segundoplano.data.signals.TripSignalStoreProvider
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 class TripRemoteSessionDependencies(
     val store: RemoteTripSessionStore,
     val reconciler: TripRemoteSessionReconciler,
     val starter: RemoteTripStarter,
     val resolvedStarter: ResolvedRemoteTripStarter,
+    val startLocationCaptureStates: StateFlow<TripStartLocationCaptureState>,
     val finisher: RemoteTripFinisher
 )
 
@@ -32,6 +38,7 @@ object TripRemoteSessionProvider {
         val authRepository = AuthProvider.get(context)
         val remoteDataSource = RetrofitTripRemoteDataSource(api, moshi)
         val starter = AuthenticatedRemoteTripStarter(authRepository, remoteDataSource, store)
+        val startLocationCaptureStates = MutableStateFlow(TripStartLocationCaptureState.Idle)
         return TripRemoteSessionDependencies(
             store = store,
             reconciler = TripRemoteSessionReconciler(
@@ -43,11 +50,23 @@ object TripRemoteSessionProvider {
             starter = starter,
             resolvedStarter = DefaultResolvedRemoteTripStarter(
                 resourcesResolver = AuthenticatedTripStartResourcesResolver(authRepository, remoteDataSource),
-                remoteTripStarter = starter
+                remoteTripStarter = starter,
+                locationProvider = TripSignalManualSosLocationProvider(
+                    TripSignalStoreProvider.store,
+                    currentLocationProvider = AndroidCurrentManualSosLocationProvider(
+                        context,
+                        timeoutMillis = START_LOCATION_TIMEOUT_MILLIS
+                    ),
+                    currentLocationTimeoutMillis = START_LOCATION_TIMEOUT_MILLIS
+                ),
+                onLocationCaptureStateChanged = { startLocationCaptureStates.value = it }
             ),
+            startLocationCaptureStates = startLocationCaptureStates,
             finisher = AuthenticatedRemoteTripFinisher(authRepository, remoteDataSource, store)
         )
     }
+
+    private const val START_LOCATION_TIMEOUT_MILLIS = 20_000L
 }
 
 private object AndroidTripRemoteSessionLogger : TripRemoteSessionLogger {

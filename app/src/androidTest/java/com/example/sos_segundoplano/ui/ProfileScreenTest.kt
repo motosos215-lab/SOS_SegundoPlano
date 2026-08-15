@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -186,13 +187,23 @@ class ProfileScreenTest {
         )
 
         composeRule.onNodeWithTag("bottom_nav_home").assertIsEnabled()
-        composeRule.onNodeWithTag("bottom_nav_trips").assertIsNotEnabled()
+        composeRule.onNodeWithTag("bottom_nav_trips").assertIsEnabled()
         composeRule.onNodeWithTag("bottom_nav_map").assertIsNotEnabled()
         composeRule.onNodeWithTag("bottom_nav_sos").assertIsEnabled()
         composeRule.onNodeWithTag("bottom_nav_profile").assertIsEnabled()
         composeRule.onNodeWithTag("start_trip_button").performClick()
         composeRule.onNodeWithTag("monitoring_screen").assertIsDisplayed()
         assertEquals(1, startTripCalls)
+    }
+
+    @Test fun riderTripsBottomItemOpensTripHistoryByDefault() {
+        setAppContent()
+
+        composeRule.onNodeWithTag("bottom_nav_trips").performClick()
+
+        composeRule.onNodeWithText("Historial de viajes").assertIsDisplayed()
+        composeRule.onNodeWithTag("bottom_nav_trips").assertIsSelected()
+        composeRule.onAllNodesWithText("Viajes").assertCountEquals(2)
     }
 
     private fun setProfile(

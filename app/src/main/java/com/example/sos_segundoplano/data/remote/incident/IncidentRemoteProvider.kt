@@ -10,8 +10,12 @@ import com.example.sos_segundoplano.data.remote.trip.TripRemoteSessionProvider
 import com.example.sos_segundoplano.data.signals.TripSignalStoreProvider
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationCoordinatorProvider
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 object IncidentRemoteProvider {
@@ -19,6 +23,8 @@ object IncidentRemoteProvider {
     @Volatile private var manualCoordinator: ManualSosIncidentCoordinator? = null
     @Volatile private var linkStore: RemoteIncidentLinkStore? = null
     private val manualScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val mutableManualSosRequestState = MutableStateFlow<ManualSosRequestState>(ManualSosRequestState.Idle)
+    val manualSosRequestState: StateFlow<ManualSosRequestState> = mutableManualSosRequestState.asStateFlow()
 
     fun initialize(context: Context): IncidentRemoteCreator = get(context).also { remoteCreator ->
         FalsePositiveValidationCoordinatorProvider.setIncidentRemoteCreator(remoteCreator)
@@ -30,7 +36,18 @@ object IncidentRemoteProvider {
 
     fun requestManualSos(context: Context) {
         val coordinator = getManualCoordinator(context.applicationContext)
-        manualScope.launch { coordinator.requestManualSos() }
+        mutableManualSosRequestState.value = ManualSosRequestState.Preparing
+        manualScope.launch {
+            try {
+                coordinator.requestManualSos(ManualSosProgressReporter { state ->
+                    mutableManualSosRequestState.value = state
+                })
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                mutableManualSosRequestState.value = ManualSosRequestState.RetryableFailure
+            }
+        }
     }
 
     private fun create(context: Context): IncidentRemoteCreator {
@@ -68,7 +85,10 @@ object IncidentRemoteProvider {
                 activeTripRemoteResolver = tripSession.reconciler,
                 remoteTripSessionStore = tripSession.store,
                 remoteIncidentLinkStore = links,
-                locationProvider = TripSignalManualSosLocationProvider(TripSignalStoreProvider.store)
+                locationProvider = TripSignalManualSosLocationProvider(
+                    store = TripSignalStoreProvider.store,
+                    currentLocationProvider = AndroidCurrentManualSosLocationProvider(context)
+                )
             ),
             offlineEventSink = OfflineQueueProvider.get(context).repository,
             remoteIncidentLinkStore = links
