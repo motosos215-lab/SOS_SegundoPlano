@@ -1,5 +1,9 @@
 package com.example.sos_segundoplano.domain.push
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
 data class MonitorPushPayload(
     val notificationDeliveryAttemptId: String,
     val alertDispatchId: String?,
@@ -66,22 +70,28 @@ class PendingMonitorAlertCoordinator(
     private val store: PendingMonitorAlertStore,
     private val clock: MonitorAlertClock = MonitorAlertClock(System::currentTimeMillis)
 ) {
+    private val mutablePendingAlerts = MutableStateFlow(store.read())
+    val pendingAlerts: StateFlow<PendingMonitorAlert?> = mutablePendingAlerts.asStateFlow()
+
     fun record(payload: MonitorPushPayload): Boolean {
-        val current = store.read()
+        val current = mutablePendingAlerts.value
         if (current?.notificationDeliveryAttemptId == payload.notificationDeliveryAttemptId) return true
-        return store.save(
-            PendingMonitorAlert(
-                notificationDeliveryAttemptId = payload.notificationDeliveryAttemptId,
-                alertDispatchId = payload.alertDispatchId,
-                incidentId = payload.incidentId,
-                receivedAtEpochMillis = clock.nowEpochMillis()
-            )
+        val pending = PendingMonitorAlert(
+            notificationDeliveryAttemptId = payload.notificationDeliveryAttemptId,
+            alertDispatchId = payload.alertDispatchId,
+            incidentId = payload.incidentId,
+            receivedAtEpochMillis = clock.nowEpochMillis()
         )
+        return store.save(pending).also { saved ->
+            if (saved) mutablePendingAlerts.value = pending
+        }
     }
 
-    fun pending(): PendingMonitorAlert? = store.read()
+    fun pending(): PendingMonitorAlert? = mutablePendingAlerts.value
 
-    fun clear(): Boolean = store.clear()
+    fun clear(): Boolean = store.clear().also { cleared ->
+        if (cleared) mutablePendingAlerts.value = null
+    }
 }
 
 private fun String?.nonBlank(): String? = this?.trim()?.takeIf(String::isNotEmpty)

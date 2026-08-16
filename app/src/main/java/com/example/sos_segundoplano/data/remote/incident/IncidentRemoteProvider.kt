@@ -53,6 +53,10 @@ object IncidentRemoteProvider {
     private fun create(context: Context): IncidentRemoteCreator {
         val moshi = AuthNetworkFactory.createMoshi()
         val api = AuthNetworkFactory.createIncidentsApi(BuildConfig.MOTOSOS_API_BASE_URL, moshi)
+        val locationPublisher = AuthenticatedEmergencyLocationPublisher(
+            authRepository = AuthProvider.get(context),
+            api = AuthNetworkFactory.createEmergencyLocationSharingApi(BuildConfig.MOTOSOS_API_BASE_URL, moshi)
+        )
         val tripSession = TripRemoteSessionProvider.get(context)
         return AuthenticatedIncidentRemoteCreator(
             authRepository = AuthProvider.get(context),
@@ -60,6 +64,8 @@ object IncidentRemoteProvider {
             activeTripRemoteResolver = tripSession.reconciler,
             remoteTripSessionStore = tripSession.store,
             remoteIncidentLinkStore = getLinkStore(context),
+            eventLocationProvider = TripSignalManualSosLocationProvider(TripSignalStoreProvider.store),
+            emergencyLocationPublisher = locationPublisher,
             logger = AndroidIncidentRemoteLogger
         )
     }
@@ -73,6 +79,10 @@ object IncidentRemoteProvider {
 
     private fun createManualCoordinator(context: Context): ManualSosIncidentCoordinator {
         val moshi = AuthNetworkFactory.createMoshi()
+        val locationPublisher = AuthenticatedEmergencyLocationPublisher(
+            authRepository = AuthProvider.get(context),
+            api = AuthNetworkFactory.createEmergencyLocationSharingApi(BuildConfig.MOTOSOS_API_BASE_URL, moshi)
+        )
         val tripSession = TripRemoteSessionProvider.get(context)
         val links = getLinkStore(context)
         return ManualSosIncidentCoordinator(
@@ -88,7 +98,8 @@ object IncidentRemoteProvider {
                 locationProvider = TripSignalManualSosLocationProvider(
                     store = TripSignalStoreProvider.store,
                     currentLocationProvider = AndroidCurrentManualSosLocationProvider(context)
-                )
+                ),
+                emergencyLocationPublisher = locationPublisher
             ),
             offlineEventSink = OfflineQueueProvider.get(context).repository,
             remoteIncidentLinkStore = links

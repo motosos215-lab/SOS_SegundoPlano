@@ -4,6 +4,8 @@ import com.example.sos_segundoplano.data.remote.monitor.AcknowledgeMonitorAlertR
 import com.example.sos_segundoplano.data.remote.monitor.DeclineMonitorAlertRequestDto
 import com.example.sos_segundoplano.data.remote.monitor.MonitorAlertAcknowledgementDto
 import com.example.sos_segundoplano.data.remote.monitor.MonitorAlertDetailDataDto
+import com.example.sos_segundoplano.data.remote.monitor.MonitorAlertHistoryDataDto
+import com.example.sos_segundoplano.data.remote.monitor.MonitorAlertStatusDataDto
 import com.example.sos_segundoplano.data.remote.monitor.MonitorAlertsRemoteDataSource
 import com.example.sos_segundoplano.data.remote.monitor.MonitorAlertsRemoteResult
 import com.example.sos_segundoplano.domain.auth.AuthResult
@@ -12,6 +14,13 @@ import com.example.sos_segundoplano.domain.auth.UserRole
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertAcknowledgement
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertDetail
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertOpaquePayload
+import com.example.sos_segundoplano.domain.monitor.MonitorAlertStatus
+import com.example.sos_segundoplano.domain.monitor.MonitorAlertIncidentStatus
+import com.example.sos_segundoplano.domain.monitor.MonitorAlertTripStatus
+import com.example.sos_segundoplano.domain.monitor.MonitorAlertDispatchStatus
+import com.example.sos_segundoplano.domain.monitor.MonitorAlertNotificationsStatus
+import com.example.sos_segundoplano.domain.monitor.MonitorAlertAcknowledgementsStatus
+import com.example.sos_segundoplano.domain.monitor.MonitorAlertStatusLocation
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertsRepository
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertsResult
 import com.example.sos_segundoplano.domain.monitor.NotificationDeliveryAttemptId
@@ -22,15 +31,15 @@ class DefaultMonitorAlertsRepository(
     private val remote: MonitorAlertsRemoteDataSource
 ) : MonitorAlertsRepository {
     override suspend fun listAlerts(): MonitorAlertsResult<List<MonitorAlertAcknowledgement>> = monitorCall { remote.list(it) }.alerts()
-    override suspend fun getAlerts() = monitorCall { remote.list(it) }.opaque()
+    override suspend fun getAlerts() = monitorCall { remote.list(it) }.historyOpaque()
     override suspend fun getAlert(id: NotificationDeliveryAttemptId) = monitorCall { remote.detail(it, id.value) }.detail()
-    override suspend fun getStatus(id: NotificationDeliveryAttemptId) = monitorCall { remote.status(it, id.value) }.opaque()
+    override suspend fun getStatus(id: NotificationDeliveryAttemptId) = monitorCall { remote.status(it, id.value) }.status()
     override suspend fun getLocation(id: NotificationDeliveryAttemptId) = monitorCall { remote.location(it, id.value) }.opaque()
     override suspend fun markViewed(id: NotificationDeliveryAttemptId) = monitorCall { remote.view(it, id.value) }.opaque()
     override suspend fun acknowledge(id: NotificationDeliveryAttemptId, responseType: String, message: String) =
         monitorCall { remote.acknowledge(it, id.value, AcknowledgeMonitorAlertRequestDto(responseType, message)) }.detail()
     override suspend fun decline(id: NotificationDeliveryAttemptId, reason: String) =
-        monitorCall { remote.decline(it, id.value, DeclineMonitorAlertRequestDto(reason)) }.detail()
+        monitorCall { remote.decline(it, id.value, DeclineMonitorAlertRequestDto(message = reason.takeIf { it.isNotBlank() })) }.detail()
 
     private suspend fun <T> monitorCall(call: suspend (String) -> MonitorAlertsRemoteResult<T>): MonitorAlertsRemoteResult<T> {
         val role = when (val state = authRepository.observeSession().value) {
@@ -53,17 +62,59 @@ class DefaultMonitorAlertsRepository(
         is MonitorAlertsRemoteResult.Failure -> MonitorAlertsResult.Failure(statusCode, errorCode, message)
     }
 
+    private fun MonitorAlertsRemoteResult<MonitorAlertHistoryDataDto>.historyOpaque(): MonitorAlertsResult<MonitorAlertOpaquePayload> = when (this) {
+        is MonitorAlertsRemoteResult.Success -> MonitorAlertsResult.Success(MonitorAlertOpaquePayload(data))
+        is MonitorAlertsRemoteResult.Failure -> MonitorAlertsResult.Failure(statusCode, errorCode, message)
+    }
+
+    private fun MonitorAlertsRemoteResult<MonitorAlertStatusDataDto>.status(): MonitorAlertsResult<MonitorAlertStatus> = when (this) {
+        is MonitorAlertsRemoteResult.Success -> MonitorAlertsResult.Success(data.toDomain())
+        is MonitorAlertsRemoteResult.Failure -> MonitorAlertsResult.Failure(statusCode, errorCode, message)
+    }
+
     private fun MonitorAlertsRemoteResult<MonitorAlertDetailDataDto>.detail(): MonitorAlertsResult<MonitorAlertDetail> = when (this) {
-        is MonitorAlertsRemoteResult.Success -> MonitorAlertsResult.Success(MonitorAlertDetail(data.acknowledgement?.toDomain()))
+        is MonitorAlertsRemoteResult.Success -> MonitorAlertsResult.Success(MonitorAlertDetail(data.acknowledgement?.toHistoryDomain()))
         is MonitorAlertsRemoteResult.Failure -> MonitorAlertsResult.Failure(statusCode, errorCode, message)
     }
 
-    private fun MonitorAlertsRemoteResult<List<MonitorAlertAcknowledgementDto>>.alerts(): MonitorAlertsResult<List<MonitorAlertAcknowledgement>> = when (this) {
-        is MonitorAlertsRemoteResult.Success -> MonitorAlertsResult.Success(data.mapNotNull { it.toDomain() })
+    private fun MonitorAlertsRemoteResult<MonitorAlertHistoryDataDto>.alerts(): MonitorAlertsResult<List<MonitorAlertAcknowledgement>> = when (this) {
+        // The endpoint has no Android paging parameters yet; the current UI renders this received page in server order.
+        is MonitorAlertsRemoteResult.Success -> MonitorAlertsResult.Success(data.alerts.mapNotNull { it.toHistoryDomain() })
         is MonitorAlertsRemoteResult.Failure -> MonitorAlertsResult.Failure(statusCode, errorCode, message)
     }
-
-    private fun MonitorAlertAcknowledgementDto.toDomain(): MonitorAlertAcknowledgement? =
-        if (listOf(id, alertDispatchId, notificationDeliveryAttemptId, incidentId, tripId, emergencyContactId, status).any { it.isNullOrBlank() }) null
-        else MonitorAlertAcknowledgement(id!!, alertDispatchId!!, notificationDeliveryAttemptId!!, incidentId!!, tripId!!, emergencyContactId!!, status!!, responseType, message, viewedAtUtc, acknowledgedAtUtc, declinedAtUtc, createdAtUtc, updatedAtUtc)
 }
+
+/** A history row is actionable only when its canonical Monitor attempt ID is present. */
+internal fun MonitorAlertAcknowledgementDto.toHistoryDomain(): MonitorAlertAcknowledgement? {
+    val attemptId = notificationDeliveryAttemptId.normalized() ?: return null
+    return MonitorAlertAcknowledgement(
+        id = id.normalized(),
+        alertDispatchId = alertDispatchId.normalized(),
+        notificationDeliveryAttemptId = attemptId,
+        incidentId = incidentId.normalized(),
+        tripId = tripId.normalized(),
+        emergencyContactId = emergencyContactId.normalized(),
+        status = status.normalized(),
+        responseType = responseType.normalized(),
+        message = message.normalized(),
+        viewedAtUtc = viewedAtUtc.normalized(),
+        acknowledgedAtUtc = acknowledgedAtUtc.normalized(),
+        declinedAtUtc = declinedAtUtc.normalized(),
+        createdAtUtc = createdAtUtc.normalized(),
+        updatedAtUtc = updatedAtUtc.normalized()
+    )
+}
+
+private fun String?.normalized(): String? = this?.trim()?.takeIf { it.isNotEmpty() }
+
+private fun MonitorAlertStatusDataDto.toDomain() = MonitorAlertStatus(
+    incident = incident?.let { MonitorAlertIncidentStatus(it.status, it.source, it.cause, it.riskLevel, it.occurredAtUtc, it.createdAtUtc) },
+    trip = trip?.let { MonitorAlertTripStatus(it.status, it.startedAtUtc, it.finishedAtUtc) },
+    alertDispatch = alertDispatch?.let { MonitorAlertDispatchStatus(it.status, it.priority, it.reason, it.createdAtUtc) },
+    notifications = notifications?.let { MonitorAlertNotificationsStatus(it.total, it.prepared, it.simulatedSent, it.failed, it.cancelled) },
+    acknowledgements = acknowledgements?.let { MonitorAlertAcknowledgementsStatus(it.total, it.pending, it.viewed, it.acknowledged, it.declined) },
+    location = location?.let { MonitorAlertStatusLocation(it.available, it.latitude, it.longitude, it.accuracyMeters, it.source, it.recordedAtUtc, it.receivedAtUtc, it.isActive, it.isStale) },
+    overallStatus = overallStatus,
+    requiresAttention = requiresAttention,
+    lastUpdatedAtUtc = lastUpdatedAtUtc
+)

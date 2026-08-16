@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertDetail
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertsRepository
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertsResult
+import com.example.sos_segundoplano.domain.monitor.MonitorAlertStatus
 import com.example.sos_segundoplano.domain.monitor.NotificationDeliveryAttemptId
 import com.example.sos_segundoplano.domain.push.PendingMonitorAlertCoordinator
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,7 +16,7 @@ import kotlinx.coroutines.launch
 sealed interface MonitorAlertsUiState {
     data object Ready : MonitorAlertsUiState
     data class Loading(val attemptId: NotificationDeliveryAttemptId) : MonitorAlertsUiState
-    data class Alert(val attemptId: NotificationDeliveryAttemptId, val detail: MonitorAlertDetail, val action: MonitorAlertAction = MonitorAlertAction.Idle, val notice: MonitorAlertNotice? = null) : MonitorAlertsUiState
+    data class Alert(val attemptId: NotificationDeliveryAttemptId, val detail: MonitorAlertDetail, val action: MonitorAlertAction = MonitorAlertAction.Idle, val notice: MonitorAlertNotice? = null, val status: MonitorAlertStatus? = null) : MonitorAlertsUiState
     data class Error(val attemptId: NotificationDeliveryAttemptId, val message: String) : MonitorAlertsUiState
 }
 
@@ -29,14 +30,23 @@ class MonitorAlertsViewModel(
 ) : ViewModel() {
     private val mutableState = MutableStateFlow<MonitorAlertsUiState>(MonitorAlertsUiState.Ready)
     val state: StateFlow<MonitorAlertsUiState> = mutableState.asStateFlow()
+    private val mutableConsumedFcmAttemptId = MutableStateFlow<String?>(null)
+    val consumedFcmAttemptId: StateFlow<String?> = mutableConsumedFcmAttemptId.asStateFlow()
+    private val mutableSuccessfulActionRevision = MutableStateFlow(0L)
+    val successfulActionRevision: StateFlow<Long> = mutableSuccessfulActionRevision.asStateFlow()
     private var viewMarkedFor: String? = null
+    private var lastConsumedFcmAttemptId: String? = null
 
-    init { loadPendingAlert() }
+    init {
+        viewModelScope.launch {
+            pendingAlerts.pendingAlerts.collect { pending ->
+                consumePendingAlert(pending?.notificationDeliveryAttemptId)
+            }
+        }
+    }
 
     fun loadPendingAlert() {
-        if (!isMonitorSession()) { mutableState.value = MonitorAlertsUiState.Ready; return }
-        val pending = pendingAlerts.pending() ?: run { mutableState.value = MonitorAlertsUiState.Ready; return }
-        load(NotificationDeliveryAttemptId(pending.notificationDeliveryAttemptId))
+        consumePendingAlert(pendingAlerts.pending()?.notificationDeliveryAttemptId)
     }
 
     fun retry() {
@@ -74,6 +84,7 @@ class MonitorAlertsViewModel(
                 is MonitorAlertsResult.Success -> {
                     mutableState.value = MonitorAlertsUiState.Alert(attemptId, result.value)
                     markViewedOnce(attemptId)
+                    loadStatus(attemptId)
                 }
                 is MonitorAlertsResult.Failure -> mutableState.value = MonitorAlertsUiState.Error(attemptId, result.message.userMessage())
             }
@@ -102,10 +113,45 @@ class MonitorAlertsViewModel(
         mutableState.value = current.copy(action = MonitorAlertAction.Submitting, notice = null)
         viewModelScope.launch {
             when (val result = operation(current.attemptId)) {
-                is MonitorAlertsResult.Success -> mutableState.value = MonitorAlertsUiState.Alert(current.attemptId, result.value, notice = if (result.value.acknowledgement?.declinedAtUtc != null) MonitorAlertNotice.Declined else MonitorAlertNotice.Confirmed)
-                is MonitorAlertsResult.Failure -> mutableState.value = current.copy(action = MonitorAlertAction.Idle, notice = MonitorAlertNotice.NonBlockingError(result.message.userMessage()))
+                is MonitorAlertsResult.Success -> {
+                    mutableState.value = MonitorAlertsUiState.Alert(current.attemptId, result.value, notice = if (result.value.acknowledgement?.declinedAtUtc != null) MonitorAlertNotice.Declined else MonitorAlertNotice.Confirmed)
+                    mutableSuccessfulActionRevision.value += 1
+                    loadStatus(current.attemptId)
+                }
+                is MonitorAlertsResult.Failure -> mutableState.value = current.copy(
+                    action = MonitorAlertAction.Idle,
+                    notice = MonitorAlertNotice.NonBlockingError("No pudimos registrar la respuesta. Intenta nuevamente.")
+                )
             }
         }
+    }
+
+    private fun loadStatus(attemptId: NotificationDeliveryAttemptId) {
+        viewModelScope.launch {
+            when (val result = repository.getStatus(attemptId)) {
+                is MonitorAlertsResult.Success -> {
+                    val current = mutableState.value as? MonitorAlertsUiState.Alert ?: return@launch
+                    if (current.attemptId == attemptId) mutableState.value = current.copy(status = result.value)
+                }
+                is MonitorAlertsResult.Failure -> Unit
+            }
+        }
+    }
+
+    private fun consumePendingAlert(notificationDeliveryAttemptId: String?) {
+        if (!isMonitorSession()) {
+            mutableState.value = MonitorAlertsUiState.Ready
+            return
+        }
+        val attemptId = notificationDeliveryAttemptId?.takeIf { it.isNotBlank() }
+            ?: run {
+                if (lastConsumedFcmAttemptId == null) mutableState.value = MonitorAlertsUiState.Ready
+                return
+            }
+        if (attemptId == lastConsumedFcmAttemptId) return
+        lastConsumedFcmAttemptId = attemptId
+        mutableConsumedFcmAttemptId.value = attemptId
+        load(NotificationDeliveryAttemptId(attemptId))
     }
 
     private fun String?.userMessage(): String = takeUnless { it.isNullOrBlank() } ?: "No pudimos cargar la alerta."

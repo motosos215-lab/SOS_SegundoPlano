@@ -32,6 +32,8 @@ class AuthenticatedIncidentRemoteCreator(
     private val activeTripRemoteResolver: ActiveTripRemoteResolver,
     private val remoteTripSessionStore: RemoteTripSessionStore? = null,
     private val remoteIncidentLinkStore: RemoteIncidentLinkStore = InMemoryRemoteIncidentLinkStore(),
+    private val eventLocationProvider: ManualSosLocationProvider = ManualSosLocationProvider { null },
+    private val emergencyLocationPublisher: EmergencyLocationPublisher = NoOpEmergencyLocationPublisher,
     private val logger: IncidentRemoteLogger = NoOpIncidentRemoteLogger,
     private val nowUtc: () -> Instant = { Instant.now() }
 ) : IncidentRemoteCreator {
@@ -135,12 +137,16 @@ class AuthenticatedIncidentRemoteCreator(
                         updatedAtEpochMillis = nowUtc().toEpochMilli()
                     )
                 )
-                incident.copy(
+                val created = incident.copy(
                     remoteTripId = remoteTripId,
                     clientIncidentId = clientIncidentId,
                     remoteIncidentId = status.incidentId,
                     remoteCreationStatus = status
-                ).also {
+                )
+                eventLocationProvider.currentRealLocation()
+                    ?.toEmergencyLocationSnapshot(status.incidentId)
+                    ?.let { snapshot -> emergencyLocationPublisher.publishSafely(snapshot) }
+                created.also {
                     if (!durable) logger.remoteIncidentPersistenceFailed()
                     logger.remoteIncidentCreated()
                     logger.remoteIncidentIdReceived()
