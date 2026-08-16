@@ -57,6 +57,15 @@ object WearDataLayerProtocol {
         return decodeValidationStatusMap(map)
     }
 
+    fun decodeValidationStatusOrNull(bytes: ByteArray): ValidationStatus? {
+        val map = runCatching { DataMap.fromByteArray(bytes) }.getOrNull() ?: return null
+        if (map.getInt("protocolVersion", -1) != PROTOCOL_VERSION) return null
+        val status = decodeValidationStatusMap(map)
+        if (status.state.isBlank()) return null
+        if (status.isCountdownActive && (status.sessionId == null || status.assessmentId == null || status.remainingMillis == null || status.remainingMillis < 0L)) return null
+        return status
+    }
+
     fun encodeValidationResponseMap(action: String, sessionId: Long, assessmentId: Long, responseId: String): DataMap = DataMap().apply {
         putInt("protocolVersion", PROTOCOL_VERSION)
         putString("action", action)

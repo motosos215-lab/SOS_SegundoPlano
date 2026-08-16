@@ -22,7 +22,7 @@
             android:value="false" />
 
         <activity
-            android:name=".WearPermissionActivity"
+            android:name=".WearMainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -51,6 +51,19 @@
                 <data
                     android:host="*"
                     android:pathPrefix="/motosos/validation"
+                    android:scheme="wear" />
+            </intent-filter>
+        </service>
+
+        <!-- RPC responses for the companion's handshake/status/snapshot requests. -->
+        <service
+            android:name=".MotoSosWearRpcService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.REQUEST_RECEIVED" />
+                <data
+                    android:host="*"
+                    android:pathPrefix="/motosos/v1"
                     android:scheme="wear" />
             </intent-filter>
         </service>

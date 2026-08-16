@@ -9,6 +9,7 @@ import com.example.sos_segundoplano.data.remote.auth.AuthNetworkFactory
 import com.example.sos_segundoplano.data.remote.trip.TripRemoteSessionProvider
 import com.example.sos_segundoplano.data.signals.TripSignalStoreProvider
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationCoordinatorProvider
+import com.example.sos_segundoplano.domain.validation.LocalIncident
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -49,6 +50,9 @@ object IncidentRemoteProvider {
             }
         }
     }
+
+    suspend fun requestManualSosAwait(context: Context): LocalIncident =
+        getManualCoordinator(context.applicationContext).requestManualSos()
 
     private fun create(context: Context): IncidentRemoteCreator {
         val moshi = AuthNetworkFactory.createMoshi()

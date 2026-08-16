@@ -13,15 +13,23 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 class WearSignalForegroundService : Service() {
     private val dataClient by lazy { Wearable.getDataClient(applicationContext) }
-    private val messageClient by lazy { Wearable.getMessageClient(applicationContext) }
-    private val nodeClient by lazy { Wearable.getNodeClient(applicationContext) }
+    private val validationActions by lazy { WearValidationActionGateway(applicationContext) }
+    private val validationActionHandler by lazy { WearValidationNotificationActionHandler(validationActions) }
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val limiter = WearTransmissionLimiter()
     private var started = false
     private var snapshot = WearSignalSnapshot()
-    private var validationStatus = WearDataLayerProtocol.ValidationStatus("idle")
+    private val validationStatus: WearDataLayerProtocol.ValidationStatus
+        get() = WearValidationStateStore.state.value
+            ?: WearDataLayerProtocol.ValidationStatus("unknown")
     private lateinit var accelerometer: WearMotionSensorSource
     private lateinit var gyroscope: WearMotionSensorSource
     private lateinit var battery: WearBatterySource
@@ -58,18 +66,12 @@ class WearSignalForegroundService : Service() {
             ACTION_START -> startCapture()
             ACTION_STOP -> stopSelf(startId)
             ACTION_VALIDATION_STATUS -> {
-                validationStatus = WearDataLayerProtocol.ValidationStatus(
-                    state = intent.getStringExtra(EXTRA_VALIDATION_STATE) ?: "idle",
-                    sessionId = intent.getLongExtra(EXTRA_VALIDATION_SESSION_ID, -1L).takeIf { it >= 0L },
-                    assessmentId = intent.getLongExtra(EXTRA_VALIDATION_ASSESSMENT_ID, -1L).takeIf { it >= 0L },
-                    windowId = intent.getLongExtra(EXTRA_VALIDATION_WINDOW_ID, -1L).takeIf { it >= 0L },
-                    remainingMillis = intent.getLongExtra(EXTRA_VALIDATION_REMAINING_MILLIS, -1L).takeIf { it >= 0L },
-                    reason = intent.getStringExtra(EXTRA_VALIDATION_REASON)
-                )
                 if (started) promoteToForeground(buildNotification())
             }
-            ACTION_CONFIRM_SAFE -> sendValidationAction(WearDataLayerProtocol.PATH_VALIDATION_CONFIRM_SAFE, "confirm_safe", 1)
-            ACTION_REQUEST_HELP -> sendValidationAction(WearDataLayerProtocol.PATH_VALIDATION_REQUEST_HELP, "request_help", 2)
+            WearValidationNotificationActions.CONFIRM_SAFE ->
+                sendValidationAction(WearValidationNotificationActions.CONFIRM_SAFE)
+            WearValidationNotificationActions.REQUEST_HELP ->
+                sendValidationAction(WearValidationNotificationActions.REQUEST_HELP)
             else -> stopSelf(startId)
         }
         return START_NOT_STICKY
@@ -77,6 +79,7 @@ class WearSignalForegroundService : Service() {
 
     override fun onDestroy() {
         stopCapture()
+        serviceScope.cancel()
         super.onDestroy()
     }
 
@@ -125,6 +128,7 @@ class WearSignalForegroundService : Service() {
 
     private fun publish(now: Long) {
         snapshot = snapshot.copy(lastUpdatedMillis = now)
+        WearSignalStateStore.update(snapshot)
         val request = PutDataMapRequest.create(WearDataLayerProtocol.PATH_SIGNALS_LATEST).apply {
             dataMap.putAll(WearDataLayerProtocol.encode(snapshot))
             dataMap.putLong("sequenceMillis", now)
@@ -162,8 +166,16 @@ class WearSignalForegroundService : Service() {
         .setPriority(if (validationStatus.isCountdownActive) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_LOW)
         .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
         if (validationStatus.isCountdownActive) {
-            builder.addAction(0, getString(R.string.wear_validation_confirm_safe), createServiceAction(ACTION_CONFIRM_SAFE, 1))
-            builder.addAction(0, getString(R.string.wear_validation_request_help), createServiceAction(ACTION_REQUEST_HELP, 2))
+            builder.addAction(
+                0,
+                getString(R.string.wear_validation_confirm_safe),
+                createServiceAction(WearValidationNotificationActions.CONFIRM_SAFE, 1)
+            )
+            builder.addAction(
+                0,
+                getString(R.string.wear_validation_request_help),
+                createServiceAction(WearValidationNotificationActions.REQUEST_HELP, 2)
+            )
         }
         return builder.build()
     }
@@ -188,13 +200,9 @@ class WearSignalForegroundService : Service() {
         getString(R.string.wear_monitoring_content)
     }
 
-    private fun sendValidationAction(path: String, action: String, actionId: Int) {
-        val sessionId = validationStatus.sessionId ?: return
-        val assessmentId = validationStatus.assessmentId ?: return
-        val responseId = "wear-$sessionId-$assessmentId-$actionId"
-        val payload = WearDataLayerProtocol.encodeValidationResponse(action, sessionId, assessmentId, responseId)
-        nodeClient.connectedNodes.addOnSuccessListener { nodes ->
-            nodes.forEach { node -> messageClient.sendMessage(node.id, path, payload) }
+    private fun sendValidationAction(action: String) {
+        serviceScope.launch {
+            validationActionHandler.handle(action)
         }
     }
 
@@ -214,14 +222,6 @@ class WearSignalForegroundService : Service() {
         private const val ACTION_START = "com.example.sos_segundoplano.wear.action.START_CAPTURE"
         private const val ACTION_STOP = "com.example.sos_segundoplano.wear.action.STOP_CAPTURE"
         private const val ACTION_VALIDATION_STATUS = "com.example.sos_segundoplano.wear.action.VALIDATION_STATUS"
-        private const val ACTION_CONFIRM_SAFE = "com.example.sos_segundoplano.wear.action.CONFIRM_SAFE"
-        private const val ACTION_REQUEST_HELP = "com.example.sos_segundoplano.wear.action.REQUEST_HELP"
-        private const val EXTRA_VALIDATION_STATE = "validation_state"
-        private const val EXTRA_VALIDATION_SESSION_ID = "validation_session_id"
-        private const val EXTRA_VALIDATION_ASSESSMENT_ID = "validation_assessment_id"
-        private const val EXTRA_VALIDATION_WINDOW_ID = "validation_window_id"
-        private const val EXTRA_VALIDATION_REMAINING_MILLIS = "validation_remaining_millis"
-        private const val EXTRA_VALIDATION_REASON = "validation_reason"
         private const val CHANNEL_ID = "wear_trip_signal_capture"
         private const val NOTIFICATION_ID = 13200
 
@@ -231,15 +231,9 @@ class WearSignalForegroundService : Service() {
         fun createStopIntent(context: Context): Intent = Intent(context, WearSignalForegroundService::class.java)
             .setAction(ACTION_STOP)
 
-        fun createValidationStatusIntent(context: Context, status: WearDataLayerProtocol.ValidationStatus): Intent =
+        fun createValidationStatusIntent(context: Context): Intent =
             Intent(context, WearSignalForegroundService::class.java)
                 .setAction(ACTION_VALIDATION_STATUS)
-                .putExtra(EXTRA_VALIDATION_STATE, status.state)
-                .putExtra(EXTRA_VALIDATION_SESSION_ID, status.sessionId ?: -1L)
-                .putExtra(EXTRA_VALIDATION_ASSESSMENT_ID, status.assessmentId ?: -1L)
-                .putExtra(EXTRA_VALIDATION_WINDOW_ID, status.windowId ?: -1L)
-                .putExtra(EXTRA_VALIDATION_REMAINING_MILLIS, status.remainingMillis ?: -1L)
-                .putExtra(EXTRA_VALIDATION_REASON, status.reason)
 
         fun publishStartFailure(context: Context) {
             val request = PutDataMapRequest.create(WearDataLayerProtocol.PATH_WATCH_STATUS).apply {
