@@ -34,6 +34,7 @@ class AuthenticatedManualSosAlertCreator(
     private val remoteTripSessionStore: RemoteTripSessionStore,
     private val remoteIncidentLinkStore: RemoteIncidentLinkStore,
     private val locationProvider: ManualSosLocationProvider,
+    private val emergencyLocationPublisher: EmergencyLocationPublisher = NoOpEmergencyLocationPublisher,
     private val nowEpochMillis: () -> Long = System::currentTimeMillis
 ) : ManualSosAlertCreator {
     override suspend fun createManualSosAlert(incident: LocalIncident): LocalIncident =
@@ -119,6 +120,9 @@ class AuthenticatedManualSosAlertCreator(
         val status = retryOnceAfterUnauthorized(first, request)
         return when (status) {
             is ManualSosAlertSubmissionStatus.Success -> {
+                location.toEmergencyLocationSnapshot(status.remoteIncidentId)?.let { snapshot ->
+                    emergencyLocationPublisher.publishSafely(snapshot)
+                }
                 val durable = remoteIncidentLinkStore.save(
                     pendingLink.copy(
                         remoteIncidentId = status.remoteIncidentId,

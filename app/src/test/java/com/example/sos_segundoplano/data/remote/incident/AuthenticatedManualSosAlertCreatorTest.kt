@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AuthenticatedManualSosAlertCreatorTest {
@@ -162,12 +163,54 @@ class AuthenticatedManualSosAlertCreatorTest {
         }
     }
 
+    @Test fun successfulManualSosPublishesExactlyOneSnapshotWithTheCreatedIncidentId() = runBlocking {
+        val publisher = RecordingLocationPublisher()
+
+        val result = creator(
+            remote = FakeManualSosRemoteDataSource(success()),
+            links = pendingLinks(),
+            tripStore = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("remote-trip-1") },
+            publisher = publisher
+        ).createManualSosAlert(incident())
+
+        assertEquals(IncidentRemoteCreationStatus.Success("incident-fixture-1"), result.remoteCreationStatus)
+        assertEquals(1, publisher.snapshots.size)
+        assertEquals("incident-fixture-1", publisher.snapshots.single().incidentId)
+        assertEquals("MobileApp", publisher.snapshots.single().source)
+        assertEquals("19.4326", publisher.snapshots.single().latitude.toString())
+        assertEquals("-99.1332", publisher.snapshots.single().longitude.toString())
+        assertEquals(publisher.snapshots.single().clientLocationUpdateId, java.util.UUID.fromString(publisher.snapshots.single().clientLocationUpdateId).toString())
+    }
+
+    @Test fun failedManualSosDoesNotPublishSnapshotAndSnapshotFailureDoesNotFailSos() = runBlocking {
+        val failedPublisher = RecordingLocationPublisher(EmergencyLocationPublicationResult.Failed("network_unavailable"))
+        val failedSos = creator(
+            remote = FakeManualSosRemoteDataSource(ManualSosAlertSubmissionStatus.HttpError(400, "validation_error")),
+            links = pendingLinks(),
+            tripStore = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("remote-trip-1") },
+            publisher = failedPublisher
+        ).createManualSosAlert(incident())
+        assertEquals(0, failedPublisher.snapshots.size)
+        assertTrue(failedSos.remoteCreationStatus is IncidentRemoteCreationStatus.HttpError)
+
+        val successPublisher = RecordingLocationPublisher(EmergencyLocationPublicationResult.Failed("network_unavailable"))
+        val successfulSos = creator(
+            remote = FakeManualSosRemoteDataSource(success()),
+            links = pendingLinks(),
+            tripStore = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("remote-trip-1") },
+            publisher = successPublisher
+        ).createManualSosAlert(incident())
+        assertEquals(IncidentRemoteCreationStatus.Success("incident-fixture-1"), successfulSos.remoteCreationStatus)
+        assertEquals(1, successPublisher.snapshots.size)
+    }
+
     private fun creator(
         remote: ManualSosAlertRemoteDataSource,
         links: RemoteIncidentLinkStore,
         tripStore: InMemoryRemoteTripSessionStore,
         resolver: ActiveTripRemoteResolver = ActiveTripRemoteResolver { error("resolver must not be called") },
         locationProvider: ManualSosLocationProvider = ManualSosLocationProvider { location() },
+        publisher: EmergencyLocationPublisher = NoOpEmergencyLocationPublisher,
         auth: FakeAuthRepository = FakeAuthRepository()
     ) = AuthenticatedManualSosAlertCreator(
         authRepository = auth,
@@ -176,6 +219,7 @@ class AuthenticatedManualSosAlertCreatorTest {
         remoteTripSessionStore = tripStore,
         remoteIncidentLinkStore = links,
         locationProvider = locationProvider,
+        emergencyLocationPublisher = publisher,
         nowEpochMillis = { 1_723_392_901_000L }
     )
 
@@ -238,6 +282,16 @@ class AuthenticatedManualSosAlertCreatorTest {
             request: ManualSosAlertRequestDto
         ): ManualSosAlertSubmissionStatus {
             requests += request
+            return result
+        }
+    }
+
+    private class RecordingLocationPublisher(
+        private val result: EmergencyLocationPublicationResult = EmergencyLocationPublicationResult.Published
+    ) : EmergencyLocationPublisher {
+        val snapshots = mutableListOf<EmergencyLocationSnapshotRequestDto>()
+        override suspend fun publish(snapshot: EmergencyLocationSnapshotRequestDto): EmergencyLocationPublicationResult {
+            snapshots += snapshot
             return result
         }
     }

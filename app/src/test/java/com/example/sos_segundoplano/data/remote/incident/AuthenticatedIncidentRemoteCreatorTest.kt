@@ -11,6 +11,7 @@ import com.example.sos_segundoplano.data.remote.trip.InMemoryRemoteTripSessionSt
 import com.example.sos_segundoplano.domain.repository.AuthRepository
 import com.example.sos_segundoplano.domain.rules.GpsQualityStatus
 import com.example.sos_segundoplano.domain.rules.RiskLevel
+import com.example.sos_segundoplano.domain.signals.LocationSample
 import com.example.sos_segundoplano.domain.validation.IncidentCause
 import com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus
 import com.example.sos_segundoplano.domain.validation.LocalIncident
@@ -297,6 +298,46 @@ class AuthenticatedIncidentRemoteCreatorTest {
         assertEquals("remote-incident-1", retried.remoteIncidentId)
     }
 
+    @Test fun successfulAutomaticIncidentPublishesOneSnapshotWithoutRecreatingTheIncident() = runBlocking {
+        val remote = FakeIncidentRemoteDataSource(IncidentRemoteCreationStatus.Success("incident-remote-1"))
+        val publisher = RecordingLocationPublisher(EmergencyLocationPublicationResult.Failed("network_unavailable"))
+        val creator = AuthenticatedIncidentRemoteCreator(
+            authRepository = FakeAuthRepository(),
+            remoteDataSource = remote,
+            activeTripRemoteResolver = FakeActiveTripRemoteResolver(ActiveTripLookupResult.Found("remote-trip-1")),
+            eventLocationProvider = ManualSosLocationProvider { eventLocation() },
+            emergencyLocationPublisher = publisher
+        )
+
+        val created = creator.createIncident(incident())
+
+        assertEquals(1, remote.calls)
+        assertEquals(IncidentRemoteCreationStatus.Success("incident-remote-1"), created.remoteCreationStatus)
+        assertEquals(1, publisher.snapshots.size)
+        assertEquals("incident-remote-1", publisher.snapshots.single().incidentId)
+    }
+
+    @Test fun automaticIncidentFailureOrInvalidCoordinatesDoNotPublishSnapshot() = runBlocking {
+        val publisher = RecordingLocationPublisher()
+        AuthenticatedIncidentRemoteCreator(
+            authRepository = FakeAuthRepository(),
+            remoteDataSource = FakeIncidentRemoteDataSource(IncidentRemoteCreationStatus.HttpError(400, "validation_error")),
+            activeTripRemoteResolver = FakeActiveTripRemoteResolver(ActiveTripLookupResult.Found("remote-trip-1")),
+            eventLocationProvider = ManualSosLocationProvider { eventLocation() },
+            emergencyLocationPublisher = publisher
+        ).createIncident(incident())
+        assertEquals(0, publisher.snapshots.size)
+
+        AuthenticatedIncidentRemoteCreator(
+            authRepository = FakeAuthRepository(),
+            remoteDataSource = FakeIncidentRemoteDataSource(IncidentRemoteCreationStatus.Success("incident-remote-1")),
+            activeTripRemoteResolver = FakeActiveTripRemoteResolver(ActiveTripLookupResult.Found("remote-trip-1")),
+            eventLocationProvider = ManualSosLocationProvider { eventLocation(latitude = 0.0, longitude = 0.0) },
+            emergencyLocationPublisher = publisher
+        ).createIncident(incident())
+        assertEquals(0, publisher.snapshots.size)
+    }
+
     private class FakeIncidentRemoteDataSource(
         private val status: IncidentRemoteCreationStatus
     ) : IncidentRemoteDataSource {
@@ -312,6 +353,16 @@ class AuthenticatedIncidentRemoteCreatorTest {
             this.authorization = authorization
             this.request = request
             return status
+        }
+    }
+
+    private class RecordingLocationPublisher(
+        private val result: EmergencyLocationPublicationResult = EmergencyLocationPublicationResult.Published
+    ) : EmergencyLocationPublisher {
+        val snapshots = mutableListOf<EmergencyLocationSnapshotRequestDto>()
+        override suspend fun publish(snapshot: EmergencyLocationSnapshotRequestDto): EmergencyLocationPublicationResult {
+            snapshots += snapshot
+            return result
         }
     }
 
@@ -355,5 +406,14 @@ class AuthenticatedIncidentRemoteCreatorTest {
         validationPolicyVersion = "false-positive-validation-v1",
         gpsQuality = GpsQualityStatus.Good,
         clientIncidentId = clientIncidentId
+    )
+
+    private fun eventLocation(latitude: Double = 19.4326, longitude: Double = -99.1332) = LocationSample(
+        latitude = latitude,
+        longitude = longitude,
+        accuracyMeters = 8f,
+        timestampMillis = 1_723_392_900_000L,
+        provider = "gps",
+        isMock = false
     )
 }

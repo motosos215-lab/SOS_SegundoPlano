@@ -5,6 +5,7 @@ import com.example.sos_segundoplano.domain.monitor.MonitorAlertDetail
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertOpaquePayload
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertsRepository
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertsResult
+import com.example.sos_segundoplano.domain.monitor.MonitorAlertStatus
 import com.example.sos_segundoplano.domain.monitor.NotificationDeliveryAttemptId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -44,7 +45,7 @@ class MonitorAlertHistoryViewModelTest {
         override suspend fun listAlerts() = results.removeAt(0)?.let { MonitorAlertsResult.Success(it) } ?: MonitorAlertsResult.Failure(null, null, "network")
         override suspend fun getAlerts(): MonitorAlertsResult<MonitorAlertOpaquePayload> = error("unused")
         override suspend fun getAlert(id: NotificationDeliveryAttemptId) = error("unused") as MonitorAlertsResult<MonitorAlertDetail>
-        override suspend fun getStatus(id: NotificationDeliveryAttemptId): MonitorAlertsResult<MonitorAlertOpaquePayload> = error("unused")
+        override suspend fun getStatus(id: NotificationDeliveryAttemptId): MonitorAlertsResult<MonitorAlertStatus> = error("unused")
         override suspend fun getLocation(id: NotificationDeliveryAttemptId): MonitorAlertsResult<MonitorAlertOpaquePayload> = error("unused")
         override suspend fun markViewed(id: NotificationDeliveryAttemptId): MonitorAlertsResult<MonitorAlertOpaquePayload> = error("unused")
         override suspend fun acknowledge(id: NotificationDeliveryAttemptId, responseType: String, message: String) = error("unused") as MonitorAlertsResult<MonitorAlertDetail>

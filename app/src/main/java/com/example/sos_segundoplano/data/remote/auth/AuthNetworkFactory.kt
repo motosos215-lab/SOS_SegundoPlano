@@ -4,6 +4,7 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import com.example.sos_segundoplano.data.remote.incident.IncidentsApi
 import com.example.sos_segundoplano.data.remote.incident.MobileSosAlertsApi
+import com.example.sos_segundoplano.data.remote.incident.EmergencyLocationSharingApi
 import com.example.sos_segundoplano.data.remote.emergency.EmergencyContactsApi
 import com.example.sos_segundoplano.data.remote.monitor.MonitorAlertsApi
 import com.example.sos_segundoplano.data.remote.profile.UsersApi
@@ -48,6 +49,12 @@ object AuthNetworkFactory {
         moshi: Moshi = createMoshi(),
         client: OkHttpClient = createClient()
     ): MobileSosAlertsApi = createRetrofit(baseUrl, moshi, client).create(MobileSosAlertsApi::class.java)
+
+    fun createEmergencyLocationSharingApi(
+        baseUrl: String,
+        moshi: Moshi = createMoshi(),
+        client: OkHttpClient = createClient()
+    ): EmergencyLocationSharingApi = createRetrofit(baseUrl, moshi, client).create(EmergencyLocationSharingApi::class.java)
 
     fun createEmergencyContactsApi(
         baseUrl: String,

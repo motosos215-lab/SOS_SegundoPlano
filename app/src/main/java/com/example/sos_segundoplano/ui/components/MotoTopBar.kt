@@ -41,7 +41,9 @@ fun MotoTopBar(
     title: String,
     modifier: Modifier = Modifier,
     subtitle: String? = null,
-    navigationIcon: MotoTopBarIcon = MotoTopBarIcon.Menu
+    navigationIcon: MotoTopBarIcon = MotoTopBarIcon.Menu,
+    showNavigationIcon: Boolean = true,
+    showNotificationsIcon: Boolean = true
 ) {
     Column(
         modifier = modifier
@@ -56,14 +58,16 @@ fun MotoTopBar(
                 .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            TopBarIcon(
-                icon = navigationIcon,
-                contentDescription = when (navigationIcon) {
-                    MotoTopBarIcon.Menu -> stringResource(R.string.cd_open_menu)
-                    MotoTopBarIcon.Back -> stringResource(R.string.cd_back)
-                    MotoTopBarIcon.Bell -> stringResource(R.string.cd_notifications)
-                }
-            )
+            if (showNavigationIcon) {
+                TopBarIcon(
+                    icon = navigationIcon,
+                    contentDescription = when (navigationIcon) {
+                        MotoTopBarIcon.Menu -> stringResource(R.string.cd_open_menu)
+                        MotoTopBarIcon.Back -> stringResource(R.string.cd_back)
+                        MotoTopBarIcon.Bell -> stringResource(R.string.cd_notifications)
+                    }
+                )
+            } else Spacer(Modifier.size(56.dp))
 
             Column(
                 modifier = Modifier.weight(1f),
@@ -88,10 +92,12 @@ fun MotoTopBar(
                 }
             }
 
-            TopBarIcon(
-                icon = MotoTopBarIcon.Bell,
-                contentDescription = stringResource(R.string.cd_notifications)
-            )
+            if (showNotificationsIcon) {
+                TopBarIcon(
+                    icon = MotoTopBarIcon.Bell,
+                    contentDescription = stringResource(R.string.cd_notifications)
+                )
+            } else Spacer(Modifier.size(56.dp))
         }
         Spacer(
             modifier = Modifier
