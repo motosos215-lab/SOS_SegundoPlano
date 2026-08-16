@@ -7,14 +7,18 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.CompletableDeferred
 
 class WearTripInvalidationCoordinatorTest {
-    @Test fun startStartsSignalsAndReconciles() = runBlocking { var starts=0; var refreshes=0; WearTripInvalidationCoordinator({starts++},{},{refreshes++}).onStart(); assertEquals(1,starts); assertEquals(1,refreshes) }
+    @Test fun startReconcilesBeforeStartingSignals() = runBlocking {
+        val events = mutableListOf<String>()
+        WearTripInvalidationCoordinator({ events += "start" }, {}, { events += "reconcile" }).onStart()
+        assertEquals(listOf("reconcile", "start"), events)
+    }
     @Test fun stopStopsSignalsAndReconciles() = runBlocking { var stops=0; var refreshes=0; WearTripInvalidationCoordinator({},{stops++},{refreshes++}).onStop(); assertEquals(1,stops); assertEquals(1,refreshes) }
 
     @Test fun startFailureDoesNotRetryOrMutateState() = runBlocking {
         var starts = 0; var stops = 0; var reconciles = 0
         val coordinator = WearTripInvalidationCoordinator({ starts++ }, { stops++ }) { reconciles++; error("failure") }
         runCatching { coordinator.onStart() }
-        assertEquals(1, starts); assertEquals(0, stops); assertEquals(1, reconciles)
+        assertEquals(0, starts); assertEquals(0, stops); assertEquals(1, reconciles)
     }
 
     @Test fun stopFailureDoesNotRetryOrMutateState() = runBlocking {

@@ -25,6 +25,7 @@ class WearSignalForegroundService : Service() {
     private val validationActionHandler by lazy { WearValidationNotificationActionHandler(validationActions) }
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val limiter = WearTransmissionLimiter()
+    private val healthPermissionChecker by lazy { AndroidWearHealthPermissionChecker(this) }
     private var started = false
     private var snapshot = WearSignalSnapshot()
     private val validationStatus: WearDataLayerProtocol.ValidationStatus
@@ -63,7 +64,7 @@ class WearSignalForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startCapture()
+            ACTION_START -> startCapture(startId)
             ACTION_STOP -> stopSelf(startId)
             ACTION_VALIDATION_STATUS -> {
                 if (started) promoteToForeground(buildNotification())
@@ -83,10 +84,14 @@ class WearSignalForegroundService : Service() {
         super.onDestroy()
     }
 
-    private fun startCapture() {
+    private fun startCapture(startId: Int) {
         if (started) return
+        captureBlockedStatus(healthPermissionChecker.status())?.let { status ->
+            stopForPermission(status, startId)
+            return
+        }
         createChannel()
-        promoteToForeground(buildNotification())
+        if (!promoteToForeground(buildNotification(), startId)) return
         started = true
         snapshot = WearSignalSnapshot(
             captureActive = true,
@@ -102,12 +107,7 @@ class WearSignalForegroundService : Service() {
 
     private fun stopCapture() {
         if (!started) return
-        started = false
-        accelerometer.stop()
-        gyroscope.stop()
-        battery.stop()
-        heartRate.release()
-        limiter.reset()
+        releaseCaptureSources()
         snapshot = snapshot.copy(
             captureActive = false,
             status = WearCaptureStatus.Stopped,
@@ -116,6 +116,33 @@ class WearSignalForegroundService : Service() {
             lastUpdatedMillis = System.currentTimeMillis()
         )
         publishNow()
+    }
+
+    private fun stopForPermission(status: WearCaptureStatus, startId: Int?) {
+        if (started) releaseCaptureSources()
+        snapshot = snapshot.copy(
+            captureActive = false,
+            status = status,
+            heartRateBpm = null,
+            heartRateStatus = if (status == WearCaptureStatus.PermanentlyDenied) {
+                WearSignalAvailability.PermanentlyDenied
+            } else {
+                WearSignalAvailability.PermissionRequired
+            },
+            lastUpdatedMillis = System.currentTimeMillis()
+        )
+        publishNow()
+        stopForegroundCompat()
+        if (startId == null) stopSelf() else stopSelf(startId)
+    }
+
+    private fun releaseCaptureSources() {
+        started = false
+        accelerometer.stop()
+        gyroscope.stop()
+        battery.stop()
+        heartRate.release()
+        limiter.reset()
     }
 
     private fun publishThrottled() {
@@ -136,11 +163,23 @@ class WearSignalForegroundService : Service() {
         dataClient.putDataItem(request)
     }
 
-    private fun promoteToForeground(notification: Notification) {
+    private fun promoteToForeground(notification: Notification, startId: Int? = null): Boolean = try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH)
         } else {
             startForeground(NOTIFICATION_ID, notification)
+        }
+        true
+    } catch (_: SecurityException) {
+        stopForPermission(WearCaptureStatus.PermissionRequired, startId)
+        false
+    }
+
+    private fun stopForegroundCompat() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            stopForeground(true)
         }
     }
 
@@ -225,6 +264,12 @@ class WearSignalForegroundService : Service() {
         private const val CHANNEL_ID = "wear_trip_signal_capture"
         private const val NOTIFICATION_ID = 13200
 
+        internal fun captureBlockedStatus(permissionStatus: WearPermissionStatus): WearCaptureStatus? = when (permissionStatus) {
+            WearPermissionStatus.Granted -> null
+            WearPermissionStatus.PermissionRequired -> WearCaptureStatus.PermissionRequired
+            WearPermissionStatus.PermanentlyDenied -> WearCaptureStatus.PermanentlyDenied
+        }
+
         fun createStartIntent(context: Context): Intent = Intent(context, WearSignalForegroundService::class.java)
             .setAction(ACTION_START)
 
@@ -236,16 +281,29 @@ class WearSignalForegroundService : Service() {
                 .setAction(ACTION_VALIDATION_STATUS)
 
         fun publishStartFailure(context: Context) {
-            val request = PutDataMapRequest.create(WearDataLayerProtocol.PATH_WATCH_STATUS).apply {
-                dataMap.putAll(
-                    WearDataLayerProtocol.encode(
-                        WearSignalSnapshot(
-                            captureActive = false,
-                            status = WearCaptureStatus.UserActionRequired,
-                            lastUpdatedMillis = System.currentTimeMillis()
-                        )
-                    )
-                )
+            publishCaptureStatus(context, WearCaptureStatus.UserActionRequired)
+        }
+
+        fun publishPermissionRequired(context: Context) {
+            publishCaptureStatus(context, WearCaptureStatus.PermissionRequired)
+        }
+
+        fun publishCaptureStatus(context: Context, status: WearCaptureStatus) {
+            val snapshot = WearSignalSnapshot(
+                captureActive = false,
+                status = status,
+                heartRateStatus = when (status) {
+                    WearCaptureStatus.PermissionRequired -> WearSignalAvailability.PermissionRequired
+                    WearCaptureStatus.PermanentlyDenied -> WearSignalAvailability.PermanentlyDenied
+                    else -> WearSignalAvailability.Stopped
+                },
+                heartRateBpm = null,
+                lastUpdatedMillis = System.currentTimeMillis()
+            )
+            WearSignalStateStore.update(snapshot)
+            val request = PutDataMapRequest.create(WearDataLayerProtocol.PATH_SIGNALS_LATEST).apply {
+                dataMap.putAll(WearDataLayerProtocol.encode(snapshot))
+                dataMap.putLong("sequenceMillis", snapshot.lastUpdatedMillis)
             }.asPutDataRequest().setUrgent()
             Wearable.getDataClient(context.applicationContext).putDataItem(request)
         }

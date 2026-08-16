@@ -10,25 +10,45 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.time.Instant
 
 interface RemoteTripSessionStore {
     val remoteTripId: StateFlow<String?>
+    val startedAtEpochMs: StateFlow<Long?>
+    fun setActiveSession(remoteTripId: String, startedAtEpochMs: Long?): Boolean
     fun setRemoteTripId(remoteTripId: String): Boolean
+    fun setStartedAtEpochMs(startedAtEpochMs: Long?): Boolean
     fun clearRemoteTripId(): Boolean
 }
 
 class InMemoryRemoteTripSessionStore : RemoteTripSessionStore {
     private val mutableRemoteTripId = MutableStateFlow<String?>(null)
+    private val mutableStartedAtEpochMs = MutableStateFlow<Long?>(null)
     override val remoteTripId: StateFlow<String?> = mutableRemoteTripId
+    override val startedAtEpochMs: StateFlow<Long?> = mutableStartedAtEpochMs
 
-    override fun setRemoteTripId(remoteTripId: String): Boolean {
+    override fun setActiveSession(remoteTripId: String, startedAtEpochMs: Long?): Boolean {
         val normalized = remoteTripId.trim().takeIf { it.isNotEmpty() } ?: return false
+        val nextStartedAt = if (mutableRemoteTripId.value == normalized && mutableStartedAtEpochMs.value != null) {
+            mutableStartedAtEpochMs.value
+        } else {
+            startedAtEpochMs?.takeIf { it >= 0L }
+        }
         mutableRemoteTripId.value = normalized
+        mutableStartedAtEpochMs.value = nextStartedAt
         return true
+    }
+
+    override fun setRemoteTripId(remoteTripId: String): Boolean = setActiveSession(remoteTripId, null)
+
+    override fun setStartedAtEpochMs(startedAtEpochMs: Long?): Boolean {
+        val remoteTripId = mutableRemoteTripId.value ?: return false
+        return setActiveSession(remoteTripId, startedAtEpochMs)
     }
 
     override fun clearRemoteTripId(): Boolean {
         mutableRemoteTripId.value = null
+        mutableStartedAtEpochMs.value = null
         return true
     }
 }
@@ -67,7 +87,7 @@ class AuthenticatedRemoteTripStarter(
         val mutation = retryStartOnceAfterUnauthorized(first, request)
         when (val result = mutation) {
             is TripMutationResult.Success -> {
-                if (!store.setRemoteTripId(result.remoteTripId)) {
+                if (!store.setActiveSession(result.remoteTripId, request.clientStartedAtUtc.toEpochMillisOrNull())) {
                     TripMutationResult.InvalidResponse("remote_trip_persistence_failed")
                 } else {
                     result
@@ -89,6 +109,12 @@ class AuthenticatedRemoteTripStarter(
         }
         return remoteDataSource.startTrip("Bearer $refreshedToken", request)
     }
+}
+
+private fun String?.toEpochMillisOrNull(): Long? = try {
+    this?.let(Instant::parse)?.toEpochMilli()?.takeIf { it >= 0L }
+} catch (_: java.time.format.DateTimeParseException) {
+    null
 }
 
 class AuthenticatedRemoteTripFinisher(

@@ -1,5 +1,6 @@
 package com.example.sos_segundoplano.wear
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -30,7 +31,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,19 +44,28 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.sos_segundoplano.wear.presentation.components.ConnectionBadge
+import com.example.sos_segundoplano.wear.presentation.components.CompactMetricStrip
 import com.example.sos_segundoplano.wear.presentation.components.EyebrowLabel
 import com.example.sos_segundoplano.wear.presentation.components.HeroSurface
+import com.example.sos_segundoplano.wear.presentation.components.InfoBanner
+import com.example.sos_segundoplano.wear.presentation.components.MetricPill
 import com.example.sos_segundoplano.wear.presentation.components.MotorcycleIllustration
 import com.example.sos_segundoplano.wear.presentation.components.RoundPrimaryButton
 import com.example.sos_segundoplano.wear.presentation.components.ScreenSubtitle
 import com.example.sos_segundoplano.wear.presentation.components.ScreenTitle
 import com.example.sos_segundoplano.wear.presentation.components.WearScreenScaffold
 import com.example.sos_segundoplano.wear.presentation.theme.MotoProgressGreen
+import com.example.sos_segundoplano.wear.presentation.theme.MotoBlueGlow
+import com.example.sos_segundoplano.wear.presentation.theme.MotoGreen
+import com.example.sos_segundoplano.wear.presentation.theme.MotoTripBlue
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlin.math.sqrt
 
 private val MotoSosBlack = Color(0xFF05070A)
 private val MotoSosNavy = Color(0xFF0B2447)
@@ -72,6 +87,8 @@ internal fun WearMotoSosApp(
     val validationActionState by validationController.actionState.collectAsState()
     val signalSnapshot by WearSignalStateStore.snapshot.collectAsState()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current.applicationContext
+    val healthPermissionChecker = remember(context) { AndroidWearHealthPermissionChecker(context) }
 
     LaunchedEffect(validationStatus?.sessionId, validationStatus?.assessmentId, validationStatus?.state) {
         validationController.onValidationStatusChanged(validationStatus)
@@ -83,7 +100,13 @@ internal fun WearMotoSosApp(
         validationStatus = validationStatus,
         validationActionState = validationActionState,
         signalSnapshot = signalSnapshot,
-        onStartTrip = { scope.launch { controller.startTrip() } },
+        onStartTrip = {
+            if (healthPermissionChecker.status() == WearPermissionStatus.Granted) {
+                scope.launch { controller.startTrip() }
+            } else {
+                onOpenHeartRatePermission()
+            }
+        },
         onFinishTrip = { scope.launch { controller.finishTrip() } },
         onRetry = { scope.launch { controller.retry() } },
         onConfirmSafe = { scope.launch { validationController.confirmSafe() } },
@@ -110,6 +133,11 @@ internal fun WearMotoSosScreen(
     onRequestHelp: () -> Unit = {},
     onRetryValidation: () -> Unit = {}
 ) {
+    var monitoringVisible by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(tripState.active) {
+        if (tripState.active != true) monitoringVisible = false
+    }
+    BackHandler(enabled = monitoringVisible) { monitoringVisible = false }
     Surface(modifier = Modifier.fillMaxSize(), color = MotoSosBlack) {
         if (validationStatus?.isCountdownActive == true) {
             CountdownScreen(
@@ -122,14 +150,24 @@ internal fun WearMotoSosScreen(
             )
         } else {
             when (tripState.active) {
-                true -> ActiveTripScreen(
-                    tripState = tripState,
-                    actionState = actionState,
-                    signalSnapshot = signalSnapshot,
-                    validationStatus = validationStatus,
-                    onFinish = onFinishTrip,
-                    onRetry = onRetry
-                )
+                true -> if (monitoringVisible) {
+                    MonitoringScreen(
+                        tripState = tripState,
+                        signalSnapshot = signalSnapshot,
+                        onBack = { monitoringVisible = false }
+                    )
+                } else {
+                    ActiveTripScreen(
+                        tripState = tripState,
+                        actionState = actionState,
+                        signalSnapshot = signalSnapshot,
+                        validationStatus = validationStatus,
+                        onOpenMonitoring = { monitoringVisible = true },
+                        onOpenHeartRatePermission = onOpenHeartRatePermission,
+                        onFinish = onFinishTrip,
+                        onRetry = onRetry
+                    )
+                }
                 false -> ReadyScreen(
                     tripState = tripState,
                     actionState = actionState,
@@ -188,36 +226,95 @@ private fun ActiveTripScreen(
     actionState: WearTripUiActionState,
     signalSnapshot: WearSignalSnapshot,
     validationStatus: WearDataLayerProtocol.ValidationStatus?,
+    onOpenMonitoring: () -> Unit,
+    onOpenHeartRatePermission: () -> Unit,
     onFinish: () -> Unit,
     onRetry: () -> Unit
-) = WearVisualScaffold {
-    Text("MotoSOS", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color.White)
+) = WearScreenScaffold(backgroundColor = MotoTripBlue, accentGlowColor = MotoProgressGreen) {
+    val elapsedTime = elapsedTripTime(tripState.startedAtEpochMs)
+    EyebrowLabel(text = "Monitoreo activo")
     Spacer(Modifier.height(4.dp))
-    Text(
-        "Viaje activo",
-        modifier = Modifier.fillMaxWidth().testTag("wear_trip_status"),
-        style = MaterialTheme.typography.headlineSmall,
-        fontWeight = FontWeight.Bold,
-        color = MotoSosGreen,
-        textAlign = TextAlign.Center
+    ScreenTitle(text = "Viaje activo", modifier = Modifier.testTag("wear_trip_status"))
+    Spacer(Modifier.height(5.dp))
+    ConnectionBadge(
+        label = connectionLabel(tripState.connected),
+        modifier = Modifier.testTag("wear_connection_status")
     )
-    Spacer(Modifier.height(4.dp))
-    ActiveTripRing()
-    Spacer(Modifier.height(2.dp))
-    Text("Monitoreo activo", color = Color.White, fontWeight = FontWeight.SemiBold)
-    Text("Tiempo de viaje", color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall)
-    Spacer(Modifier.height(4.dp))
-    ConnectionIndicator(tripState.connected)
-    SignalMetrics(signalSnapshot)
+    Spacer(Modifier.height(8.dp))
+    CircularTripProgress {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            MotorcycleIllustration(compact = true)
+            Text(elapsedTime, color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+            Text("Tiempo de viaje", color = Color.White.copy(alpha = 0.72f), style = MaterialTheme.typography.labelSmall)
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+    CompactMetricStrip(
+        firstLabel = "m/s²",
+        firstValue = accelerationMagnitude(signalSnapshot),
+        secondLabel = "bpm",
+        secondValue = signalSnapshot.heartRateBpm?.let { it.toInt().toString() } ?: "--",
+        thirdLabel = "batería",
+        thirdValue = signalSnapshot.watchBatteryPercentage?.let { "$it%" } ?: "--"
+    )
+    if (signalSnapshot.status == WearCaptureStatus.PermissionRequired ||
+        signalSnapshot.status == WearCaptureStatus.PermanentlyDenied ||
+        signalSnapshot.heartRateStatus == WearSignalAvailability.PermissionRequired ||
+        signalSnapshot.heartRateStatus == WearSignalAvailability.PermanentlyDenied
+    ) {
+        Spacer(Modifier.height(6.dp))
+        SecondaryWearButton(
+            label = "Permitir frecuencia cardiaca",
+            tag = "wear_heart_rate_permission",
+            onClick = onOpenHeartRatePermission
+        )
+    }
     ValidationStatusBanner(validationStatus)
     TripActionFeedback(actionState, onRetry)
     Spacer(Modifier.height(8.dp))
-    PrimaryWearButton(
+    SecondaryWearButton(
+        label = "Ver sensores",
+        tag = "wear_open_monitoring",
+        onClick = onOpenMonitoring
+    )
+    Spacer(Modifier.height(6.dp))
+    RoundPrimaryButton(
         label = "Finalizar viaje",
         enabled = tripState.remoteTripId != null && actionState !is WearTripUiActionState.InFlight,
         tag = "wear_finish_trip",
         onClick = onFinish
     )
+}
+
+@Composable
+private fun MonitoringScreen(
+    tripState: WearTripState,
+    signalSnapshot: WearSignalSnapshot,
+    onBack: () -> Unit
+) = WearScreenScaffold(accentGlowColor = MotoBlueGlow) {
+    EyebrowLabel(text = "Sensores reales")
+    Spacer(Modifier.height(4.dp))
+    ScreenTitle(text = "Monitoreo activo", modifier = Modifier.testTag("wear_monitoring_screen"))
+    Spacer(Modifier.height(4.dp))
+    ScreenSubtitle("Lecturas disponibles del reloj.")
+    Spacer(Modifier.height(8.dp))
+    MetricPill("Acelerómetro", accelerationMagnitude(signalSnapshot), MotoProgressGreen, Modifier.testTag("wear_monitoring_accelerometer"))
+    Spacer(Modifier.height(5.dp))
+    MetricPill("Giroscopio", vectorValue(signalSnapshot.gyroscope), MotoBlueGlow, Modifier.testTag("wear_monitoring_gyroscope"))
+    Spacer(Modifier.height(5.dp))
+    MetricPill("Frecuencia cardiaca", signalSnapshot.heartRateBpm?.let { "${it.toInt()} bpm" } ?: "--", MotoGreen, Modifier.testTag("wear_monitoring_heart_rate"))
+    Spacer(Modifier.height(5.dp))
+    MetricPill("Batería", signalSnapshot.watchBatteryPercentage?.let { "$it%" } ?: "--", MotoGreen, Modifier.testTag("wear_monitoring_battery"))
+    Spacer(Modifier.height(5.dp))
+    MetricPill("Conexión", connectionLabel(tripState.connected), MotoProgressGreen)
+    Spacer(Modifier.height(8.dp))
+    InfoBanner(
+        title = "Señales del reloj",
+        message = "Acelerómetro, giroscopio, frecuencia cardiaca y batería muestran sólo datos disponibles.",
+        accentColor = MotoProgressGreen
+    )
+    Spacer(Modifier.height(8.dp))
+    SecondaryWearButton("Volver al viaje", onBack)
 }
 
 @Composable
@@ -333,22 +430,45 @@ private fun WearVisualScaffold(
 }
 
 @Composable
-private fun ActiveTripRing() {
+private fun CircularTripProgress(content: @Composable () -> Unit) {
     Box(contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(108.dp)) {
-            drawCircle(MotoSosGreen.copy(alpha = 0.20f), style = Stroke(width = 13.dp.toPx()))
+        Canvas(Modifier.size(132.dp)) {
+            drawCircle(MotoProgressGreen.copy(alpha = 0.16f), style = Stroke(width = 10.dp.toPx()))
             drawArc(
-                color = MotoSosGreen,
+                color = MotoProgressGreen,
                 startAngle = -90f,
-                sweepAngle = 300f,
+                sweepAngle = 270f,
                 useCenter = false,
-                style = Stroke(width = 13.dp.toPx())
+                style = Stroke(width = 10.dp.toPx())
             )
             drawCircle(Color.White.copy(alpha = 0.16f), radius = size.minDimension * 0.31f)
         }
-        Text("🏍", style = MaterialTheme.typography.displaySmall)
+        content()
     }
 }
+
+@Composable
+private fun elapsedTripTime(startedAtEpochMs: Long?): String {
+    if (startedAtEpochMs == null) return "--:--"
+    val now by produceState(initialValue = System.currentTimeMillis(), startedAtEpochMs) {
+        while (true) {
+            value = System.currentTimeMillis()
+            delay(1_000L)
+        }
+    }
+    val elapsedSeconds = ((now - startedAtEpochMs).coerceAtLeast(0L)) / 1_000L
+    return "%02d:%02d".format(elapsedSeconds / 60L, elapsedSeconds % 60L)
+}
+
+private fun accelerationMagnitude(snapshot: WearSignalSnapshot): String {
+    val sample = snapshot.accelerometer ?: return "--"
+    val magnitude = sqrt(sample.x * sample.x + sample.y * sample.y + sample.z * sample.z)
+    return "%.1f".format(magnitude)
+}
+
+private fun vectorValue(sample: WearVectorSample?): String = sample?.let {
+    "%.1f, %.1f, %.1f".format(it.x, it.y, it.z)
+} ?: "--"
 
 @Composable
 private fun CountdownRing(remaining: String) {

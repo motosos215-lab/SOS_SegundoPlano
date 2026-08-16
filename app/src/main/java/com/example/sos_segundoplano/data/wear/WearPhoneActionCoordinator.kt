@@ -59,7 +59,7 @@ class WearPhoneActionCoordinator(
             requestId = request.requestId,
             active = result == PhoneActionResult.OK && remoteTripId != null,
             remoteTripId = remoteTripId.takeIf { result == PhoneActionResult.OK },
-            startedAtEpochMs = null,
+            startedAtEpochMs = remoteTripStore.startedAtEpochMs.value.takeIf { result == PhoneActionResult.OK && remoteTripId != null },
             updatedAtEpochMs = clock(),
             result = result,
             sanitizedCode = if (result == PhoneActionResult.OK) null else "trip_state_not_available"

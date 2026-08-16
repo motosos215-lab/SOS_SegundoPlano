@@ -8,10 +8,15 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 
 class WearMainActivity : ComponentActivity() {
+    private lateinit var tripDependencies: WearTripStateDependencies
+    private lateinit var controller: WearTripUiController
+    private lateinit var signalCaptureLauncher: WearSignalCaptureLauncher
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val tripDependencies = WearTripStateProvider.get(applicationContext)
-        val controller = WearTripUiController(
+        tripDependencies = WearTripStateProvider.get(applicationContext)
+        signalCaptureLauncher = WearSignalCaptureLauncher.create(applicationContext)
+        controller = WearTripUiController(
             actions = WearTripUiReconcilerActions(
                 tripDependencies.reconciler
             ),
@@ -20,7 +25,6 @@ class WearMainActivity : ComponentActivity() {
         val validationController = WearValidationUiController(
             WearValidationActionGateway(applicationContext)
         )
-        lifecycleScope.launch { controller.refreshInitial() }
         setContent {
             WearMotoSosApp(
                 tripStateStore = tripDependencies.store,
@@ -29,6 +33,16 @@ class WearMainActivity : ComponentActivity() {
                 onOpenHeartRatePermission = {
                     startActivity(Intent(this@WearMainActivity, WearPermissionActivity::class.java))
                 }
+            )
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        lifecycleScope.launch {
+            controller.refresh()
+            signalCaptureLauncher.reconcileActiveTrip(
+                tripDependencies.store.state.value.active == true
             )
         }
     }

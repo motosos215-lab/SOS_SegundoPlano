@@ -16,8 +16,8 @@ import com.example.sos_segundoplano.wear.presentation.theme.MotoProgressGreen
 import com.example.sos_segundoplano.wear.presentation.theme.MotoWhite
 
 @Composable
-internal fun MotorcycleIllustration(modifier: Modifier = Modifier) {
-    Canvas(modifier.size(88.dp)) {
+internal fun MotorcycleIllustration(modifier: Modifier = Modifier, compact: Boolean = false) {
+    Canvas(modifier.size(if (compact) 64.dp else 88.dp)) {
         val unit = size.minDimension
         val tireWidth = 5.dp.toPx()
         val wheelRadius = unit * 0.155f

@@ -30,6 +30,10 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".WearPermissionActivity"
+            android:exported="false" />
+
         <service
             android:name=".WearSignalForegroundService"
             android:exported="false"

@@ -62,7 +62,10 @@ class WearPhoneActionCoordinatorTest {
 
     @Test
     fun authenticatedRiderWithTripReturnsActiveState() = runBlocking {
-        val store = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("trip-real-123") }
+        val store = InMemoryRemoteTripSessionStore().apply {
+            setRemoteTripId("trip-real-123")
+            setStartedAtEpochMs(1_723_766_400_000L)
+        }
         val response = coordinator(
             session = authenticated(UserRole.Rider),
             remoteTripStore = store,
@@ -72,7 +75,22 @@ class WearPhoneActionCoordinatorTest {
         assertEquals("request-trip-state-active", response.requestId)
         assertTrue(response.active)
         assertEquals("trip-real-123", response.remoteTripId)
-        assertNull(response.startedAtEpochMs)
+        assertEquals(1_723_766_400_000L, response.startedAtEpochMs)
+    }
+
+    @Test
+    fun repeatedTripStateRefreshReturnsTheSameCanonicalStartedAt() = runBlocking {
+        val store = InMemoryRemoteTripSessionStore().apply {
+            setRemoteTripId("trip-real-123")
+            setStartedAtEpochMs(1_723_766_400_000L)
+        }
+        val coordinator = coordinator(session = authenticated(UserRole.Rider), remoteTripStore = store)
+
+        val first = coordinator.currentTripState(TripStateRequest("request-trip-state-1", 1L))
+        val second = coordinator.currentTripState(TripStateRequest("request-trip-state-2", 2L))
+
+        assertEquals(1_723_766_400_000L, first.startedAtEpochMs)
+        assertEquals(first.startedAtEpochMs, second.startedAtEpochMs)
     }
 
     @Test
