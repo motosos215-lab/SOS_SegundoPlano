@@ -12,6 +12,7 @@ import com.example.sos_segundoplano.domain.push.PushTokenStore
 import com.example.sos_segundoplano.domain.push.PushTokenSyncResult
 import com.example.sos_segundoplano.domain.auth.AuthSessionIdentity
 import com.example.sos_segundoplano.domain.repository.AuthRepository
+import com.example.sos_segundoplano.push.PushDiagnostics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -50,7 +51,11 @@ object PushTokenRegistrationProvider {
 
     fun scheduleSync() {
         val installed = repository ?: return
-        applicationScope.launch { installed.syncPendingMonitorToken() }
+        applicationScope.launch {
+            PushDiagnostics.debug(PushDiagnostics.syncStarted())
+            val result = installed.syncPendingMonitorToken()
+            PushDiagnostics.debug(PushDiagnostics.syncResult(result.diagnosticResult(), result.diagnosticCode()))
+        }
     }
 
     suspend fun revokeBeforeLogout(ownerSession: AuthSessionIdentity): PushTokenSyncResult =
@@ -58,3 +63,17 @@ object PushTokenRegistrationProvider {
         ?: PushTokenSyncResult.NothingPending
 
 }
+
+private fun PushTokenSyncResult.diagnosticResult(): String = when (this) {
+    PushTokenSyncResult.Registered -> "success"
+    PushTokenSyncResult.NothingPending -> "nothing_pending"
+    PushTokenSyncResult.NoMonitorSession -> "not_monitor"
+    PushTokenSyncResult.AuthUnavailable -> "auth_unavailable"
+    PushTokenSyncResult.StorageUnavailable -> "storage_failure"
+    PushTokenSyncResult.Revoked -> "revoked"
+    PushTokenSyncResult.NotFound -> "not_found"
+    is PushTokenSyncResult.RemoteFailure -> "remote_failure"
+}
+
+private fun PushTokenSyncResult.diagnosticCode(): String? =
+    (this as? PushTokenSyncResult.RemoteFailure)?.errorCode

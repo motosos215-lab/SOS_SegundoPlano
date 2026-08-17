@@ -16,6 +16,7 @@ import com.example.sos_segundoplano.domain.push.PushTokenStore
 import com.example.sos_segundoplano.domain.push.PushTokenStoreResult
 import com.example.sos_segundoplano.domain.push.PushTokenSyncResult
 import com.example.sos_segundoplano.domain.repository.AuthRepository
+import com.example.sos_segundoplano.push.PushDiagnostics
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -38,6 +39,7 @@ class DefaultPushTokenRepository(
         val ownerUserId = ownerSession.userId.trim().takeIf { it.isNotEmpty() }
             ?: return PushTokenSyncResult.NoMonitorSession
         val state = readState() ?: return PushTokenSyncResult.StorageUnavailable
+        logSyncState(state)
         val token = state.pendingToken?.takeIf { it.isNotBlank() }
             ?: state.currentToken?.takeIf {
                 it.isNotBlank() && state.remoteRegistrationOwnerUserId != ownerUserId
@@ -61,51 +63,34 @@ class DefaultPushTokenRepository(
         val normalizedOwnerUserId = ownerSession.userId.trim().takeIf { it.isNotEmpty() }
             ?: return PushTokenSyncResult.NoMonitorSession
         if (currentMonitorIdentity() != ownerSession) return PushTokenSyncResult.NoMonitorSession
-        var state = readState() ?: return PushTokenSyncResult.StorageUnavailable
-        var registrationId = state.remoteRegistrationId
+        val state = readState() ?: return PushTokenSyncResult.StorageUnavailable
+        val registrationId = state.remoteRegistrationId
             ?.takeIf { it.isNotBlank() && state.remoteRegistrationOwnerUserId == normalizedOwnerUserId }
-
+        PushDiagnostics.debug(PushDiagnostics.logoutRevokeState(registrationId != null))
         if (registrationId == null) {
-            val localToken = state.pendingToken?.takeIf { it.isNotBlank() }
-                ?: state.currentToken?.takeIf { it.isNotBlank() }
-                ?: return PushTokenSyncResult.NothingPending
-            when (val recovered = register(localToken)) {
-                is PushTokenRemoteResult.Registered -> {
-                    registrationId = recovered.token.id.takeIf { it.isNotBlank() }
-                        ?: return PushTokenSyncResult.RemoteFailure()
-                    state = state.copy(
-                        currentToken = localToken,
-                        pendingToken = null,
-                        remoteRegistrationId = registrationId,
-                        remoteRegistrationOwnerUserId = normalizedOwnerUserId
-                    )
-                    if (store.save(state) !is PushTokenStoreResult.Success) {
-                        return PushTokenSyncResult.StorageUnavailable
-                    }
-                }
-                else -> return mapFailure(recovered)
-            }
+            PushDiagnostics.debug(PushDiagnostics.logoutRevokeResult("nothing_pending"))
+            return PushTokenSyncResult.NothingPending
         }
-
-        val resolvedRegistrationId = registrationId ?: return PushTokenSyncResult.NothingPending
         if (currentMonitorIdentity() != ownerSession) return PushTokenSyncResult.NoMonitorSession
-        when (val result = callWithRefresh { authorization ->
-            remoteDataSource.revoke(authorization, resolvedRegistrationId)
+        val outcome = when (val result = callWithRefresh { authorization ->
+            remoteDataSource.revoke(authorization, registrationId)
         }) {
             is PushTokenRemoteResult.Revoked -> {
                 if (!result.token.status.equals(STATUS_REVOKED, ignoreCase = true)) {
                     PushTokenSyncResult.RemoteFailure()
                 } else {
-                    markRevoked(normalizedOwnerUserId, resolvedRegistrationId, notFound = false)
+                    markRevoked(normalizedOwnerUserId, registrationId, notFound = false)
                 }
             }
             is PushTokenRemoteResult.NotFound -> markRevoked(
                 normalizedOwnerUserId,
-                resolvedRegistrationId,
+                registrationId,
                 notFound = true
             )
             else -> mapFailure(result)
         }
+        PushDiagnostics.debug(PushDiagnostics.logoutRevokeResult(outcome.diagnosticResult()))
+        outcome
     }
 
     private suspend fun register(token: String): PushTokenRemoteResult? {
@@ -119,7 +104,10 @@ class DefaultPushTokenRepository(
                 osVersion = metadata.osVersion
             )
         )
-        return callWithRefresh { authorization -> remoteDataSource.register(authorization, request) }
+        PushDiagnostics.debug(PushDiagnostics.registerStarted())
+        val result = callWithRefresh { authorization -> remoteDataSource.register(authorization, request) }
+        PushDiagnostics.debug(result.diagnosticRegisterResult())
+        return result
     }
 
     private fun persistRegistration(
@@ -139,8 +127,10 @@ class DefaultPushTokenRepository(
             )
         )
         return if (saved is PushTokenStoreResult.Success) {
+            PushDiagnostics.debug(PushDiagnostics.registrationPersisted())
             PushTokenSyncResult.Registered
         } else {
+            PushDiagnostics.debug(PushDiagnostics.registrationPersistFailed())
             PushTokenSyncResult.StorageUnavailable
         }
     }
@@ -207,9 +197,39 @@ class DefaultPushTokenRepository(
     private fun readState(): PushTokenState? =
         (store.read() as? PushTokenStoreResult.Success)?.value
 
+    private fun logSyncState(state: PushTokenState) {
+        PushDiagnostics.debug(
+            PushDiagnostics.syncState(
+                pendingTokenPresent = !state.pendingToken.isNullOrBlank(),
+                remoteRegistrationPresent = !state.remoteRegistrationId.isNullOrBlank()
+            )
+        )
+    }
+
     private companion object {
         const val PLATFORM_ANDROID = "Android"
         const val CHANNEL_FCM = "Fcm"
         const val STATUS_REVOKED = "Revoked"
     }
+}
+
+private fun PushTokenRemoteResult?.diagnosticRegisterResult(): String = when (this) {
+    is PushTokenRemoteResult.Registered -> PushDiagnostics.registerResult("success")
+    is PushTokenRemoteResult.HttpFailure -> PushDiagnostics.registerResult("http_error", status, errorCode)
+    is PushTokenRemoteResult.InvalidResponse -> PushDiagnostics.registerResult("invalid_response", code = errorCode)
+    PushTokenRemoteResult.NetworkFailure -> PushDiagnostics.registerResult("network_error")
+    PushTokenRemoteResult.Timeout -> PushDiagnostics.registerResult("timeout")
+    null -> PushDiagnostics.registerResult("auth_unavailable")
+    else -> PushDiagnostics.registerResult("unexpected_result")
+}
+
+private fun PushTokenSyncResult.diagnosticResult(): String = when (this) {
+    PushTokenSyncResult.Registered -> "success"
+    PushTokenSyncResult.NothingPending -> "nothing_pending"
+    PushTokenSyncResult.NoMonitorSession -> "not_monitor"
+    PushTokenSyncResult.AuthUnavailable -> "auth_unavailable"
+    PushTokenSyncResult.StorageUnavailable -> "storage_failure"
+    PushTokenSyncResult.Revoked -> "revoked"
+    PushTokenSyncResult.NotFound -> "not_found"
+    is PushTokenSyncResult.RemoteFailure -> "remote_failure"
 }

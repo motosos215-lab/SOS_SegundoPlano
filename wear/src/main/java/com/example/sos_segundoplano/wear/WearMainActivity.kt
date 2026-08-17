@@ -25,11 +25,16 @@ class WearMainActivity : ComponentActivity() {
         val validationController = WearValidationUiController(
             WearValidationActionGateway(applicationContext)
         )
+        val manualSosController = WearManualSosUiController(
+            actions = MobileCompanionGateway(applicationContext),
+            tripStateStore = tripDependencies.store
+        )
         setContent {
             WearMotoSosApp(
                 tripStateStore = tripDependencies.store,
                 controller = controller,
                 validationController = validationController,
+                manualSosController = manualSosController,
                 onOpenHeartRatePermission = {
                     startActivity(Intent(this@WearMainActivity, WearPermissionActivity::class.java))
                 }

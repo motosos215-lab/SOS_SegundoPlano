@@ -8,6 +8,7 @@ import com.example.sos_segundoplano.domain.auth.SessionState
 import com.example.sos_segundoplano.domain.auth.UserRole
 import com.example.sos_segundoplano.domain.auth.authenticatedIdentityOrNull
 import com.example.sos_segundoplano.domain.repository.AuthRepository
+import com.example.sos_segundoplano.push.PushDiagnostics
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.StateFlow
 
@@ -52,12 +53,14 @@ class PushAwareAuthRepository(
 
     private fun scheduleLoginForMonitor(result: AuthResult<AuthUser>) {
         if ((result as? AuthResult.Success)?.value?.role == UserRole.Monitor) {
+            PushDiagnostics.debug(PushDiagnostics.syncTrigger("monitor_login"))
             onMonitorSessionAvailable()
         }
     }
 
     private fun scheduleRestoreForMonitor(result: AuthResult<AuthUser?>) {
         if ((result as? AuthResult.Success)?.value?.role == UserRole.Monitor) {
+            PushDiagnostics.debug(PushDiagnostics.syncTrigger("monitor_restore"))
             onMonitorSessionAvailable()
         }
     }

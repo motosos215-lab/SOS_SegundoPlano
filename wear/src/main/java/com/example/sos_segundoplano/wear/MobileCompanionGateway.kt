@@ -76,10 +76,23 @@ internal class MobileCompanionGateway(
         { id -> WearActionProtocolCodec.encodeFinishTripAction(FinishTripActionRequest(id, commandId, remoteTripId, System.currentTimeMillis())) },
     )
 
-    override suspend fun manualSos(commandId: String, remoteTripId: String): MobileCompanionResult<PhoneActionResponse> = action(
-        WearProtocol.PATH_ACTION_MANUAL_SOS, commandId,
-        { id -> WearActionProtocolCodec.encodeManualSosAction(ManualSosActionRequest(id, commandId, remoteTripId, System.currentTimeMillis())) },
-    )
+    override suspend fun manualSos(commandId: String, remoteTripId: String): MobileCompanionResult<PhoneActionResponse> {
+        val result = action(
+            WearProtocol.PATH_ACTION_MANUAL_SOS, commandId,
+            { id -> WearActionProtocolCodec.encodeManualSosAction(ManualSosActionRequest(id, commandId, remoteTripId, System.currentTimeMillis())) },
+        )
+        if (BuildConfig.DEBUG) {
+            val outcome = when (result) {
+                is MobileCompanionResult.Success -> "result=${result.value.result.wireValue}"
+                MobileCompanionResult.CompanionUnavailable -> "result=companion_unavailable"
+                MobileCompanionResult.Timeout -> "result=timeout"
+                MobileCompanionResult.TransportFailure -> "result=transport_failure"
+                MobileCompanionResult.DecodeFailure -> "result=decode_failure"
+            }
+            Log.d(LOG_TAG, "event=manual_sos_result $outcome")
+        }
+        return result
+    }
 
     private suspend fun action(path: String, commandId: String, encode: (String) -> ByteArray): MobileCompanionResult<PhoneActionResponse> {
         require(commandId.isNotBlank())

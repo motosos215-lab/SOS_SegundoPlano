@@ -3,6 +3,9 @@ package com.example.sos_segundoplano.wear
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,6 +46,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -66,6 +70,7 @@ import com.example.sos_segundoplano.wear.presentation.theme.MotoGreen
 import com.example.sos_segundoplano.wear.presentation.theme.MotoTripBlue
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.sqrt
 
 private val MotoSosBlack = Color(0xFF05070A)
@@ -74,18 +79,22 @@ private val MotoSosBlue = Color(0xFF12395F)
 private val MotoSosGreen = Color(0xFF34C759)
 private val MotoSosRed = Color(0xFFFF3B30)
 private val WearActionWidth = 180.dp
+private const val MANUAL_SOS_HOLD_MILLIS = 2_000L
+private const val HOLD_PROGRESS_INTERVAL_MILLIS = 40L
 
 @Composable
 internal fun WearMotoSosApp(
     tripStateStore: WearTripStateStore,
     controller: WearTripUiController,
     validationController: WearValidationUiController,
+    manualSosController: WearManualSosUiController,
     onOpenHeartRatePermission: () -> Unit
 ) {
     val tripState by tripStateStore.state.collectAsState()
     val tripActionState by controller.actionState.collectAsState()
     val validationStatus by WearValidationStateStore.state.collectAsState()
     val validationActionState by validationController.actionState.collectAsState()
+    val manualSosState by manualSosController.state.collectAsState()
     val signalSnapshot by WearSignalStateStore.snapshot.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current.applicationContext
@@ -113,6 +122,13 @@ internal fun WearMotoSosApp(
         onConfirmSafe = { scope.launch { validationController.confirmSafe() } },
         onRequestHelp = { scope.launch { validationController.requestHelp() } },
         onRetryValidation = { scope.launch { validationController.retry() } },
+        manualSosState = manualSosState,
+        onStartManualSosHold = manualSosController::startHold,
+        onManualSosHoldProgress = manualSosController::updateHoldProgress,
+        onCancelManualSosHold = manualSosController::cancelHold,
+        onConfirmManualSosHold = { scope.launch { manualSosController.confirmHeld() } },
+        onRetryManualSos = { scope.launch { manualSosController.retry() } },
+        onDismissManualSos = manualSosController::beginNewManualSos,
         onRefresh = { scope.launch { controller.refresh() } },
         onOpenHeartRatePermission = onOpenHeartRatePermission
     )
@@ -132,13 +148,32 @@ internal fun WearMotoSosScreen(
     signalSnapshot: WearSignalSnapshot = WearSignalSnapshot(),
     onConfirmSafe: () -> Unit = {},
     onRequestHelp: () -> Unit = {},
-    onRetryValidation: () -> Unit = {}
+    onRetryValidation: () -> Unit = {},
+    manualSosState: WearManualSosUiState = WearManualSosUiState.Idle,
+    onStartManualSosHold: () -> Unit = {},
+    onManualSosHoldProgress: (Float) -> Unit = {},
+    onCancelManualSosHold: () -> Unit = {},
+    onConfirmManualSosHold: () -> Unit = {},
+    onRetryManualSos: () -> Unit = {},
+    onDismissManualSos: () -> Unit = {}
 ) {
     var monitoringVisible by rememberSaveable { mutableStateOf(false) }
+    var manualSosVisible by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(tripState.active) {
-        if (tripState.active != true) monitoringVisible = false
+        if (tripState.active != true) {
+            monitoringVisible = false
+            if (manualSosState !is WearManualSosUiState.Success) manualSosVisible = false
+        }
     }
-    BackHandler(enabled = monitoringVisible) { monitoringVisible = false }
+    BackHandler(enabled = monitoringVisible || manualSosVisible) {
+        when {
+            monitoringVisible -> monitoringVisible = false
+            manualSosState !is WearManualSosUiState.InFlight -> {
+                manualSosVisible = false
+                onDismissManualSos()
+            }
+        }
+    }
     Surface(modifier = Modifier.fillMaxSize(), color = MotoSosBlack) {
         if (validationStatus?.isCountdownActive == true) {
             CountdownScreen(
@@ -150,7 +185,23 @@ internal fun WearMotoSosScreen(
                 onRetry = onRetryValidation
             )
         } else {
-            when (tripState.active) {
+            when {
+                manualSosVisible && manualSosState is WearManualSosUiState.Success -> ManualSosAlertSentScreen(
+                    tripState = tripState,
+                    onDismiss = {
+                        manualSosVisible = false
+                        onDismissManualSos()
+                    }
+                )
+                manualSosVisible -> ManualSosScreen(
+                    state = manualSosState,
+                    onHoldStart = onStartManualSosHold,
+                    onHoldProgress = onManualSosHoldProgress,
+                    onHoldCancel = onCancelManualSosHold,
+                    onHoldComplete = onConfirmManualSosHold,
+                    onRetry = onRetryManualSos
+                )
+                else -> when (tripState.active) {
                 true -> if (monitoringVisible) {
                     MonitoringScreen(
                         tripState = tripState,
@@ -166,7 +217,8 @@ internal fun WearMotoSosScreen(
                         onOpenMonitoring = { monitoringVisible = true },
                         onOpenHeartRatePermission = onOpenHeartRatePermission,
                         onFinish = onFinishTrip,
-                        onRetry = onRetry
+                        onRetry = onRetry,
+                        onOpenManualSos = { manualSosVisible = true }
                     )
                 }
                 false -> ReadyScreen(
@@ -182,6 +234,7 @@ internal fun WearMotoSosScreen(
                     onRefresh = onRefresh,
                     onOpenHeartRatePermission = onOpenHeartRatePermission
                 )
+                }
             }
         }
     }
@@ -230,7 +283,8 @@ private fun ActiveTripScreen(
     onOpenMonitoring: () -> Unit,
     onOpenHeartRatePermission: () -> Unit,
     onFinish: () -> Unit,
-    onRetry: () -> Unit
+    onRetry: () -> Unit,
+    onOpenManualSos: () -> Unit
 ) = WearScreenScaffold(backgroundColor = MotoTripBlue, accentGlowColor = MotoProgressGreen) {
     val elapsedTime = elapsedTripTime(tripState.startedAtEpochMs)
     EyebrowLabel(text = "Monitoreo activo")
@@ -279,12 +333,174 @@ private fun ActiveTripScreen(
         onClick = onOpenMonitoring
     )
     Spacer(Modifier.height(6.dp))
+    SecondaryWearButton(
+        label = "SOS manual",
+        tag = "wear_manual_sos_open",
+        onClick = onOpenManualSos,
+        alert = true
+    )
+    Spacer(Modifier.height(6.dp))
     RoundPrimaryButton(
         label = "Finalizar viaje",
         enabled = tripState.remoteTripId != null && actionState !is WearTripUiActionState.InFlight,
         tag = "wear_finish_trip",
         onClick = onFinish
     )
+}
+
+@Composable
+private fun ManualSosScreen(
+    state: WearManualSosUiState,
+    onHoldStart: () -> Unit,
+    onHoldProgress: (Float) -> Unit,
+    onHoldCancel: () -> Unit,
+    onHoldComplete: () -> Unit,
+    onRetry: () -> Unit
+) = WearScreenScaffold(backgroundColor = Color(0xFF35131B), accentGlowColor = MotoSosRed) {
+    EyebrowLabel(text = "Emergencia manual")
+    Spacer(Modifier.height(6.dp))
+    ScreenTitle("¿Necesitas ayuda?", Modifier.testTag("wear_manual_sos_screen"))
+    Spacer(Modifier.height(6.dp))
+    ScreenSubtitle("Mantén presionado para enviar una solicitud de ayuda al teléfono.")
+    Spacer(Modifier.height(14.dp))
+    EmergencyPulseRings {
+        HoldToConfirmSosButton(
+            state = state,
+            onHoldStart = onHoldStart,
+            onHoldProgress = onHoldProgress,
+            onHoldCancel = onHoldCancel,
+            onHoldComplete = onHoldComplete
+        )
+    }
+    Spacer(Modifier.height(10.dp))
+    when (state) {
+        is WearManualSosUiState.Holding -> Text(
+            "Mantén presionado… ${(state.progress * 100).toInt()}%",
+            color = Color.White,
+            textAlign = TextAlign.Center
+        )
+        WearManualSosUiState.InFlight -> {
+            CircularProgressIndicator(color = MotoSosRed, modifier = Modifier.testTag("wear_manual_sos_sending"))
+            Spacer(Modifier.height(6.dp))
+            Text("Enviando solicitud…", color = Color.White, textAlign = TextAlign.Center)
+        }
+        is WearManualSosUiState.Error -> {
+            InfoBanner("SOS no enviado", state.message, MotoSosRed)
+            if (state.retryable) {
+                Spacer(Modifier.height(8.dp))
+                SecondaryWearButton("Reintentar", onRetry, tag = "wear_manual_sos_retry", alert = true)
+            }
+        }
+        WearManualSosUiState.Idle,
+        WearManualSosUiState.Success -> Text(
+            "Mantén presionado para confirmar",
+            color = Color.White.copy(alpha = 0.78f),
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun ManualSosAlertSentScreen(
+    tripState: WearTripState,
+    onDismiss: () -> Unit
+) = WearScreenScaffold(accentGlowColor = MotoSosGreen) {
+    EyebrowLabel(text = "Solicitud confirmada")
+    Spacer(Modifier.height(8.dp))
+    AlertSentIndicator()
+    Spacer(Modifier.height(10.dp))
+    ScreenTitle("Alerta enviada", Modifier.testTag("wear_manual_sos_alert_sent"))
+    Spacer(Modifier.height(6.dp))
+    ScreenSubtitle("Tu solicitud de ayuda fue procesada por el teléfono.")
+    Spacer(Modifier.height(12.dp))
+    if (tripState.active == true) {
+        SecondaryWearButton("Volver al viaje", onDismiss, tag = "wear_manual_sos_back_to_trip")
+    } else {
+        RoundPrimaryButton("Continuar", onDismiss, tag = "wear_manual_sos_back_to_trip")
+    }
+}
+
+@Composable
+private fun EmergencyPulseRings(content: @Composable () -> Unit) {
+    Box(contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(148.dp)) {
+            drawCircle(MotoSosRed.copy(alpha = 0.10f), radius = size.minDimension * 0.46f)
+            drawCircle(MotoSosRed.copy(alpha = 0.30f), radius = size.minDimension * 0.40f, style = Stroke(5.dp.toPx()))
+            drawCircle(Color.White.copy(alpha = 0.22f), radius = size.minDimension * 0.30f, style = Stroke(1.dp.toPx()))
+        }
+        content()
+    }
+}
+
+@Composable
+private fun AlertSentIndicator() {
+    Box(
+        modifier = Modifier
+            .size(72.dp)
+            .clip(CircleShape)
+            .background(MotoSosGreen.copy(alpha = 0.18f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Text("✓", color = MotoSosGreen, fontSize = 38.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun HoldToConfirmSosButton(
+    state: WearManualSosUiState,
+    onHoldStart: () -> Unit,
+    onHoldProgress: (Float) -> Unit,
+    onHoldCancel: () -> Unit,
+    onHoldComplete: () -> Unit
+) {
+    var holdStartedAt by remember { mutableStateOf<Long?>(null) }
+    val enabled = state !is WearManualSosUiState.InFlight && state !is WearManualSosUiState.Success
+    LaunchedEffect(holdStartedAt, enabled) {
+        val start = holdStartedAt ?: return@LaunchedEffect
+        while (holdStartedAt == start && enabled) {
+            val progress = ((System.currentTimeMillis() - start).toFloat() / MANUAL_SOS_HOLD_MILLIS).coerceIn(0f, 1f)
+            onHoldProgress(progress)
+            if (progress >= 1f) {
+                holdStartedAt = null
+                onHoldComplete()
+                break
+            }
+            delay(HOLD_PROGRESS_INTERVAL_MILLIS)
+        }
+    }
+    Box(
+        modifier = Modifier
+            .size(126.dp)
+            .clip(CircleShape)
+            .background(if (enabled) MotoSosRed else MotoSosRed.copy(alpha = 0.42f))
+            .testTag("wear_manual_sos_hold")
+            .pointerInput(enabled) {
+                if (!enabled) return@pointerInput
+                awaitEachGesture {
+                    awaitFirstDown()
+                    holdStartedAt = System.currentTimeMillis()
+                    onHoldStart()
+                    val releasedBeforeConfirm = withTimeoutOrNull(MANUAL_SOS_HOLD_MILLIS) {
+                        waitForUpOrCancellation()
+                        true
+                    } ?: false
+                    if (releasedBeforeConfirm && holdStartedAt != null) {
+                        holdStartedAt = null
+                        onHoldCancel()
+                    } else {
+                        waitForUpOrCancellation()
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        val label = when (state) {
+            is WearManualSosUiState.Holding -> "${(state.progress * 100).toInt()}%"
+            WearManualSosUiState.InFlight -> "…"
+            else -> "SOS"
+        }
+        Text(label, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+    }
 }
 
 @Composable

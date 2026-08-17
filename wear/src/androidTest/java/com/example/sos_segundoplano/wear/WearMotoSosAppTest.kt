@@ -73,6 +73,46 @@ class WearMotoSosAppTest {
     }
 
     @Test
+    fun activeTripOpensManualSosWithoutSendingImmediately() {
+        var manualSosCalls = 0
+        render(
+            tripState = WearTripState(active = true, remoteTripId = "trip-ui-test-123", connected = true),
+            onConfirmManualSosHold = { manualSosCalls += 1 }
+        )
+
+        composeRule.onNodeWithTag("wear_manual_sos_open").performScrollTo().performClick()
+
+        composeRule.onNodeWithTag("wear_manual_sos_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("wear_manual_sos_hold").performScrollTo().assertIsDisplayed()
+        assertEquals(0, manualSosCalls)
+    }
+
+    @Test
+    fun manualSosSuccessShowsAlertSentOnlyAfterConfirmedState() {
+        render(
+            tripState = WearTripState(active = true, remoteTripId = "trip-ui-test-123", connected = true),
+            manualSosState = WearManualSosUiState.Success
+        )
+
+        composeRule.onNodeWithTag("wear_manual_sos_open").performScrollTo().performClick()
+
+        composeRule.onNodeWithTag("wear_manual_sos_alert_sent").assertIsDisplayed()
+        composeRule.onNodeWithTag("wear_manual_sos_back_to_trip").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun confirmedValidationKeepsPriorityOverManualSosNavigation() {
+        render(
+            tripState = WearTripState(active = true, remoteTripId = "trip-ui-test-123", connected = true),
+            validationStatus = countdown()
+        )
+
+        composeRule.onNodeWithTag("wear_validation_countdown").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("wear_manual_sos_open").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("wear_manual_sos_screen").assertCountEquals(0)
+    }
+
+    @Test
     fun disconnectedActiveTripRemainsOnActiveTripScreen() {
         render(WearTripState(active = true, remoteTripId = "trip-ui-test-123", connected = false))
 
@@ -295,7 +335,9 @@ class WearMotoSosAppTest {
         validationStatus: WearDataLayerProtocol.ValidationStatus? = null,
         validationActionState: WearValidationUiActionState = WearValidationUiActionState.Idle,
         onConfirmSafe: () -> Unit = {},
-        onRequestHelp: () -> Unit = {}
+        onRequestHelp: () -> Unit = {},
+        manualSosState: WearManualSosUiState = WearManualSosUiState.Idle,
+        onConfirmManualSosHold: () -> Unit = {}
     ) {
         composeRule.setContent {
             WearMotoSosScreen(
@@ -310,7 +352,9 @@ class WearMotoSosAppTest {
                 validationStatus = validationStatus,
                 validationActionState = validationActionState,
                 onConfirmSafe = onConfirmSafe,
-                onRequestHelp = onRequestHelp
+                onRequestHelp = onRequestHelp,
+                manualSosState = manualSosState,
+                onConfirmManualSosHold = onConfirmManualSosHold
             )
         }
     }
