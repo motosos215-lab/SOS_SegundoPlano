@@ -9,7 +9,11 @@ import androidx.room.PrimaryKey
     indices = [
         Index(value = ["idempotencyKey"], unique = true),
         Index(value = ["status", "nextAttemptAtEpochMillis", "priority", "occurredAtEpochMillis"]),
-        Index(value = ["claimedAtEpochMillis"])
+        Index(value = ["claimedAtEpochMillis"]),
+        Index(
+            name = "index_offline_queue_items_ownerUserId_bundleKey",
+            value = ["ownerUserId", "bundleKey"]
+        )
     ]
 )
 data class OfflineQueueEntity(
@@ -21,6 +25,10 @@ data class OfflineQueueEntity(
     val encryptedPayload: ByteArray,
     val encryptionNonce: ByteArray,
     val encryptionKeyVersion: Int,
+    /** Backend Rider identifier used exclusively to prevent cross-account recovery. */
+    val ownerUserId: String? = null,
+    /** Stable identity shared by the two rows of a recoverable automatic SOS bundle. */
+    val bundleKey: String? = null,
     val sourceSessionId: Long?,
     val sourceAssessmentId: Long?,
     val sourceEventId: String,

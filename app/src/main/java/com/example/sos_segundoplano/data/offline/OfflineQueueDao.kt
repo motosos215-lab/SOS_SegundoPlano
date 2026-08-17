@@ -24,10 +24,12 @@ interface OfflineQueueDao {
     @Query(
         "UPDATE offline_queue_items SET encryptedPayload = :encryptedPayload, encryptionNonce = :encryptionNonce, " +
             "encryptionKeyVersion = :encryptionKeyVersion, occurredAtEpochMillis = :occurredAtEpochMillis, updatedAtEpochMillis = :nowMillis " +
-            "WHERE idempotencyKey = :idempotencyKey"
+            "WHERE idempotencyKey = :idempotencyKey AND ownerUserId IS :ownerUserId AND bundleKey IS :bundleKey"
     )
     suspend fun updatePayload(
         idempotencyKey: String,
+        ownerUserId: String?,
+        bundleKey: String?,
         encryptedPayload: ByteArray,
         encryptionNonce: ByteArray,
         encryptionKeyVersion: Int,
@@ -37,10 +39,22 @@ interface OfflineQueueDao {
 
     @Transaction
     suspend fun updateBundlePayload(incident: OfflineQueueEntity, request: OfflineQueueEntity, nowMillis: Long) {
-        if (updatePayload(incident.idempotencyKey, incident.encryptedPayload, incident.encryptionNonce, incident.encryptionKeyVersion, incident.occurredAtEpochMillis, nowMillis) != 1 ||
-            updatePayload(request.idempotencyKey, request.encryptedPayload, request.encryptionNonce, request.encryptionKeyVersion, request.occurredAtEpochMillis, nowMillis) != 1
+        if (updatePayload(incident.idempotencyKey, incident.ownerUserId, incident.bundleKey, incident.encryptedPayload, incident.encryptionNonce, incident.encryptionKeyVersion, incident.occurredAtEpochMillis, nowMillis) != 1 ||
+            updatePayload(request.idempotencyKey, request.ownerUserId, request.bundleKey, request.encryptedPayload, request.encryptionNonce, request.encryptionKeyVersion, request.occurredAtEpochMillis, nowMillis) != 1
         ) throw IncompleteOfflineBundleException()
     }
+
+    @Query(
+        "SELECT * FROM offline_queue_items WHERE ownerUserId = :ownerUserId AND bundleKey = :bundleKey " +
+            "ORDER BY queueItemId ASC"
+    )
+    suspend fun bundleForOwner(ownerUserId: String, bundleKey: String): List<OfflineQueueEntity>
+
+    @Query(
+        "SELECT DISTINCT bundleKey FROM offline_queue_items WHERE ownerUserId = :ownerUserId " +
+            "AND bundleKey IS NOT NULL ORDER BY bundleKey ASC"
+    )
+    suspend fun recoverableBundleKeysForOwner(ownerUserId: String): List<String>
 
     @Query("SELECT * FROM offline_queue_items WHERE queueItemId = :queueItemId")
     suspend fun getById(queueItemId: Long): OfflineQueueEntity?

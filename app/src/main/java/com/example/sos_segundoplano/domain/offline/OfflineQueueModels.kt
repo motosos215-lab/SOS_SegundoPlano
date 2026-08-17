@@ -66,7 +66,17 @@ data class OfflineQueueItem(
     val lastErrorCategory: OfflineSyncErrorCategory?,
     val lastErrorCode: String?,
     val lastErrorMessageSanitized: String?,
-    val ackSanitized: String?
+    val ackSanitized: String?,
+    val ownerUserId: String? = null,
+    val bundleKey: String? = null
+)
+
+/** A complete, owner-scoped automatic SOS bundle ready for a future recovery transport. */
+data class RecoverableOfflineIncidentBundle(
+    val ownerUserId: String,
+    val bundleKey: String,
+    val incident: OfflineQueueItem,
+    val request: OfflineQueueItem
 )
 
 data class ClaimedOfflineQueueItem(

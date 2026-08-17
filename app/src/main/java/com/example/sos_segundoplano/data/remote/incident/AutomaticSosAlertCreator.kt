@@ -26,6 +26,8 @@ import java.util.UUID
 /** Sends automatic Rider incidents through the canonical mobile SOS endpoint. */
 interface AutomaticSosAlertCreator {
     suspend fun captureLocation(incident: LocalIncident): LocalIncident
+    /** Resolves the trip before submission so the coordinator can durably persist it first. */
+    suspend fun resolveRemoteTrip(incident: LocalIncident): LocalIncident = incident
     suspend fun createAutomaticSosAlert(incident: LocalIncident, request: AlertDispatchRequest): LocalIncident
 }
 
@@ -33,6 +35,8 @@ object NoOpAutomaticSosAlertCreator : AutomaticSosAlertCreator {
     override suspend fun captureLocation(incident: LocalIncident): LocalIncident = incident.copy(
         remoteCreationStatus = IncidentRemoteCreationStatus.NotRequested
     )
+
+    override suspend fun resolveRemoteTrip(incident: LocalIncident): LocalIncident = incident
 
     override suspend fun createAutomaticSosAlert(
         incident: LocalIncident,
@@ -85,15 +89,8 @@ class AuthenticatedAutomaticSosAlertCreator(
             return incident.failed(IncidentRemoteCreationStatus.MissingRequiredData("location_unavailable"))
         }
         val remoteTripId = incident.remoteTripId.normalized()
-            ?: remoteTripSessionStore.remoteTripId.value.normalized()
-            ?: when (val lookup = activeTripRemoteResolver.resolveActiveTrip()) {
-                is ActiveTripLookupResult.Found -> lookup.remoteTripId
-                ActiveTripLookupResult.NoActiveTrip -> return incident.failed(IncidentRemoteCreationStatus.MissingRequiredData("active_remote_trip_missing"))
-                is ActiveTripLookupResult.HttpError -> return incident.failed(IncidentRemoteCreationStatus.HttpError(lookup.statusCode, "trip_lookup_failed"))
-                is ActiveTripLookupResult.NetworkUnavailable -> return incident.failed(IncidentRemoteCreationStatus.NetworkUnavailable(lookup.sanitizedMessage))
-                is ActiveTripLookupResult.Timeout -> return incident.failed(IncidentRemoteCreationStatus.Timeout(lookup.sanitizedMessage))
-                is ActiveTripLookupResult.InvalidResponse -> return incident.failed(IncidentRemoteCreationStatus.InvalidResponse(lookup.sanitizedMessage))
-            }
+            ?: resolveRemoteTrip(incident).remoteTripId.normalized()
+            ?: return incident.failed(IncidentRemoteCreationStatus.MissingRequiredData("active_remote_trip_missing"))
         AutoIncidentDiagnostics.remoteContext(remoteTripPresent = true, locationPresent = true)
         val requestDto = incident.toRequest(
             tripId = remoteTripId,
@@ -126,6 +123,24 @@ class AuthenticatedAutomaticSosAlertCreator(
                 }
             }
             else -> incident.copy(remoteTripId = remoteTripId).failed(status.toRemoteStatus())
+        }
+    }
+
+    override suspend fun resolveRemoteTrip(incident: LocalIncident): LocalIncident {
+        incident.remoteTripId.normalized()?.let { return incident.copy(remoteTripId = it, remoteCreationStatus = IncidentRemoteCreationStatus.Pending) }
+        remoteTripSessionStore.remoteTripId.value.normalized()?.let {
+            return incident.copy(remoteTripId = it, remoteCreationStatus = IncidentRemoteCreationStatus.Pending)
+        }
+        return when (val lookup = activeTripRemoteResolver.resolveActiveTrip()) {
+            is ActiveTripLookupResult.Found -> incident.copy(
+                remoteTripId = lookup.remoteTripId,
+                remoteCreationStatus = IncidentRemoteCreationStatus.Pending
+            )
+            ActiveTripLookupResult.NoActiveTrip -> incident.failed(IncidentRemoteCreationStatus.MissingRequiredData("active_remote_trip_missing"))
+            is ActiveTripLookupResult.HttpError -> incident.failed(IncidentRemoteCreationStatus.HttpError(lookup.statusCode, "trip_lookup_failed"))
+            is ActiveTripLookupResult.NetworkUnavailable -> incident.failed(IncidentRemoteCreationStatus.NetworkUnavailable(lookup.sanitizedMessage))
+            is ActiveTripLookupResult.Timeout -> incident.failed(IncidentRemoteCreationStatus.Timeout(lookup.sanitizedMessage))
+            is ActiveTripLookupResult.InvalidResponse -> incident.failed(IncidentRemoteCreationStatus.InvalidResponse(lookup.sanitizedMessage))
         }
     }
 

@@ -66,6 +66,15 @@ class AuthenticatedAutomaticSosAlertCreatorTest {
         assertEquals(-99.1332, captured.longitude)
     }
 
+    @Test fun resolveRemoteTripReturnsDurableTripBeforeSubmission() = runBlocking {
+        val resolved = creator(RecordingRemote(success())).resolveRemoteTrip(
+            incident(IncidentCause.Timeout).copy(remoteTripId = null)
+        )
+
+        assertEquals("trip-1", resolved.remoteTripId)
+        assertEquals(IncidentRemoteCreationStatus.Pending, resolved.remoteCreationStatus)
+    }
+
     @Test fun missingLocationDoesNotSubmitHttpRequest() = runBlocking {
         val remote = RecordingRemote(success())
         val creator = creator(remote, locationProvider = ManualSosLocationProvider { null })

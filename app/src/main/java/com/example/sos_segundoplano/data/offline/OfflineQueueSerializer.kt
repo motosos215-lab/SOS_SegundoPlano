@@ -44,7 +44,8 @@ class OfflineQueueSerializer {
             "clientIncidentId" to payload.payload.clientIncidentId.orEmpty(),
             "detectedAtEpochMillis" to payload.payload.detectedAtEpochMillis?.toString().orEmpty(),
             "latitude" to payload.payload.latitude?.toString().orEmpty(),
-            "longitude" to payload.payload.longitude?.toString().orEmpty()
+            "longitude" to payload.payload.longitude?.toString().orEmpty(),
+            "remoteTripId" to payload.payload.remoteTripId.orEmpty()
         )
 
         is OfflineSyncPayload.AlertDispatchRequestPayload -> fields(
@@ -105,7 +106,8 @@ class OfflineQueueSerializer {
                     clientIncidentId = values["clientIncidentId"]?.takeIf { it.isNotBlank() },
                     detectedAtEpochMillis = values.long("detectedAtEpochMillis"),
                     latitude = values.doubleOrNull("latitude"),
-                    longitude = values.doubleOrNull("longitude")
+                    longitude = values.doubleOrNull("longitude"),
+                    remoteTripId = values["remoteTripId"]?.takeIf { it.isNotBlank() }
                 ),
                 schemaVersion
             )

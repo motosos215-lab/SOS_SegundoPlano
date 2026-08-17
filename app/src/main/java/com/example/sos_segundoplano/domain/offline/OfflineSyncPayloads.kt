@@ -30,7 +30,8 @@ data class LocalIncidentSyncPayload(
     val clientIncidentId: String? = null,
     val detectedAtEpochMillis: Long? = null,
     val latitude: Double? = null,
-    val longitude: Double? = null
+    val longitude: Double? = null,
+    val remoteTripId: String? = null
 )
 
 data class AlertDispatchRequestSyncPayload(

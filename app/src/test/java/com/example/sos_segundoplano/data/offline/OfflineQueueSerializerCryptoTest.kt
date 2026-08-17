@@ -57,7 +57,8 @@ class OfflineQueueSerializerCryptoTest {
                 clientIncidentId = "11111111-1111-1111-1111-111111111111",
                 detectedAtEpochMillis = 1_725_000_123_456L,
                 latitude = 19.4326,
-                longitude = -99.1332
+                longitude = -99.1332,
+                remoteTripId = "trip-automatic-1"
             )
         )
         val request = OfflineSyncPayload.AlertDispatchRequestPayload(
@@ -89,6 +90,7 @@ class OfflineQueueSerializerCryptoTest {
         assertEquals(incident.payload.detectedAtEpochMillis, decodedIncident.detectedAtEpochMillis)
         assertEquals(incident.payload.latitude, decodedIncident.latitude)
         assertEquals(incident.payload.longitude, decodedIncident.longitude)
+        assertEquals(incident.payload.remoteTripId, decodedIncident.remoteTripId)
         assertEquals(request.payload.requestId, decodedRequest.requestId)
         assertEquals(request.payload.sessionId, decodedRequest.sessionId)
         assertEquals(request.payload.assessmentId, decodedRequest.assessmentId)
@@ -138,6 +140,7 @@ class OfflineQueueSerializerCryptoTest {
         assertNull(incident.detectedAtEpochMillis)
         assertNull(incident.latitude)
         assertNull(incident.longitude)
+        assertNull(incident.remoteTripId)
         assertNull(request.clientAlertRequestId)
     }
 

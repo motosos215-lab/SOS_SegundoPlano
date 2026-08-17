@@ -486,37 +486,58 @@ class FalsePositiveValidationCoordinator(
         } else {
             event
         }
+        val tripPreparedEvent = if (automatic) {
+            val incidentWithRemoteTrip = automaticSosAlertCreator.resolveRemoteTrip(preparedEvent.incident)
+            if (incidentWithRemoteTrip.remoteCreationStatus !is IncidentRemoteCreationStatus.Pending) {
+                publishRemoteFailureForRetry(preparedEvent.copy(incident = incidentWithRemoteTrip), incidentWithRemoteTrip)
+                return
+            }
+            val resolved = preparedEvent.copy(incident = incidentWithRemoteTrip)
+            if (resolved.incident != preparedEvent.incident) {
+                val update = offlineEventSink.updateIncidentBundle(resolved.incident, resolved.request)
+                if (!update.isPersisted) {
+                    publishRemoteFailureForRetry(resolved, resolved.incident.copy(
+                        remoteCreationStatus = IncidentRemoteCreationStatus.InvalidResponse("offline_remote_trip_persistence_failed")
+                    ))
+                    return
+                }
+                mutex.withLock { persistenceDecisions.put(event.key, resolved) }
+            }
+            resolved
+        } else {
+            preparedEvent
+        }
         AutoIncidentDiagnostics.remoteCreateStarted()
         val incident = if (automatic) {
             automaticSosAlertCreator.createAutomaticSosAlert(
-                preparedEvent.incident.copy(remoteCreationStatus = IncidentRemoteCreationStatus.Pending),
-                preparedEvent.request
+                tripPreparedEvent.incident.copy(remoteCreationStatus = IncidentRemoteCreationStatus.Pending),
+                tripPreparedEvent.request
             )
         } else {
-            createRemoteIncidentOnce(preparedEvent)
+            createRemoteIncidentOnce(tripPreparedEvent)
         }
         AutoIncidentDiagnostics.remoteCreateResult(incident.remoteCreationStatus)
         if (incident.remoteCreationStatus !is IncidentRemoteCreationStatus.Success && automatic) {
-            publishRemoteFailureForRetry(preparedEvent.copy(incident = incident), incident)
+            publishRemoteFailureForRetry(tripPreparedEvent.copy(incident = incident), incident)
             return
         }
         mutex.withLock {
             incidentStore.add(incident)
-            dispatchRequestStore.add(preparedEvent.request)
-            pendingPersistenceAssessments.remove(preparedEvent.key)
-            persistenceDecisions.remove(preparedEvent.key)
-            cancelPersistenceRetry(preparedEvent.key)
-            processedAssessments.add(preparedEvent.key)
-            terminalAssessments.add(preparedEvent.key)
+            dispatchRequestStore.add(tripPreparedEvent.request)
+            pendingPersistenceAssessments.remove(tripPreparedEvent.key)
+            persistenceDecisions.remove(tripPreparedEvent.key)
+            cancelPersistenceRetry(tripPreparedEvent.key)
+            processedAssessments.add(tripPreparedEvent.key)
+            terminalAssessments.add(tripPreparedEvent.key)
             if (incident.remoteCreationStatus is IncidentRemoteCreationStatus.Success) {
-                if (preparedEvent.immediate) {
-                    publish(FalsePositiveValidationState.ImmediateAlertRequested(incident, preparedEvent.request, preparedEvent.metadata))
+                if (tripPreparedEvent.immediate) {
+                    publish(FalsePositiveValidationState.ImmediateAlertRequested(incident, tripPreparedEvent.request, tripPreparedEvent.metadata))
                 } else {
-                    publish(FalsePositiveValidationState.IncidentGenerated(incident, preparedEvent.request, preparedEvent.metadata))
+                    publish(FalsePositiveValidationState.IncidentGenerated(incident, tripPreparedEvent.request, tripPreparedEvent.metadata))
                 }
                 AutoIncidentDiagnostics.terminalState("incident_generated")
             } else {
-                publish(FalsePositiveValidationState.Error(preparedEvent.metadata, "RemoteIncidentCreationFailed"))
+                publish(FalsePositiveValidationState.Error(tripPreparedEvent.metadata, "RemoteIncidentCreationFailed"))
                 AutoIncidentDiagnostics.terminalState("error", "remote_incident_creation_failed")
             }
         }

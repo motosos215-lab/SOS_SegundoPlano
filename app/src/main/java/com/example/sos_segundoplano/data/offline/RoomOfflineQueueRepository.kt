@@ -9,6 +9,7 @@ import com.example.sos_segundoplano.domain.offline.OfflineQueueRepository
 import com.example.sos_segundoplano.domain.offline.OfflineQueueStatus
 import com.example.sos_segundoplano.domain.offline.OfflineQueueSummary
 import com.example.sos_segundoplano.domain.offline.OfflineQueueTransitionResult
+import com.example.sos_segundoplano.domain.offline.RecoverableOfflineIncidentBundle
 import com.example.sos_segundoplano.domain.offline.OfflineSyncErrorCategory
 import com.example.sos_segundoplano.domain.offline.OfflineSyncPayload
 import com.example.sos_segundoplano.domain.offline.SyncErrorRecord
@@ -17,11 +18,13 @@ import com.example.sos_segundoplano.domain.offline.idempotencyKey
 import com.example.sos_segundoplano.domain.validation.AlertDispatchRequest
 import com.example.sos_segundoplano.domain.validation.LocalIncident
 import com.example.sos_segundoplano.domain.validation.MinorEvent
+import com.example.sos_segundoplano.domain.validation.IncidentCause
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 class RoomOfflineQueueRepository(
     private val queueDao: OfflineQueueDao,
@@ -31,7 +34,8 @@ class RoomOfflineQueueRepository(
     private val clock: WallClock,
     private val config: OfflineQueueConfig = OfflineQueueConfig(),
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val scheduler: OfflineQueueWorkScheduler? = null
+    private val scheduler: OfflineQueueWorkScheduler? = null,
+    private val currentRiderOwnerId: () -> String? = { null }
 ) : OfflineQueueRepository, OfflineQueueSyncRepository {
     override suspend fun enqueueMinorEvent(event: MinorEvent): OfflineQueueEnqueueResult = enqueue(event.toSyncPayload(clock))
 
@@ -42,10 +46,16 @@ class RoomOfflineQueueRepository(
     override suspend fun enqueueIncidentBundle(incident: LocalIncident, request: AlertDispatchRequest): OfflineQueueEnqueueResult = withContext(dispatcher) {
         try {
             val now = clock.currentTimeMillis()
+            val metadata = if (incident.isAutomaticSos()) {
+                automaticBundleMetadata(incident) ?: return@withContext OfflineQueueEnqueueResult.PersistenceFailed(
+                    OfflineSyncErrorCategory.Serialization,
+                    "offline_bundle_owner_or_identity_missing"
+                )
+            } else null
             val incidentPayload = incident.toSyncPayload(clock)
             val requestPayload = request.toSyncPayload(clock)
-            val incidentEntity = buildEntity(incidentPayload, now) ?: return@withContext OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.Encryption, "payload_encryption_failed")
-            val requestEntity = buildEntity(requestPayload, now) ?: return@withContext OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.Encryption, "payload_encryption_failed")
+            val incidentEntity = buildEntity(incidentPayload, now, metadata) ?: return@withContext OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.Encryption, "payload_encryption_failed")
+            val requestEntity = buildEntity(requestPayload, now, metadata) ?: return@withContext OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.Encryption, "payload_encryption_failed")
             val persisted = queueDao.insertBundle(incidentEntity, requestEntity)
             scheduleAfterPersistence(OfflineQueueEnqueueResult.PersistedAndScheduled(persisted.requestQueueItemId, requestEntity.idempotencyKey))
         } catch (_: IncompleteOfflineBundleException) {
@@ -60,9 +70,15 @@ class RoomOfflineQueueRepository(
     override suspend fun updateIncidentBundle(incident: LocalIncident, request: AlertDispatchRequest): OfflineQueueEnqueueResult = withContext(dispatcher) {
         try {
             val now = clock.currentTimeMillis()
-            val incidentEntity = buildEntity(incident.toSyncPayload(clock), now)
+            val metadata = if (incident.isAutomaticSos()) {
+                automaticBundleMetadata(incident) ?: return@withContext OfflineQueueEnqueueResult.PersistenceFailed(
+                    OfflineSyncErrorCategory.Serialization,
+                    "offline_bundle_owner_or_identity_missing"
+                )
+            } else null
+            val incidentEntity = buildEntity(incident.toSyncPayload(clock), now, metadata)
                 ?: return@withContext OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.Encryption, "payload_encryption_failed")
-            val requestEntity = buildEntity(request.toSyncPayload(clock), now)
+            val requestEntity = buildEntity(request.toSyncPayload(clock), now, metadata)
                 ?: return@withContext OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.Encryption, "payload_encryption_failed")
             queueDao.updateBundlePayload(incidentEntity, requestEntity, now)
             OfflineQueueEnqueueResult.PersistedAndScheduled(0L, requestEntity.idempotencyKey)
@@ -92,7 +108,11 @@ class RoomOfflineQueueRepository(
         }
     }
 
-    private suspend fun buildEntity(payload: OfflineSyncPayload, nowMillis: Long): OfflineQueueEntity? {
+    private suspend fun buildEntity(
+        payload: OfflineSyncPayload,
+        nowMillis: Long,
+        bundleMetadata: OfflineBundleMetadata? = null
+    ): OfflineQueueEntity? {
         val key = idempotencyKey(payload.eventType, payload.sourceEventId, payload.schemaVersion)
         val associatedData = OfflineQueueAssociatedData(key, payload.eventType.wireName, payload.schemaVersion, config.encryptionKeyVersion)
         val serialized = try {
@@ -108,8 +128,46 @@ class RoomOfflineQueueRepository(
                 return null
             }
         }
-        return payload.toNewEntity(encrypted, key, nowMillis)
+        return payload.toNewEntity(encrypted, key, nowMillis, bundleMetadata)
     }
+
+    override suspend fun recoverableBundleKeysForCurrentRider(): List<String> = withContext(dispatcher) {
+        val ownerUserId = currentRiderOwnerId()?.trim()?.takeIf { it.isNotEmpty() } ?: return@withContext emptyList()
+        queueDao.recoverableBundleKeysForOwner(ownerUserId)
+    }
+
+    override suspend fun recoverableIncidentBundleForCurrentRider(bundleKey: String): RecoverableOfflineIncidentBundle? = withContext(dispatcher) {
+        val ownerUserId = currentRiderOwnerId()?.trim()?.takeIf { it.isNotEmpty() } ?: return@withContext null
+        recoverableIncidentBundle(ownerUserId, bundleKey)
+    }
+
+    private suspend fun recoverableIncidentBundle(
+        ownerUserId: String,
+        bundleKey: String
+    ): RecoverableOfflineIncidentBundle? {
+        val normalizedKey = bundleKey.trim().takeIf { it.isNotEmpty() } ?: return null
+        val items = queueDao.bundleForOwner(ownerUserId, normalizedKey)
+        if (items.size != 2 || items.any { it.ownerUserId != ownerUserId || it.bundleKey != normalizedKey }) return null
+        val mapped = items.map { it.toDomain() ?: return null }
+        val incident = mapped.singleOrNull { it.eventType == com.example.sos_segundoplano.domain.offline.OfflineEventType.LocalIncident } ?: return null
+        val request = mapped.singleOrNull { it.eventType == com.example.sos_segundoplano.domain.offline.OfflineEventType.AlertDispatchRequest } ?: return null
+        return RecoverableOfflineIncidentBundle(ownerUserId, normalizedKey, incident, request)
+    }
+
+    private fun automaticBundleMetadata(incident: LocalIncident): OfflineBundleMetadata? {
+        val ownerUserId = currentRiderOwnerId()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val bundleKey = incident.clientIncidentId?.trim()?.takeIf { candidate ->
+            runCatching { UUID.fromString(candidate) }.isSuccess
+        } ?: return null
+        return OfflineBundleMetadata(ownerUserId = ownerUserId, bundleKey = bundleKey)
+    }
+
+    private fun LocalIncident.isAutomaticSos(): Boolean = cause in setOf(
+        IncidentCause.Timeout,
+        IncidentCause.UserRequestedHelp,
+        IncidentCause.CriticalPhysicalEvent
+    )
+
 
     private fun scheduleAfterPersistence(result: OfflineQueueEnqueueResult): OfflineQueueEnqueueResult = when (result) {
         is OfflineQueueEnqueueResult.PersistedAndScheduled -> when (scheduleImmediateSyncSafely()) {

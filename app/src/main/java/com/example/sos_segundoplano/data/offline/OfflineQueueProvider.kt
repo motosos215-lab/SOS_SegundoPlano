@@ -2,6 +2,9 @@ package com.example.sos_segundoplano.data.offline
 
 import android.content.Context
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationCoordinatorProvider
+import com.example.sos_segundoplano.core.auth.AuthProvider
+import com.example.sos_segundoplano.domain.auth.SessionState
+import com.example.sos_segundoplano.domain.auth.UserRole
 import com.example.sos_segundoplano.domain.offline.NoOpOfflineEventSink
 import com.example.sos_segundoplano.domain.offline.OfflineEventTransport
 import com.example.sos_segundoplano.domain.offline.OfflineQueueConfig
@@ -80,7 +83,14 @@ object OfflineQueueProvider {
             serializer = OfflineQueueSerializer(),
             clock = clock,
             config = config,
-            scheduler = scheduler
+            scheduler = scheduler,
+            currentRiderOwnerId = {
+                when (val session = AuthProvider.get(context).observeSession().value) {
+                    is SessionState.Authenticated -> session.user.takeIf { it.role == UserRole.Rider }?.id
+                    is SessionState.Refreshing -> session.user.takeIf { it.role == UserRole.Rider }?.id
+                    else -> null
+                }
+            }
         )
         val transport = UnconfiguredOfflineEventTransport()
         val policy = OfflineQueuePolicy(config)

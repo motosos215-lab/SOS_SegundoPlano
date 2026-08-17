@@ -51,7 +51,8 @@ fun LocalIncident.toSyncPayload(clock: WallClock): OfflineSyncPayload.LocalIncid
             clientIncidentId = clientIncidentId,
             detectedAtEpochMillis = detectedAtEpochMillis,
             latitude = latitude,
-            longitude = longitude
+            longitude = longitude,
+            remoteTripId = remoteTripId
         )
     )
 
@@ -100,7 +101,9 @@ fun OfflineQueueEntity.toDomainResult(): OfflineQueueEntityMappingResult {
             lastErrorCategory = mappedErrorCategory,
             lastErrorCode = lastErrorCode,
             lastErrorMessageSanitized = lastErrorMessageSanitized,
-            ackSanitized = ackSanitized
+            ackSanitized = ackSanitized,
+            ownerUserId = ownerUserId,
+            bundleKey = bundleKey
         )
     )
 }
@@ -152,7 +155,8 @@ fun SyncErrorEntity.toDomain(): SyncErrorRecord? {
 fun OfflineSyncPayload.toNewEntity(
     encrypted: EncryptedPayload,
     idempotencyKey: String,
-    nowMillis: Long
+    nowMillis: Long,
+    bundleMetadata: OfflineBundleMetadata? = null
 ): OfflineQueueEntity = OfflineQueueEntity(
     idempotencyKey = idempotencyKey,
     eventType = eventType.wireName,
@@ -161,6 +165,8 @@ fun OfflineSyncPayload.toNewEntity(
     encryptedPayload = encrypted.ciphertext,
     encryptionNonce = encrypted.nonce,
     encryptionKeyVersion = encrypted.keyVersion,
+    ownerUserId = bundleMetadata?.ownerUserId,
+    bundleKey = bundleMetadata?.bundleKey,
     sourceSessionId = sourceSessionId,
     sourceAssessmentId = sourceAssessmentId,
     sourceEventId = sourceEventId,
