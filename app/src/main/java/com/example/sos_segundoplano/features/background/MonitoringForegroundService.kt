@@ -37,12 +37,24 @@ class MonitoringForegroundService : Service() {
         TripSignalCaptureCoordinator(applicationContext)
     }
     private val accidentTripFinalizer: AccidentTripFinalizer by lazy {
-        AccidentTripFinalizer(::finishTripAfterAccident)
+        AccidentTripFinalizer(::requestTripFinishAfterAccident)
+    }
+    private val accidentTripTermination: AccidentTripTerminationCoordinator by lazy {
+        val dependencies = TripRemoteSessionProvider.get(applicationContext)
+        AccidentTripTerminationCoordinator(
+            remoteTripFinisher = dependencies.finisher,
+            hasActiveRemoteTrip = {
+                !dependencies.store.remoteTripId.value.isNullOrBlank()
+            },
+            stopMonitoring = ::stopMonitoringAfterAccident
+        )
     }
     private var notificationScope: CoroutineScope? = null
     private var notificationCollector: Job? = null
     private var tripReconciliationScope: CoroutineScope? = null
     private var tripReconciliationJob: Job? = null
+    private var accidentTerminationScope: CoroutineScope? = null
+    private var accidentTerminationJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -94,10 +106,14 @@ class MonitoringForegroundService : Service() {
         notificationScope?.cancel()
         tripReconciliationJob?.cancel()
         tripReconciliationScope?.cancel()
+        accidentTerminationJob?.cancel()
+        accidentTerminationScope?.cancel()
         notificationCollector = null
         notificationScope = null
         tripReconciliationJob = null
         tripReconciliationScope = null
+        accidentTerminationJob = null
+        accidentTerminationScope = null
         notificationManager.cancel(MonitoringNotificationFactory.EMERGENCY_NOTIFICATION_ID)
         stopForegroundNotification()
         captureCoordinator.stop()
@@ -115,7 +131,16 @@ class MonitoringForegroundService : Service() {
         }
     }
 
-    private fun finishTripAfterAccident() {
+    private fun requestTripFinishAfterAccident() {
+        if (accidentTerminationJob != null) return
+        val nextScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        accidentTerminationScope = nextScope
+        accidentTerminationJob = nextScope.launch {
+            accidentTripTermination.finishAfterPersistedIncident()
+        }
+    }
+
+    private fun stopMonitoringAfterAccident() {
         TripTimingStoreProvider.store.clear()
         stopSelf()
     }

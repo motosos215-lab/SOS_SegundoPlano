@@ -1,6 +1,12 @@
 package com.example.sos_segundoplano.features.background
 
+import com.example.sos_segundoplano.data.remote.trip.FinishTripRequestDto
+import com.example.sos_segundoplano.data.remote.trip.RemoteTripFinisher
+import com.example.sos_segundoplano.data.remote.trip.TripMutationResult
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.time.Instant
 
 class AccidentTripFinalizer(
     private val finishTrip: () -> Unit
@@ -16,6 +22,43 @@ class AccidentTripFinalizer(
 
     fun reset() {
         finishedAccidents.clear()
+    }
+}
+
+/**
+ * Closes the canonical Phone trip before monitoring stops and emits the Wear stop hint.
+ * A persisted incident is the only caller; safe confirmation never reaches this coordinator.
+ */
+internal class AccidentTripTerminationCoordinator(
+    private val remoteTripFinisher: RemoteTripFinisher,
+    private val hasActiveRemoteTrip: () -> Boolean,
+    private val stopMonitoring: () -> Unit,
+    private val nowUtc: () -> Instant = { Instant.now() }
+) {
+    private val mutex = Mutex()
+    private var completed = false
+
+    suspend fun finishAfterPersistedIncident(): Boolean = mutex.withLock {
+        if (completed) {
+            true
+        } else if (!hasActiveRemoteTrip()) {
+            completed = true
+            stopMonitoring()
+            true
+        } else {
+            when (
+                remoteTripFinisher.finishTrip(
+                    FinishTripRequestDto(clientFinishedAtUtc = nowUtc().toString())
+                )
+            ) {
+                is TripMutationResult.Success -> {
+                    completed = true
+                    stopMonitoring()
+                    true
+                }
+                else -> false
+            }
+        }
     }
 }
 

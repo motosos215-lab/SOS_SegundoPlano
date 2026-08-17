@@ -48,6 +48,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.sos_segundoplano.wear.presentation.components.ConnectionBadge
 import com.example.sos_segundoplano.wear.presentation.components.CompactMetricStrip
 import com.example.sos_segundoplano.wear.presentation.components.EyebrowLabel
@@ -366,9 +367,15 @@ private fun CountdownScreen(
     onConfirmSafe: () -> Unit,
     onRequestHelp: () -> Unit,
     onRetry: () -> Unit
-) = WearVisualScaffold(alert = true) {
-    Text("MotoSOS", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color.White)
-    Spacer(Modifier.height(8.dp))
+) = WearScreenScaffold(backgroundColor = MotoSosNavy, accentGlowColor = MotoSosRed) {
+    Text(
+        "POSIBLE INCIDENTE",
+        color = MotoSosRed,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 0.8.sp
+    )
+    Spacer(Modifier.height(6.dp))
     Text(
         "¿Estás bien?",
         modifier = Modifier.fillMaxWidth().testTag("wear_validation_countdown"),
@@ -387,8 +394,15 @@ private fun CountdownScreen(
     )
     Spacer(Modifier.height(10.dp))
     CountdownRing(formatRemainingMillis(status.remainingMillis))
-    Spacer(Modifier.height(10.dp))
-    ConnectionIndicator(connected)
+    Spacer(Modifier.height(6.dp))
+    Text(
+        "Tiempo confirmado por el teléfono",
+        color = Color.White.copy(alpha = 0.72f),
+        style = MaterialTheme.typography.labelSmall,
+        textAlign = TextAlign.Center
+    )
+    Spacer(Modifier.height(8.dp))
+    ConnectionIndicator(connected, tag = "wear_validation_connection_state")
     ValidationActionFeedback(actionState, onRetry)
     Spacer(Modifier.height(14.dp))
     PrimaryWearButton(
@@ -472,11 +486,15 @@ private fun vectorValue(sample: WearVectorSample?): String = sample?.let {
 
 @Composable
 private fun CountdownRing(remaining: String) {
-    Box(contentAlignment = Alignment.Center) {
+    Box(
+        modifier = Modifier.testTag("wear_validation_remaining_time"),
+        contentAlignment = Alignment.Center
+    ) {
         Canvas(Modifier.size(120.dp)) {
-            drawCircle(MotoSosRed.copy(alpha = 0.16f), style = Stroke(width = 7.dp.toPx()))
-            drawCircle(MotoSosRed.copy(alpha = 0.32f), radius = size.minDimension * 0.37f, style = Stroke(width = 9.dp.toPx()))
-            drawCircle(MotoSosRed, radius = size.minDimension * 0.26f, style = Stroke(width = 6.dp.toPx()))
+            drawCircle(Color.White.copy(alpha = 0.18f), style = Stroke(width = 1.dp.toPx()))
+            drawCircle(MotoSosRed.copy(alpha = 0.16f), radius = size.minDimension * 0.42f)
+            drawCircle(MotoSosRed.copy(alpha = 0.44f), radius = size.minDimension * 0.42f, style = Stroke(width = 8.dp.toPx()))
+            drawCircle(MotoSosRed, radius = size.minDimension * 0.29f, style = Stroke(width = 5.dp.toPx()))
         }
         Text("!", color = MotoSosRed, style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold)
         Text(
@@ -490,7 +508,7 @@ private fun CountdownRing(remaining: String) {
 }
 
 @Composable
-private fun ConnectionIndicator(connected: Boolean?) {
+private fun ConnectionIndicator(connected: Boolean?, tag: String = "wear_connection_status") {
     val label = connectionLabel(connected)
     val color = when (connected) {
         true -> MotoSosGreen
@@ -499,7 +517,7 @@ private fun ConnectionIndicator(connected: Boolean?) {
     }
     Text(
         label,
-        modifier = Modifier.fillMaxWidth().testTag("wear_connection_status"),
+        modifier = Modifier.fillMaxWidth().testTag(tag),
         color = color,
         textAlign = TextAlign.Center,
         style = MaterialTheme.typography.bodySmall

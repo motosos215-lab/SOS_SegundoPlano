@@ -152,6 +152,79 @@ class WearMotoSosAppTest {
     }
 
     @Test
+    fun confirmedCountdownHasPriorityOverActiveTripAndShowsPhoneRemainingTime() {
+        render(
+            tripState = WearTripState(active = true, remoteTripId = "trip-ui-test-123", connected = true),
+            validationStatus = countdown(12_000L)
+        )
+
+        composeRule.onNodeWithTag("wear_validation_countdown").assertIsDisplayed()
+        composeRule.onNodeWithTag("wear_validation_remaining_time").assertIsDisplayed()
+        composeRule.onAllNodesWithText("00:12").assertCountEquals(1)
+        composeRule.onAllNodesWithText("Viaje activo").assertCountEquals(0)
+    }
+
+    @Test
+    fun countdownButtonsDelegateOnlyToValidationActions() {
+        var safeCalls = 0
+        var helpCalls = 0
+        render(
+            tripState = WearTripState(active = true, remoteTripId = "trip-ui-test-123", connected = true),
+            validationStatus = countdown(),
+            onConfirmSafe = { safeCalls += 1 },
+            onRequestHelp = { helpCalls += 1 }
+        )
+
+        composeRule.onNodeWithTag("wear_validation_confirm_safe").performScrollTo().performClick()
+        composeRule.onNodeWithTag("wear_validation_request_help").performScrollTo().performClick()
+
+        assertEquals(1, safeCalls)
+        assertEquals(1, helpCalls)
+    }
+
+    @Test
+    fun countdownBlocksBothActionsWhileValidationRequestIsInFlight() {
+        render(
+            tripState = WearTripState(active = true, remoteTripId = "trip-ui-test-123", connected = true),
+            validationStatus = countdown(),
+            validationActionState = WearValidationUiActionState.InFlight(WearValidationUiOperation.ConfirmSafe)
+        )
+
+        composeRule.onNodeWithTag("wear_validation_confirm_safe").performScrollTo().assertIsNotEnabled()
+        composeRule.onNodeWithTag("wear_validation_request_help").performScrollTo().assertIsNotEnabled()
+    }
+
+    @Test
+    fun confirmedValidationEndReturnsToThePhoneDerivedTripScreen() {
+        render(WearTripState(active = true, remoteTripId = "trip-ui-test-123", connected = true))
+
+        composeRule.onNodeWithTag("wear_trip_status").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Viaje activo").assertCountEquals(1)
+    }
+
+    @Test
+    fun confirmedValidationEndWithoutTripReturnsToReady() {
+        render(WearTripState(active = false, connected = true))
+
+        composeRule.onNodeWithTag("wear_start_trip").performScrollTo().assertIsDisplayed()
+        composeRule.onAllNodesWithText("¡Listo para tu viaje!").assertCountEquals(1)
+    }
+
+    @Test
+    fun countdownKeepsLastConfirmedStateWhenPhoneIsDisconnected() {
+        render(
+            tripState = WearTripState(active = true, remoteTripId = "trip-ui-test-123", connected = false),
+            validationStatus = countdown()
+        )
+
+        composeRule.onNodeWithTag("wear_validation_countdown").assertIsDisplayed()
+        composeRule.onNodeWithTag("wear_validation_connection_state")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onAllNodesWithText("Sin conexión con el teléfono").assertCountEquals(1)
+    }
+
+    @Test
     fun openMonitoringShowsAvailableSignalValuesAndReturnsToTrip() {
         render(
             tripState = WearTripState(active = true, remoteTripId = "trip-ui-test-123", connected = true),
@@ -218,7 +291,11 @@ class WearMotoSosAppTest {
         onFinish: () -> Unit = {},
         onRetry: () -> Unit = {},
         signalSnapshot: WearSignalSnapshot = WearSignalSnapshot(),
-        onOpenHeartRatePermission: () -> Unit = {}
+        onOpenHeartRatePermission: () -> Unit = {},
+        validationStatus: WearDataLayerProtocol.ValidationStatus? = null,
+        validationActionState: WearValidationUiActionState = WearValidationUiActionState.Idle,
+        onConfirmSafe: () -> Unit = {},
+        onRequestHelp: () -> Unit = {}
     ) {
         composeRule.setContent {
             WearMotoSosScreen(
@@ -229,8 +306,19 @@ class WearMotoSosAppTest {
                 onRetry = onRetry,
                 onRefresh = {},
                 onOpenHeartRatePermission = onOpenHeartRatePermission,
-                signalSnapshot = signalSnapshot
+                signalSnapshot = signalSnapshot,
+                validationStatus = validationStatus,
+                validationActionState = validationActionState,
+                onConfirmSafe = onConfirmSafe,
+                onRequestHelp = onRequestHelp
             )
         }
     }
+
+    private fun countdown(remainingMillis: Long = 20_000L) = WearDataLayerProtocol.ValidationStatus(
+        state = "countdown_active",
+        sessionId = 101L,
+        assessmentId = 202L,
+        remainingMillis = remainingMillis
+    )
 }
