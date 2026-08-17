@@ -25,12 +25,46 @@ import com.example.sos_segundoplano.domain.monitor.MonitorAlertsRepository
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertsResult
 import com.example.sos_segundoplano.domain.monitor.NotificationDeliveryAttemptId
 import com.example.sos_segundoplano.domain.repository.AuthRepository
+import com.example.sos_segundoplano.features.history.HistoryDiagnostics
 
 class DefaultMonitorAlertsRepository(
     private val authRepository: AuthRepository,
     private val remote: MonitorAlertsRemoteDataSource
 ) : MonitorAlertsRepository {
-    override suspend fun listAlerts(): MonitorAlertsResult<List<MonitorAlertAcknowledgement>> = monitorCall { remote.list(it) }.alerts()
+    override suspend fun listAlerts(): MonitorAlertsResult<List<MonitorAlertAcknowledgement>> {
+        val remoteResult = monitorCall { remote.list(it) }
+        when (remoteResult) {
+            is MonitorAlertsRemoteResult.Success -> {
+                val alerts = remoteResult.data.alerts
+                HistoryDiagnostics.debug(
+                    HistoryDiagnostics.monitorApiSuccess(
+                        pageNumber = remoteResult.data.pageNumber,
+                        pageSize = remoteResult.data.pageSize,
+                        totalCount = remoteResult.data.totalCount,
+                        receivedCount = alerts.size,
+                        hasPending = alerts.any { it.status == "Pending" },
+                        hasViewed = alerts.any { it.status == "Viewed" },
+                        hasAcknowledged = alerts.any { it.status == "Acknowledged" },
+                        hasDeclined = alerts.any { it.status == "Declined" },
+                        hasDeliveryAttempt = alerts.any { !it.notificationDeliveryAttemptId.isNullOrBlank() }
+                    )
+                )
+                val mapped = alerts.mapNotNull { it.toHistoryDomain() }
+                HistoryDiagnostics.debug(
+                    HistoryDiagnostics.monitorMapping(
+                        receivedCount = alerts.size,
+                        mappedCount = mapped.size,
+                        hasAcknowledged = mapped.any { it.status == "Acknowledged" }
+                    )
+                )
+                return MonitorAlertsResult.Success(mapped)
+            }
+            is MonitorAlertsRemoteResult.Failure -> {
+                HistoryDiagnostics.debug(HistoryDiagnostics.apiFailure("monitor_history", remoteResult.statusCode, remoteResult.message))
+                return MonitorAlertsResult.Failure(remoteResult.statusCode, remoteResult.errorCode, remoteResult.message)
+            }
+        }
+    }
     override suspend fun getAlerts() = monitorCall { remote.list(it) }.historyOpaque()
     override suspend fun getAlert(id: NotificationDeliveryAttemptId) = monitorCall { remote.detail(it, id.value) }.detail()
     override suspend fun getStatus(id: NotificationDeliveryAttemptId) = monitorCall { remote.status(it, id.value) }.status()

@@ -9,6 +9,10 @@ interface OfflineEventSink {
     suspend fun enqueueIncident(incident: LocalIncident): OfflineQueueEnqueueResult
     suspend fun enqueueAlertRequest(request: AlertDispatchRequest): OfflineQueueEnqueueResult
     suspend fun enqueueIncidentBundle(incident: LocalIncident, request: AlertDispatchRequest): OfflineQueueEnqueueResult
+
+    /** Replaces the durable bundle payload after a real location is captured. */
+    suspend fun updateIncidentBundle(incident: LocalIncident, request: AlertDispatchRequest): OfflineQueueEnqueueResult =
+        OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.NotConfigured, "offline_bundle_update_not_configured")
 }
 
 object NoOpOfflineEventSink : OfflineEventSink {

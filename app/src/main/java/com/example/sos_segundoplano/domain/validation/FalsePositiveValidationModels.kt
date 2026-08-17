@@ -159,7 +159,10 @@ data class LocalIncident(
     val clientIncidentId: String? = null,
     val remoteIncidentId: String? = null,
     val remoteCreationStatus: IncidentRemoteCreationStatus = IncidentRemoteCreationStatus.NotRequested,
-    val deliveryStatus: AlertDeliveryStatus = AlertDeliveryStatus.Pending
+    val deliveryStatus: AlertDeliveryStatus = AlertDeliveryStatus.Pending,
+    val detectedAtEpochMillis: Long? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null
 )
 
 data class AlertPayloadSummary(
@@ -184,7 +187,8 @@ data class AlertDispatchRequest(
     val confidence: Double,
     val deliveryStatus: AlertDeliveryStatus = AlertDeliveryStatus.Pending,
     val retryState: AlertRetryState = AlertRetryState.NotStarted,
-    val payload: AlertPayloadSummary
+    val payload: AlertPayloadSummary,
+    val clientAlertRequestId: String? = null
 )
 
 data class UserValidationResponse(

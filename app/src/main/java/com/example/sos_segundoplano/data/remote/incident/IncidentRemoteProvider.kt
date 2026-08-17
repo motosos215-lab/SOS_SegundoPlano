@@ -21,14 +21,17 @@ import kotlinx.coroutines.launch
 
 object IncidentRemoteProvider {
     @Volatile private var creator: IncidentRemoteCreator? = null
+    @Volatile private var automaticCreator: AutomaticSosAlertCreator? = null
     @Volatile private var manualCoordinator: ManualSosIncidentCoordinator? = null
     @Volatile private var linkStore: RemoteIncidentLinkStore? = null
+    @Volatile private var mobileSosDataSource: ManualSosAlertRemoteDataSource? = null
     private val manualScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutableManualSosRequestState = MutableStateFlow<ManualSosRequestState>(ManualSosRequestState.Idle)
     val manualSosRequestState: StateFlow<ManualSosRequestState> = mutableManualSosRequestState.asStateFlow()
 
     fun initialize(context: Context): IncidentRemoteCreator = get(context).also { remoteCreator ->
         FalsePositiveValidationCoordinatorProvider.setIncidentRemoteCreator(remoteCreator)
+        FalsePositiveValidationCoordinatorProvider.setAutomaticSosAlertCreator(getAutomaticCreator(context.applicationContext))
     }
 
     fun get(context: Context): IncidentRemoteCreator = creator ?: synchronized(this) {
@@ -74,6 +77,22 @@ object IncidentRemoteProvider {
         )
     }
 
+    private fun getAutomaticCreator(context: Context): AutomaticSosAlertCreator = automaticCreator ?: synchronized(this) {
+        automaticCreator ?: run {
+            val tripSession = TripRemoteSessionProvider.get(context)
+            AuthenticatedAutomaticSosAlertCreator(
+                authRepository = AuthProvider.get(context),
+                remoteDataSource = getMobileSosDataSource(context),
+                activeTripRemoteResolver = tripSession.reconciler,
+                remoteTripSessionStore = tripSession.store,
+                locationProvider = TripSignalManualSosLocationProvider(
+                    store = TripSignalStoreProvider.store,
+                    currentLocationProvider = AndroidCurrentManualSosLocationProvider(context)
+                )
+            ).also { automaticCreator = it }
+        }
+    }
+
     private fun getManualCoordinator(context: Context): ManualSosIncidentCoordinator =
         manualCoordinator ?: synchronized(this) {
             manualCoordinator ?: createManualCoordinator(context).also {
@@ -92,10 +111,7 @@ object IncidentRemoteProvider {
         return ManualSosIncidentCoordinator(
             remoteCreator = AuthenticatedManualSosAlertCreator(
                 authRepository = AuthProvider.get(context),
-                remoteDataSource = RetrofitManualSosAlertRemoteDataSource(
-                    AuthNetworkFactory.createMobileSosAlertsApi(BuildConfig.MOTOSOS_API_BASE_URL, moshi),
-                    moshi
-                ),
+                remoteDataSource = getMobileSosDataSource(context),
                 activeTripRemoteResolver = tripSession.reconciler,
                 remoteTripSessionStore = tripSession.store,
                 remoteIncidentLinkStore = links,
@@ -108,6 +124,16 @@ object IncidentRemoteProvider {
             offlineEventSink = OfflineQueueProvider.get(context).repository,
             remoteIncidentLinkStore = links
         )
+    }
+
+    private fun getMobileSosDataSource(context: Context): ManualSosAlertRemoteDataSource = mobileSosDataSource ?: synchronized(this) {
+        mobileSosDataSource ?: run {
+            val moshi = AuthNetworkFactory.createMoshi()
+            RetrofitManualSosAlertRemoteDataSource(
+                AuthNetworkFactory.createMobileSosAlertsApi(BuildConfig.MOTOSOS_API_BASE_URL, moshi),
+                moshi
+            ).also { mobileSosDataSource = it }
+        }
     }
 
     private fun getLinkStore(context: Context): RemoteIncidentLinkStore = linkStore ?: synchronized(this) {

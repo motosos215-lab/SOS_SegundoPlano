@@ -4,6 +4,8 @@ import com.example.sos_segundoplano.data.rules.RiskAssessmentStore
 import com.example.sos_segundoplano.data.rules.RiskAssessmentStoreProvider
 import com.example.sos_segundoplano.data.remote.incident.IncidentRemoteCreator
 import com.example.sos_segundoplano.data.remote.incident.NoOpIncidentRemoteCreator
+import com.example.sos_segundoplano.data.remote.incident.AutomaticSosAlertCreator
+import com.example.sos_segundoplano.data.remote.incident.NoOpAutomaticSosAlertCreator
 import com.example.sos_segundoplano.domain.offline.NoOpOfflineEventSink
 import com.example.sos_segundoplano.domain.offline.OfflineEventSink
 import com.example.sos_segundoplano.domain.offline.isPersisted
@@ -51,6 +53,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.UUID
 
 interface FalsePositiveValidationNotifier {
     fun onValidationStateChanged(state: FalsePositiveValidationState)
@@ -82,9 +85,11 @@ class FalsePositiveValidationCoordinator(
     private val nextMinorEventId: () -> Long = { IncidentStoreProvider.minorEventIds.incrementAndGet() },
     private val nextIncidentId: () -> Long = { IncidentStoreProvider.incidentIds.incrementAndGet() },
     private val nextDispatchRequestId: () -> Long = { IncidentStoreProvider.dispatchRequestIds.incrementAndGet() },
+    private val nowEpochMillis: () -> Long = System::currentTimeMillis,
     private var notifier: FalsePositiveValidationNotifier = NoOpFalsePositiveValidationNotifier,
     private var offlineEventSink: OfflineEventSink = NoOpOfflineEventSink,
     private var incidentRemoteCreator: IncidentRemoteCreator = NoOpIncidentRemoteCreator,
+    private var automaticSosAlertCreator: AutomaticSosAlertCreator = NoOpAutomaticSosAlertCreator,
     private var logger: FalsePositiveValidationLogger = NoOpFalsePositiveValidationLogger,
     private val externalScope: CoroutineScope? = null
 ) {
@@ -120,6 +125,10 @@ class FalsePositiveValidationCoordinator(
 
     fun setIncidentRemoteCreator(nextCreator: IncidentRemoteCreator) {
         incidentRemoteCreator = nextCreator
+    }
+
+    fun setAutomaticSosAlertCreator(nextCreator: AutomaticSosAlertCreator) {
+        automaticSosAlertCreator = nextCreator
     }
 
     fun setLogger(nextLogger: FalsePositiveValidationLogger) {
@@ -381,6 +390,7 @@ class FalsePositiveValidationCoordinator(
         val key = assessment.identifier()
         if (terminalAssessments.contains(key) || pendingPersistenceAssessments.contains(key)) return null
         cancelCountdownLocked()
+        AutoIncidentDiagnostics.incidentStarted(cause)
         val createdAt = now()
         val incident = LocalIncident(
             incidentId = nextIncidentId(),
@@ -395,7 +405,9 @@ class FalsePositiveValidationCoordinator(
             relevantOutcomes = assessment.relevantOutcomeSummaries(),
             ruleSetVersion = assessment.ruleSetVersion,
             validationPolicyVersion = config.policyVersion,
-            gpsQuality = assessment.gpsQuality.status
+            gpsQuality = assessment.gpsQuality.status,
+            clientIncidentId = UUID.randomUUID().toString(),
+            detectedAtEpochMillis = nowEpochMillis()
         )
         val request = AlertDispatchRequest(
             requestId = nextDispatchRequestId(),
@@ -407,7 +419,8 @@ class FalsePositiveValidationCoordinator(
             createdAtElapsedRealtimeNanos = createdAt,
             score = assessment.score,
             confidence = assessment.confidence,
-            payload = AlertPayloadSummary(assessment.sessionId, assessment.assessmentId, incident.incidentId, assessment.score, assessment.riskLevel, cause, config.policyVersion)
+            payload = AlertPayloadSummary(assessment.sessionId, assessment.assessmentId, incident.incidentId, assessment.score, assessment.riskLevel, cause, config.policyVersion),
+            clientAlertRequestId = UUID.randomUUID().toString()
         )
         return IncidentBundle(key, incident, request, metadata(assessment, reason, origin, createdAt), immediate)
     }
@@ -433,33 +446,93 @@ class FalsePositiveValidationCoordinator(
                     }
                 }
                 is PendingOfflineEvent.IncidentBundleEvent -> {
+                    AutoIncidentDiagnostics.localPersistenceStarted()
                     val result = try {
                         offlineEventSink.enqueueIncidentBundle(event.incident, event.request)
                     } catch (_: IllegalStateException) {
                         com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult.PersistenceFailed(com.example.sos_segundoplano.domain.offline.OfflineSyncErrorCategory.Serialization, "offline_queue_storage_unavailable")
                     }
+                    AutoIncidentDiagnostics.localPersistenceResult(result)
                     if (result.isPersisted) {
-                        val incident = createRemoteIncidentOnce(event)
-                        mutex.withLock {
-                            incidentStore.add(incident)
-                            dispatchRequestStore.add(event.request)
-                            pendingPersistenceAssessments.remove(event.key)
-                            persistenceDecisions.remove(event.key)
-                            cancelPersistenceRetry(event.key)
-                            processedAssessments.add(event.key)
-                            terminalAssessments.add(event.key)
-                            if (event.immediate) {
-                                publish(FalsePositiveValidationState.ImmediateAlertRequested(incident, event.request, event.metadata))
-                            } else {
-                                publish(FalsePositiveValidationState.IncidentGenerated(incident, event.request, event.metadata))
-                            }
-                        }
+                        processPersistedIncidentBundle(event)
                     } else if (result is com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult.PersistenceFailed) {
                         publishPersistenceError(event.key, event.metadata)
                     }
                 }
             }
         }
+    }
+
+    private suspend fun processPersistedIncidentBundle(event: PendingOfflineEvent.IncidentBundleEvent) {
+        val automatic = event.incident.isAutomaticSosCause() && automaticSosAlertCreator !== NoOpAutomaticSosAlertCreator
+        val preparedEvent = if (automatic) {
+            val incidentWithLocation = automaticSosAlertCreator.captureLocation(event.incident)
+            if (incidentWithLocation.remoteCreationStatus !is IncidentRemoteCreationStatus.Pending) {
+                publishRemoteFailureForRetry(event.copy(incident = incidentWithLocation), incidentWithLocation)
+                return
+            }
+            val captured = event.copy(incident = incidentWithLocation)
+            if (captured.incident != event.incident) {
+                val update = offlineEventSink.updateIncidentBundle(captured.incident, captured.request)
+                if (!update.isPersisted) {
+                    publishRemoteFailureForRetry(captured, captured.incident.copy(
+                        remoteCreationStatus = IncidentRemoteCreationStatus.InvalidResponse("offline_location_persistence_failed")
+                    ))
+                    return
+                }
+                mutex.withLock { persistenceDecisions.put(event.key, captured) }
+            }
+            captured
+        } else {
+            event
+        }
+        AutoIncidentDiagnostics.remoteCreateStarted()
+        val incident = if (automatic) {
+            automaticSosAlertCreator.createAutomaticSosAlert(
+                preparedEvent.incident.copy(remoteCreationStatus = IncidentRemoteCreationStatus.Pending),
+                preparedEvent.request
+            )
+        } else {
+            createRemoteIncidentOnce(preparedEvent)
+        }
+        AutoIncidentDiagnostics.remoteCreateResult(incident.remoteCreationStatus)
+        if (incident.remoteCreationStatus !is IncidentRemoteCreationStatus.Success && automatic) {
+            publishRemoteFailureForRetry(preparedEvent.copy(incident = incident), incident)
+            return
+        }
+        mutex.withLock {
+            incidentStore.add(incident)
+            dispatchRequestStore.add(preparedEvent.request)
+            pendingPersistenceAssessments.remove(preparedEvent.key)
+            persistenceDecisions.remove(preparedEvent.key)
+            cancelPersistenceRetry(preparedEvent.key)
+            processedAssessments.add(preparedEvent.key)
+            terminalAssessments.add(preparedEvent.key)
+            if (incident.remoteCreationStatus is IncidentRemoteCreationStatus.Success) {
+                if (preparedEvent.immediate) {
+                    publish(FalsePositiveValidationState.ImmediateAlertRequested(incident, preparedEvent.request, preparedEvent.metadata))
+                } else {
+                    publish(FalsePositiveValidationState.IncidentGenerated(incident, preparedEvent.request, preparedEvent.metadata))
+                }
+                AutoIncidentDiagnostics.terminalState("incident_generated")
+            } else {
+                publish(FalsePositiveValidationState.Error(preparedEvent.metadata, "RemoteIncidentCreationFailed"))
+                AutoIncidentDiagnostics.terminalState("error", "remote_incident_creation_failed")
+            }
+        }
+    }
+
+    private suspend fun publishRemoteFailureForRetry(
+        event: PendingOfflineEvent.IncidentBundleEvent,
+        incident: LocalIncident
+    ) {
+        mutex.withLock {
+            persistenceDecisions.put(event.key, event.copy(incident = incident))
+            pendingPersistenceAssessments.remove(event.key)
+            publish(FalsePositiveValidationState.Error(event.metadata, "RemoteIncidentCreationFailed"))
+            AutoIncidentDiagnostics.terminalState("error", "remote_incident_creation_failed")
+        }
+        schedulePersistenceRetry(event.key)
     }
 
     private suspend fun createRemoteIncidentOnce(event: PendingOfflineEvent.IncidentBundleEvent): LocalIncident {
@@ -491,10 +564,18 @@ class FalsePositiveValidationCoordinator(
         listOf(pending)
     }.orEmpty()
 
+    private fun LocalIncident.isAutomaticSosCause(): Boolean = when (cause) {
+        IncidentCause.Timeout,
+        IncidentCause.UserRequestedHelp,
+        IncidentCause.CriticalPhysicalEvent -> true
+        IncidentCause.ManualSos -> false
+    }
+
     private suspend fun publishPersistenceError(key: AssessmentIdentifier, metadata: ValidationMetadata) {
         mutex.withLock {
             pendingPersistenceAssessments.remove(key)
             publish(FalsePositiveValidationState.Error(metadata, "OfflinePersistenceFailed"))
+            AutoIncidentDiagnostics.terminalState("error", "offline_persistence_failed")
         }
         schedulePersistenceRetry(key)
     }
@@ -752,6 +833,10 @@ object FalsePositiveValidationCoordinatorProvider {
 
     fun setIncidentRemoteCreator(creator: IncidentRemoteCreator) {
         coordinator.setIncidentRemoteCreator(creator)
+    }
+
+    fun setAutomaticSosAlertCreator(creator: AutomaticSosAlertCreator) {
+        coordinator.setAutomaticSosAlertCreator(creator)
     }
 
     fun setLogger(logger: FalsePositiveValidationLogger) {

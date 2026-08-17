@@ -19,6 +19,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -36,6 +37,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -65,6 +69,7 @@ import com.example.sos_segundoplano.ui.format.DisplayFormatters
 import com.example.sos_segundoplano.ui.format.monitorResponseLabel
 import com.example.sos_segundoplano.ui.format.monitorStatusLabel
 import com.example.sos_segundoplano.features.history.buildGeoUri
+import com.example.sos_segundoplano.features.history.HistoryDiagnostics
 import kotlinx.coroutines.launch
 
 @Composable
@@ -97,7 +102,10 @@ fun MonitorRoot(authRepository: AuthRepository) {
     }
     val historyState by historyViewModel.state.collectAsStateWithLifecycle()
     LaunchedEffect(consumedFcmAttemptId) {
-        if (consumedFcmAttemptId != null) historyViewModel.refresh()
+        if (consumedFcmAttemptId != null) {
+            HistoryDiagnostics.debug("event=monitor_history_refresh_trigger source=fcm")
+            historyViewModel.refresh()
+        }
     }
     LaunchedEffect(successfulActionRevision) {
         if (successfulActionRevision > 0L) historyViewModel.refresh()
@@ -141,7 +149,17 @@ fun MonitorHomeScreen(
 ) {
     var dialog by remember { mutableStateOf<MonitorDialog?>(null) }
     var destination by remember { mutableStateOf<MonitorDestination>(MonitorDestination.CurrentAlert) }
-    Column(modifier = modifier.fillMaxSize().background(MotoBackground).testTag("monitor_home_screen")) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MotoBackground)
+            .testTag("monitor_home_screen")
+            .onGloballyPositioned { coordinates ->
+                HistoryDiagnostics.debug(
+                    "event=monitor_history_layout node=root width_px=${coordinates.size.width} height_px=${coordinates.size.height}"
+                )
+            }
+    ) {
         MotoTopBar(
             title = if (destination is MonitorDestination.AlertHistory) "Historial de alertas" else stringResource(R.string.monitor_alert_received),
             subtitle = if (destination is MonitorDestination.CurrentAlert && state is MonitorAlertsUiState.Ready) stringResource(R.string.monitor_active) else null,
@@ -151,7 +169,14 @@ fun MonitorHomeScreen(
         if (destination !is MonitorDestination.HistoryDetail) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), horizontalArrangement = Arrangement.End) {
                 OutlinedButton(
-                    onClick = { if (destination is MonitorDestination.AlertHistory) onRefreshHistory() else onRefresh() },
+                    onClick = {
+                        if (destination is MonitorDestination.AlertHistory) {
+                            HistoryDiagnostics.debug("event=monitor_history_refresh_trigger source=manual")
+                            onRefreshHistory()
+                        } else {
+                            onRefresh()
+                        }
+                    },
                     modifier = Modifier.semantics { contentDescription = "Actualizar" }.testTag("monitor_refresh_button")
                 ) { Text("Actualizar") }
                 Spacer(Modifier.size(8.dp))
@@ -160,6 +185,7 @@ fun MonitorHomeScreen(
                         destination = if (destination is MonitorDestination.AlertHistory) {
                             MonitorDestination.CurrentAlert
                         } else {
+                            HistoryDiagnostics.debug("event=monitor_history_tab_selected")
                             MonitorDestination.AlertHistory
                         }
                     },
@@ -179,6 +205,14 @@ fun MonitorHomeScreen(
             MonitorDestination.AlertHistory -> MonitorHistoryContent(
                 state = historyState,
                 refresh = onRefreshHistory,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .onGloballyPositioned { coordinates ->
+                        HistoryDiagnostics.debug(
+                            "event=monitor_history_layout node=history_container width_px=${coordinates.size.width} height_px=${coordinates.size.height}"
+                        )
+                    },
                 open = { id ->
                     destination = MonitorDestination.HistoryDetail(id)
                     onOpenHistoryAlert(id)
@@ -203,15 +237,47 @@ fun MonitorHomeScreen(
     dialog?.let { mode -> ActionDialog(mode, onDismiss = { dialog = null }, onSubmit = { value -> dialog = null; if (mode == MonitorDialog.Acknowledge) onAcknowledge(value) else onDecline(value) }) }
 }
 
-@Composable private fun MonitorHistoryContent(state: MonitorAlertHistoryUiState, refresh: () -> Unit, open: (String) -> Unit) = when (state) {
+@Composable private fun MonitorHistoryContent(
+    state: MonitorAlertHistoryUiState,
+    refresh: () -> Unit,
+    modifier: Modifier = Modifier,
+    open: (String) -> Unit
+) = when (state) {
     MonitorAlertHistoryUiState.Loading -> LoadingContent()
     MonitorAlertHistoryUiState.Empty -> Column(Modifier.fillMaxSize().padding(24.dp)) { Text("No hay alertas en el historial.") }
     is MonitorAlertHistoryUiState.Error -> HistoryErrorContent(refresh)
-    is MonitorAlertHistoryUiState.Content -> LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        items(state.alerts) { alert ->
+    is MonitorAlertHistoryUiState.Content -> LazyColumn(
+        modifier
+            .padding(20.dp)
+            .onGloballyPositioned { coordinates ->
+                HistoryDiagnostics.debug(
+                    "event=monitor_history_layout node=history_list width_px=${coordinates.size.width} height_px=${coordinates.size.height}"
+                )
+            },
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        itemsIndexed(state.alerts) { index, alert ->
+            if (index == 0) {
+                LaunchedEffect(Unit) {
+                    HistoryDiagnostics.debug("event=monitor_history_first_item_composed")
+                }
+            }
             OutlinedButton(
                 onClick = { open(alert.notificationDeliveryAttemptId) },
-                modifier = Modifier
+                modifier = (if (index == 0) {
+                    Modifier.onGloballyPositioned { coordinates ->
+                        val rootPosition = coordinates.positionInRoot()
+                        val windowPosition = coordinates.positionInWindow()
+                        HistoryDiagnostics.debug(
+                            "event=monitor_history_layout node=first_history_row width_px=${coordinates.size.width} height_px=${coordinates.size.height}"
+                        )
+                        HistoryDiagnostics.debug(
+                            "event=monitor_history_first_item_position x_root=${rootPosition.x} y_root=${rootPosition.y} x_window=${windowPosition.x} y_window=${windowPosition.y} width_px=${coordinates.size.width} height_px=${coordinates.size.height} is_attached=${coordinates.isAttached}"
+                        )
+                    }
+                } else {
+                    Modifier
+                })
                     .fillMaxWidth()
                     .semantics { contentDescription = "Abrir detalle de alerta" }
                     .testTag("monitor_history_alert_${alert.notificationDeliveryAttemptId}")

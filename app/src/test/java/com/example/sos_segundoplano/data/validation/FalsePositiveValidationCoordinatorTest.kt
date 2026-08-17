@@ -2,6 +2,7 @@ package com.example.sos_segundoplano.data.validation
 
 import com.example.sos_segundoplano.data.rules.InMemoryRiskAssessmentStore
 import com.example.sos_segundoplano.data.remote.incident.IncidentRemoteCreator
+import com.example.sos_segundoplano.data.remote.incident.AutomaticSosAlertCreator
 import com.example.sos_segundoplano.domain.offline.OfflineEventSink
 import com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult
 import com.example.sos_segundoplano.domain.offline.OfflineSyncErrorCategory
@@ -32,6 +33,7 @@ import com.example.sos_segundoplano.domain.validation.MinorEvent
 import com.example.sos_segundoplano.domain.validation.MinorEventType
 import com.example.sos_segundoplano.domain.validation.MonotonicClock
 import com.example.sos_segundoplano.domain.validation.UserResponseSource
+import com.example.sos_segundoplano.domain.signals.LocationSample
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -47,6 +49,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.UUID
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class FalsePositiveValidationCoordinatorTest {
@@ -277,6 +280,65 @@ class FalsePositiveValidationCoordinatorTest {
         }
     }
 
+    @Test fun requestHelpRemoteHttpFailurePreservesEvidenceWithoutPublishingTerminalIncident() = runTest {
+        val failure = IncidentRemoteCreationStatus.HttpError(500, "server_error")
+        val fixture = fixture(incidentRemoteCreator = FakeIncidentRemoteCreator(failure))
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-http-failure")
+            runCurrent()
+
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+            assertEquals(1, fixture.incidents.items.value.size)
+            assertEquals(1, fixture.requests.items.value.size)
+            assertEquals(IncidentCause.UserRequestedHelp, fixture.incidents.items.value.single().cause)
+            assertEquals(failure, fixture.incidents.items.value.single().remoteCreationStatus)
+            assertEquals(1, fixture.remoteCreator.calls)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun requestHelpRemoteNetworkFailurePreservesEvidenceWithoutPublishingTerminalIncident() = runTest {
+        val failure = IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable")
+        val fixture = fixture(incidentRemoteCreator = FakeIncidentRemoteCreator(failure))
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-network-failure")
+            runCurrent()
+
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+            assertEquals(1, fixture.incidents.items.value.size)
+            assertEquals(1, fixture.requests.items.value.size)
+            assertEquals(IncidentCause.UserRequestedHelp, fixture.incidents.items.value.single().cause)
+            assertEquals(failure, fixture.incidents.items.value.single().remoteCreationStatus)
+            assertEquals(1, fixture.remoteCreator.calls)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun requestHelpRemoteTimeoutPreservesEvidenceWithoutPublishingTerminalIncident() = runTest {
+        val failure = IncidentRemoteCreationStatus.Timeout("network_timeout")
+        val fixture = fixture(incidentRemoteCreator = FakeIncidentRemoteCreator(failure))
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-timeout-failure")
+            runCurrent()
+
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+            assertEquals(1, fixture.incidents.items.value.size)
+            assertEquals(IncidentCause.UserRequestedHelp, fixture.incidents.items.value.single().cause)
+            assertEquals(failure, fixture.incidents.items.value.single().remoteCreationStatus)
+            assertEquals(1, fixture.remoteCreator.calls)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
     @Test fun timeoutCreatesSinglePendingIncidentAndAlert() = runTest {
         val fixture = fixture()
         try {
@@ -301,8 +363,9 @@ class FalsePositiveValidationCoordinatorTest {
         }
     }
 
-    @Test fun timeoutRemoteNetworkFailureKeepsLocalIncidentWithoutCrash() = runTest {
-        val fixture = fixture(incidentRemoteCreator = FakeIncidentRemoteCreator(IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable")))
+    @Test fun countdownTimeoutCreatesStableDurableIdentifiersAndUsesInjectedDetectionTime() = runTest {
+        val expectedDetectedAtEpochMillis = 1_725_000_123_456L
+        val fixture = fixture(nowEpochMillis = { expectedDetectedAtEpochMillis })
         try {
             startCountdown(fixture)
             fixture.clock.now = 20_000_000_000L
@@ -310,9 +373,175 @@ class FalsePositiveValidationCoordinatorTest {
             runCurrent()
 
             val state = fixture.validation.states.value as FalsePositiveValidationState.IncidentGenerated
+            val incidentId = requireNotNull(state.incident.clientIncidentId)
+            val requestId = requireNotNull(state.dispatchRequest.clientAlertRequestId)
+            UUID.fromString(incidentId)
+            UUID.fromString(requestId)
+            assertTrue(incidentId != requestId)
+            assertEquals(expectedDetectedAtEpochMillis, state.incident.detectedAtEpochMillis)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun persistenceRetryReusesDurableIncidentAndAlertIdentifiers() = runTest {
+        val sink = FailingThenRecordingIncidentBundleSink()
+        val expectedDetectedAtEpochMillis = 1_725_000_654_321L
+        val fixture = fixture(offlineEventSink = sink, nowEpochMillis = { expectedDetectedAtEpochMillis })
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-retry-identities")
+            runCurrent()
+            assertEquals(1, sink.bundles.size)
+
+            advanceTimeBy(1_000L)
+            runCurrent()
+            assertEquals(2, sink.bundles.size)
+
+            val initial = sink.bundles[0]
+            val retry = sink.bundles[1]
+            assertEquals(initial.first.clientIncidentId, retry.first.clientIncidentId)
+            assertEquals(initial.second.clientAlertRequestId, retry.second.clientAlertRequestId)
+            assertEquals(initial.first.detectedAtEpochMillis, retry.first.detectedAtEpochMillis)
+            assertEquals(expectedDetectedAtEpochMillis, retry.first.detectedAtEpochMillis)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun userRequestedHelpCreatesValidDurableIdentifiersAndInjectedDetectionTime() = runTest {
+        val expectedDetectedAtEpochMillis = 1_725_000_999_999L
+        val fixture = fixture(nowEpochMillis = { expectedDetectedAtEpochMillis })
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-durable-identities")
+            runCurrent()
+
+            val state = fixture.validation.states.value as FalsePositiveValidationState.IncidentGenerated
+            val incidentId = requireNotNull(state.incident.clientIncidentId)
+            val requestId = requireNotNull(state.dispatchRequest.clientAlertRequestId)
+            UUID.fromString(incidentId)
+            UUID.fromString(requestId)
+            assertTrue(incidentId != requestId)
+            assertEquals(expectedDetectedAtEpochMillis, state.incident.detectedAtEpochMillis)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun countdownTimeoutPersistsCapturedLocationBeforeAutomaticSosWithoutUsingLegacyCreator() = runTest {
+        val sink = RecordingAutomaticBundleSink()
+        val automatic = RecordingAutomaticSosCreator(location = location())
+        val legacy = FakeIncidentRemoteCreator()
+        val detectedAt = 1_725_000_123_456L
+        val fixture = fixture(sink, legacy, { detectedAt }, automatic)
+        try {
+            startCountdown(fixture)
+            fixture.clock.now = 20_000_000_000L
+            advanceTimeBy(1_000L)
+            runCurrent()
+
+            val updated = sink.updatedBundles.single()
+            val submitted = automatic.submitted.single()
+            assertEquals(1, automatic.locationCalls)
+            assertEquals(0, legacy.calls)
+            assertEquals(updated.first.clientIncidentId, submitted.first.clientIncidentId)
+            assertEquals(updated.second.clientAlertRequestId, submitted.second.clientAlertRequestId)
+            assertEquals(detectedAt, updated.first.detectedAtEpochMillis)
+            assertEquals(1L, updated.first.incidentId)
+            assertEquals(1L, updated.second.requestId)
+            assertEquals(19.4326, updated.first.latitude)
+            assertEquals(-99.1332, updated.first.longitude)
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.IncidentGenerated)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun userRequestedHelpWithUnavailableLocationDoesNotSubmitOrGenerateIncident() = runTest {
+        val sink = RecordingAutomaticBundleSink()
+        val automatic = RecordingAutomaticSosCreator(location = null)
+        val fixture = fixture(offlineEventSink = sink, automaticSosAlertCreator = automatic)
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-location-unavailable")
+            runCurrent()
+
+            assertEquals(1, automatic.locationCalls)
+            assertTrue(automatic.submitted.isEmpty())
+            assertTrue(fixture.incidents.items.value.isEmpty())
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun automaticSosUpdateFailureDoesNotSubmitOrGenerateIncident() = runTest {
+        val sink = RecordingAutomaticBundleSink(failUpdate = true)
+        val automatic = RecordingAutomaticSosCreator(location = location())
+        val fixture = fixture(offlineEventSink = sink, automaticSosAlertCreator = automatic)
+        try {
+            startCountdown(fixture)
+            fixture.clock.now = 20_000_000_000L
+            advanceTimeBy(1_000L)
+            runCurrent()
+
+            assertEquals(1, sink.updatedBundles.size)
+            assertTrue(automatic.submitted.isEmpty())
+            assertTrue(fixture.incidents.items.value.isEmpty())
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun automaticSosFailuresDoNotGenerateTerminalIncident() = runTest {
+        val statuses = listOf(
+            IncidentRemoteCreationStatus.HttpError(400, "request_rejected"),
+            IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable"),
+            IncidentRemoteCreationStatus.Timeout("network_timeout"),
+            IncidentRemoteCreationStatus.InvalidResponse("response_invalid"),
+            IncidentRemoteCreationStatus.MissingRequiredData("active_remote_trip_missing")
+        )
+        statuses.forEach { status ->
+            val fixture = fixture(
+                offlineEventSink = RecordingAutomaticBundleSink(),
+                automaticSosAlertCreator = RecordingAutomaticSosCreator(location = location(), status = status)
+            )
+            try {
+                startCountdown(fixture)
+                fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-${status::class.simpleName}")
+                runCurrent()
+
+                assertTrue(fixture.incidents.items.value.isEmpty())
+                assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+            } finally {
+                fixture.close()
+                runCurrent()
+            }
+        }
+    }
+
+    @Test fun timeoutRemoteNetworkFailureKeepsLocalIncidentWithoutPublishingTerminalIncident() = runTest {
+        val fixture = fixture(incidentRemoteCreator = FakeIncidentRemoteCreator(IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable")))
+        try {
+            startCountdown(fixture)
+            fixture.clock.now = 20_000_000_000L
+            advanceTimeBy(1_000L)
+            runCurrent()
+
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
             assertEquals(1, fixture.incidents.items.value.size)
-            assertEquals(null, state.incident.remoteIncidentId)
-            assertEquals(IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable"), state.incident.remoteCreationStatus)
+            assertEquals(1, fixture.requests.items.value.size)
+            assertEquals(IncidentCause.Timeout, fixture.incidents.items.value.single().cause)
+            assertEquals(null, fixture.incidents.items.value.single().remoteIncidentId)
+            assertEquals(IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable"), fixture.incidents.items.value.single().remoteCreationStatus)
             assertEquals(1, fixture.remoteCreator.calls)
         } finally {
             fixture.close()
@@ -544,7 +773,9 @@ class FalsePositiveValidationCoordinatorTest {
 
     private fun TestScope.fixture(
         offlineEventSink: OfflineEventSink? = null,
-        incidentRemoteCreator: FakeIncidentRemoteCreator = FakeIncidentRemoteCreator()
+        incidentRemoteCreator: FakeIncidentRemoteCreator = FakeIncidentRemoteCreator(),
+        nowEpochMillis: () -> Long = { 1_700_000_000_000L },
+        automaticSosAlertCreator: AutomaticSosAlertCreator? = null
     ): Fixture {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val fixtureJob = SupervisorJob()
@@ -567,10 +798,12 @@ class FalsePositiveValidationCoordinatorTest {
             { 1L },
             { 1L },
             { 1L },
+            nowEpochMillis,
             externalScope = fixtureScope
         )
         coordinator.setOfflineEventSink(offlineEventSink ?: FakeOfflineEventSink())
         coordinator.setIncidentRemoteCreator(incidentRemoteCreator)
+        automaticSosAlertCreator?.let(coordinator::setAutomaticSosAlertCreator)
         return Fixture(clock, risk, validation, minor, incidents, requests, coordinator, incidentRemoteCreator, fixtureJob)
     }
 
@@ -663,6 +896,87 @@ class FalsePositiveValidationCoordinatorTest {
             return OfflineQueueEnqueueResult.PersistedAndScheduled(keys.size.toLong(), key)
         }
     }
+
+    private class FailingThenRecordingIncidentBundleSink : OfflineEventSink {
+        val bundles = mutableListOf<Pair<LocalIncident, AlertDispatchRequest>>()
+
+        override suspend fun enqueueMinorEvent(event: MinorEvent): OfflineQueueEnqueueResult = error("unused")
+
+        override suspend fun enqueueIncident(incident: LocalIncident): OfflineQueueEnqueueResult = error("unused")
+
+        override suspend fun enqueueAlertRequest(request: AlertDispatchRequest): OfflineQueueEnqueueResult = error("unused")
+
+        override suspend fun enqueueIncidentBundle(
+            incident: LocalIncident,
+            request: AlertDispatchRequest
+        ): OfflineQueueEnqueueResult {
+            bundles += incident to request
+            return if (bundles.size == 1) {
+                OfflineQueueEnqueueResult.PersistenceFailed(
+                    OfflineSyncErrorCategory.Serialization,
+                    "offline_queue_storage_failed"
+                )
+            } else {
+                OfflineQueueEnqueueResult.PersistedAndScheduled(
+                    queueItemId = 1L,
+                    idempotencyKey = "incident-bundle"
+                )
+            }
+        }
+    }
+
+    private class RecordingAutomaticBundleSink(
+        private val failUpdate: Boolean = false
+    ) : OfflineEventSink {
+        val updatedBundles = mutableListOf<Pair<LocalIncident, AlertDispatchRequest>>()
+
+        override suspend fun enqueueMinorEvent(event: MinorEvent): OfflineQueueEnqueueResult = error("unused")
+        override suspend fun enqueueIncident(incident: LocalIncident): OfflineQueueEnqueueResult = error("unused")
+        override suspend fun enqueueAlertRequest(request: AlertDispatchRequest): OfflineQueueEnqueueResult = error("unused")
+        override suspend fun enqueueIncidentBundle(incident: LocalIncident, request: AlertDispatchRequest): OfflineQueueEnqueueResult =
+            OfflineQueueEnqueueResult.PersistedAndScheduled(1L, "bundle")
+
+        override suspend fun updateIncidentBundle(incident: LocalIncident, request: AlertDispatchRequest): OfflineQueueEnqueueResult {
+            updatedBundles += incident to request
+            return if (failUpdate) {
+                OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.Serialization, "offline_location_persistence_failed")
+            } else {
+                OfflineQueueEnqueueResult.PersistedAndScheduled(1L, "bundle")
+            }
+        }
+    }
+
+    private class RecordingAutomaticSosCreator(
+        private val location: LocationSample?,
+        private val status: IncidentRemoteCreationStatus = IncidentRemoteCreationStatus.Success("remote-incident-automatic")
+    ) : AutomaticSosAlertCreator {
+        var locationCalls = 0
+        val submitted = mutableListOf<Pair<LocalIncident, AlertDispatchRequest>>()
+
+        override suspend fun captureLocation(incident: LocalIncident): LocalIncident {
+            locationCalls++
+            return location?.let {
+                incident.copy(latitude = it.latitude, longitude = it.longitude, remoteCreationStatus = IncidentRemoteCreationStatus.Pending)
+            } ?: incident.copy(remoteCreationStatus = IncidentRemoteCreationStatus.MissingRequiredData("location_unavailable"))
+        }
+
+        override suspend fun createAutomaticSosAlert(incident: LocalIncident, request: AlertDispatchRequest): LocalIncident {
+            submitted += incident to request
+            return when (status) {
+                is IncidentRemoteCreationStatus.Success -> incident.copy(remoteIncidentId = status.incidentId, remoteCreationStatus = status)
+                else -> incident.copy(remoteCreationStatus = status)
+            }
+        }
+    }
+
+    private fun location() = LocationSample(
+        latitude = 19.4326,
+        longitude = -99.1332,
+        accuracyMeters = 5f,
+        timestampMillis = 1_700_000_000_000L,
+        provider = "gps",
+        isMock = false
+    )
 
     private fun rejects(block: () -> Unit) {
         var rejected = false

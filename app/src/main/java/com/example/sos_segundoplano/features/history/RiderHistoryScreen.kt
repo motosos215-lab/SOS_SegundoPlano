@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -23,11 +24,15 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -69,6 +74,11 @@ fun RiderHistoryScreen(
     val refresh = if (section == RiderHistorySection.Trips) viewModel::refreshTrips else viewModel::refreshIncidents
 
     Scaffold(
+        modifier = Modifier.onGloballyPositioned { coordinates ->
+            HistoryDiagnostics.debug(
+                "event=rider_history_layout node=root width_px=${coordinates.size.width} height_px=${coordinates.size.height}"
+            )
+        },
         containerColor = MotoBackground,
         bottomBar = {
             MotoBottomBar(
@@ -91,6 +101,11 @@ fun RiderHistoryScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .padding(horizontal = 20.dp)
+                .onGloballyPositioned { coordinates ->
+                    HistoryDiagnostics.debug(
+                        "event=rider_history_layout node=main_column width_px=${coordinates.size.width} height_px=${coordinates.size.height}"
+                    )
+                }
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
@@ -98,7 +113,12 @@ fun RiderHistoryScreen(
             ) {
                 Text("Historial de viajes", color = MotoPrimaryDark, fontWeight = FontWeight.Bold)
                 IconButton(
-                    onClick = refresh,
+                    onClick = {
+                        if (section == RiderHistorySection.Incidents) {
+                            HistoryDiagnostics.debug("event=rider_history_refresh_trigger source=manual")
+                        }
+                        refresh()
+                    },
                     modifier = Modifier.semantics { contentDescription = "Actualizar historial" }
                 ) { Text("↻", color = MotoPrimaryBlue, fontWeight = FontWeight.Bold) }
             }
@@ -112,13 +132,39 @@ fun RiderHistoryScreen(
                 HistorySectionButton(
                     label = "Incidentes",
                     selected = section == RiderHistorySection.Incidents,
-                    onClick = { section = RiderHistorySection.Incidents }
+                    onClick = {
+                        HistoryDiagnostics.debug("event=rider_history_tab_selected tab=incidents")
+                        section = RiderHistorySection.Incidents
+                    }
                 )
             }
             if (section == RiderHistorySection.Trips) {
-                TripContent(trips, viewModel::refreshTrips, onTripSelected = { selectedTrip = it })
+                TripContent(
+                    state = trips,
+                    retry = viewModel::refreshTrips,
+                    onTripSelected = { selectedTrip = it },
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .onGloballyPositioned { coordinates ->
+                            HistoryDiagnostics.debug(
+                                "event=rider_history_layout node=content_container width_px=${coordinates.size.width} height_px=${coordinates.size.height}"
+                            )
+                        }
+                )
             } else {
-                IncidentContent(incidents, viewModel::refreshIncidents)
+                IncidentContent(
+                    state = incidents,
+                    retry = viewModel::refreshIncidents,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .onGloballyPositioned { coordinates ->
+                            HistoryDiagnostics.debug(
+                                "event=rider_history_layout node=content_container width_px=${coordinates.size.width} height_px=${coordinates.size.height}"
+                            )
+                        }
+                )
             }
         }
     }
@@ -142,13 +188,14 @@ private fun HistorySectionButton(label: String, selected: Boolean, onClick: () -
 private fun TripContent(
     state: RiderHistoryUiState<RiderTripHistoryItem>,
     retry: () -> Unit,
-    onTripSelected: (RiderTripHistoryItem) -> Unit
+    onTripSelected: (RiderTripHistoryItem) -> Unit,
+    modifier: Modifier = Modifier
 ) = when (state) {
     RiderHistoryUiState.Loading -> HistoryLoading()
     RiderHistoryUiState.Empty -> HistoryEmpty()
     is RiderHistoryUiState.Error -> HistoryError(state.message, retry)
     is RiderHistoryUiState.Content -> LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier,
         contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 10.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -207,24 +254,56 @@ internal fun buildGeoUri(latitude: Double, longitude: Double): android.net.Uri =
     android.net.Uri.parse("geo:$latitude,$longitude?q=$latitude,$longitude")
 
 @Composable
-private fun IncidentContent(state: RiderHistoryUiState<RiderIncidentHistoryItem>, retry: () -> Unit) = when (state) {
+private fun IncidentContent(
+    state: RiderHistoryUiState<RiderIncidentHistoryItem>,
+    retry: () -> Unit,
+    modifier: Modifier = Modifier
+) = when (state) {
     RiderHistoryUiState.Loading -> HistoryLoading()
     RiderHistoryUiState.Empty -> HistoryEmpty()
     is RiderHistoryUiState.Error -> HistoryError(state.message, retry)
     is RiderHistoryUiState.Content -> LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier.onGloballyPositioned { coordinates ->
+            HistoryDiagnostics.debug(
+                "event=rider_history_layout node=incident_list width_px=${coordinates.size.width} height_px=${coordinates.size.height}"
+            )
+        },
         contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 10.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        items(state.items) { IncidentHistoryCard(it) }
+        itemsIndexed(state.items) { index, item ->
+            if (index == 0) {
+                LaunchedEffect(Unit) {
+                    HistoryDiagnostics.debug("event=rider_history_first_item_composed")
+                }
+                IncidentHistoryCard(
+                    item = item,
+                    modifier = Modifier.onGloballyPositioned { coordinates ->
+                        val rootPosition = coordinates.positionInRoot()
+                        val windowPosition = coordinates.positionInWindow()
+                        HistoryDiagnostics.debug(
+                            "event=rider_history_layout node=first_incident_card width_px=${coordinates.size.width} height_px=${coordinates.size.height}"
+                        )
+                        HistoryDiagnostics.debug(
+                            "event=rider_history_first_item_position x_root=${rootPosition.x} y_root=${rootPosition.y} x_window=${windowPosition.x} y_window=${windowPosition.y} width_px=${coordinates.size.width} height_px=${coordinates.size.height} is_attached=${coordinates.isAttached}"
+                        )
+                    }
+                )
+            } else {
+                IncidentHistoryCard(item)
+            }
+        }
         state.error?.let { item { Text(it, color = MotoTextSecondary) } }
     }
 }
 
 @Composable
-private fun IncidentHistoryCard(item: RiderIncidentHistoryItem) {
+private fun IncidentHistoryCard(
+    item: RiderIncidentHistoryItem,
+    modifier: Modifier = Modifier
+) {
     Card(
-        modifier = Modifier.fillMaxWidth().testTag("incident_history_card"),
+        modifier = modifier.fillMaxWidth().testTag("incident_history_card"),
         colors = CardDefaults.cardColors(containerColor = MotoSurface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {

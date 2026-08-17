@@ -3,6 +3,7 @@ package com.example.sos_segundoplano.features.background
 import com.example.sos_segundoplano.data.remote.trip.FinishTripRequestDto
 import com.example.sos_segundoplano.data.remote.trip.RemoteTripFinisher
 import com.example.sos_segundoplano.data.remote.trip.TripMutationResult
+import com.example.sos_segundoplano.data.validation.AutoIncidentDiagnostics
 import com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -16,6 +17,9 @@ class AccidentTripFinalizer(
     fun onValidationStateChanged(state: FalsePositiveValidationState) {
         val key = state.persistedRealAccidentKey() ?: return
         if (finishedAccidents.add(key)) {
+            if (state is FalsePositiveValidationState.IncidentGenerated) {
+                AutoIncidentDiagnostics.tripFinalizerTriggered()
+            }
             finishTrip()
         }
     }
@@ -27,7 +31,7 @@ class AccidentTripFinalizer(
 
 /**
  * Closes the canonical Phone trip before monitoring stops and emits the Wear stop hint.
- * A persisted incident is the only caller; safe confirmation never reaches this coordinator.
+ * A remote-confirmed persisted incident is the only caller; safe confirmation never reaches this coordinator.
  */
 internal class AccidentTripTerminationCoordinator(
     private val remoteTripFinisher: RemoteTripFinisher,
@@ -40,11 +44,11 @@ internal class AccidentTripTerminationCoordinator(
 
     suspend fun finishAfterPersistedIncident(): Boolean = mutex.withLock {
         if (completed) {
+            AutoIncidentDiagnostics.tripFinishResult("success")
             true
         } else if (!hasActiveRemoteTrip()) {
-            completed = true
-            stopMonitoring()
-            true
+            AutoIncidentDiagnostics.tripFinishResult("not_confirmed")
+            false
         } else {
             when (
                 remoteTripFinisher.finishTrip(
@@ -54,9 +58,13 @@ internal class AccidentTripTerminationCoordinator(
                 is TripMutationResult.Success -> {
                     completed = true
                     stopMonitoring()
+                    AutoIncidentDiagnostics.tripFinishResult("success")
                     true
                 }
-                else -> false
+                else -> {
+                    AutoIncidentDiagnostics.tripFinishResult("failure")
+                    false
+                }
             }
         }
     }

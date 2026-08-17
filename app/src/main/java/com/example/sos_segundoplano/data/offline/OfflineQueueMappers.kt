@@ -47,7 +47,11 @@ fun LocalIncident.toSyncPayload(clock: WallClock): OfflineSyncPayload.LocalIncid
             validationPolicyVersion = validationPolicyVersion,
             gpsQuality = gpsQuality.name,
             occurredAtEpochMillis = clock.currentTimeMillis(),
-            createdAtElapsedRealtimeNanos = createdAtElapsedRealtimeNanos
+            createdAtElapsedRealtimeNanos = createdAtElapsedRealtimeNanos,
+            clientIncidentId = clientIncidentId,
+            detectedAtEpochMillis = detectedAtEpochMillis,
+            latitude = latitude,
+            longitude = longitude
         )
     )
 
@@ -65,7 +69,8 @@ fun AlertDispatchRequest.toSyncPayload(clock: WallClock): OfflineSyncPayload.Ale
             deliveryStatus = deliveryStatus.name,
             retryState = retryState.name,
             occurredAtEpochMillis = clock.currentTimeMillis(),
-            createdAtElapsedRealtimeNanos = createdAtElapsedRealtimeNanos
+            createdAtElapsedRealtimeNanos = createdAtElapsedRealtimeNanos,
+            clientAlertRequestId = clientAlertRequestId
         )
     )
 

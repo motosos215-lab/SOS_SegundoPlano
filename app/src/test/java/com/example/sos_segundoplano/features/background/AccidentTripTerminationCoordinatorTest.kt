@@ -50,7 +50,7 @@ class AccidentTripTerminationCoordinatorTest {
     }
 
     @Test
-    fun alreadyInactiveRemoteTripStopsMonitoringWithoutAnotherRemoteFinish() = runBlocking {
+    fun missingRemoteTripDoesNotStopMonitoringOrClaimTripIsFinished() = runBlocking {
         var remoteFinishes = 0
         var monitoringStops = 0
         val coordinator = AccidentTripTerminationCoordinator(
@@ -62,9 +62,9 @@ class AccidentTripTerminationCoordinatorTest {
             stopMonitoring = { monitoringStops += 1 }
         )
 
-        assertTrue(coordinator.finishAfterPersistedIncident())
-        assertTrue(coordinator.finishAfterPersistedIncident())
+        assertFalse(coordinator.finishAfterPersistedIncident())
+        assertFalse(coordinator.finishAfterPersistedIncident())
         assertEquals(0, remoteFinishes)
-        assertEquals(1, monitoringStops)
+        assertEquals(0, monitoringStops)
     }
 }

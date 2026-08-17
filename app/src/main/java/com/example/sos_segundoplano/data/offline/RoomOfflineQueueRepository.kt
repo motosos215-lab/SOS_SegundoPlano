@@ -57,6 +57,24 @@ class RoomOfflineQueueRepository(
         }
     }
 
+    override suspend fun updateIncidentBundle(incident: LocalIncident, request: AlertDispatchRequest): OfflineQueueEnqueueResult = withContext(dispatcher) {
+        try {
+            val now = clock.currentTimeMillis()
+            val incidentEntity = buildEntity(incident.toSyncPayload(clock), now)
+                ?: return@withContext OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.Encryption, "payload_encryption_failed")
+            val requestEntity = buildEntity(request.toSyncPayload(clock), now)
+                ?: return@withContext OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.Encryption, "payload_encryption_failed")
+            queueDao.updateBundlePayload(incidentEntity, requestEntity, now)
+            OfflineQueueEnqueueResult.PersistedAndScheduled(0L, requestEntity.idempotencyKey)
+        } catch (_: IncompleteOfflineBundleException) {
+            OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.Serialization, "offline_bundle_incomplete")
+        } catch (_: SQLiteException) {
+            OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.Serialization, "offline_queue_storage_failed")
+        } catch (_: IllegalStateException) {
+            OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.Serialization, "offline_queue_storage_unavailable")
+        }
+    }
+
     suspend fun enqueue(payload: OfflineSyncPayload): OfflineQueueEnqueueResult = withContext(dispatcher) {
         scheduleAfterPersistence(enqueuePayloadWithoutScheduling(payload))
     }

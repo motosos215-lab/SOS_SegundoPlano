@@ -21,6 +21,27 @@ interface OfflineQueueDao {
         return BundleInsertResult.Persisted(storedIncident.queueItemId, storedRequest.queueItemId)
     }
 
+    @Query(
+        "UPDATE offline_queue_items SET encryptedPayload = :encryptedPayload, encryptionNonce = :encryptionNonce, " +
+            "encryptionKeyVersion = :encryptionKeyVersion, occurredAtEpochMillis = :occurredAtEpochMillis, updatedAtEpochMillis = :nowMillis " +
+            "WHERE idempotencyKey = :idempotencyKey"
+    )
+    suspend fun updatePayload(
+        idempotencyKey: String,
+        encryptedPayload: ByteArray,
+        encryptionNonce: ByteArray,
+        encryptionKeyVersion: Int,
+        occurredAtEpochMillis: Long,
+        nowMillis: Long
+    ): Int
+
+    @Transaction
+    suspend fun updateBundlePayload(incident: OfflineQueueEntity, request: OfflineQueueEntity, nowMillis: Long) {
+        if (updatePayload(incident.idempotencyKey, incident.encryptedPayload, incident.encryptionNonce, incident.encryptionKeyVersion, incident.occurredAtEpochMillis, nowMillis) != 1 ||
+            updatePayload(request.idempotencyKey, request.encryptedPayload, request.encryptionNonce, request.encryptionKeyVersion, request.occurredAtEpochMillis, nowMillis) != 1
+        ) throw IncompleteOfflineBundleException()
+    }
+
     @Query("SELECT * FROM offline_queue_items WHERE queueItemId = :queueItemId")
     suspend fun getById(queueItemId: Long): OfflineQueueEntity?
 

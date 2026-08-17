@@ -38,6 +38,123 @@ class OfflineQueueSerializerCryptoTest {
         assertEquals(request.payload, (serializer.deserialize(serializer.serialize(request)) as OfflineSyncPayload.AlertDispatchRequestPayload).payload)
     }
 
+    @Test fun serializerRoundTripPreservesDurableAutomaticIncidentFields() {
+        val incident = OfflineSyncPayload.LocalIncidentPayload(
+            LocalIncidentSyncPayload(
+                incidentId = 11L,
+                sessionId = 12L,
+                assessmentId = 13L,
+                windowId = 14L,
+                cause = "Timeout",
+                score = 70,
+                riskLevel = "High",
+                confidence = 0.9,
+                ruleSetVersion = "rules-v1",
+                validationPolicyVersion = "policy-v1",
+                gpsQuality = "Good",
+                occurredAtEpochMillis = 1_725_000_111_000L,
+                createdAtElapsedRealtimeNanos = 2_000L,
+                clientIncidentId = "11111111-1111-1111-1111-111111111111",
+                detectedAtEpochMillis = 1_725_000_123_456L,
+                latitude = 19.4326,
+                longitude = -99.1332
+            )
+        )
+        val request = OfflineSyncPayload.AlertDispatchRequestPayload(
+            AlertDispatchRequestSyncPayload(
+                requestId = 15L,
+                incidentId = 11L,
+                sessionId = 12L,
+                assessmentId = 13L,
+                priority = "High",
+                reason = "Timeout",
+                score = 70,
+                confidence = 0.9,
+                deliveryStatus = "Pending",
+                retryState = "NotStarted",
+                occurredAtEpochMillis = 1_725_000_111_000L,
+                createdAtElapsedRealtimeNanos = 2_000L,
+                clientAlertRequestId = "22222222-2222-2222-2222-222222222222"
+            )
+        )
+
+        val decodedIncident = (serializer.deserialize(serializer.serialize(incident)) as OfflineSyncPayload.LocalIncidentPayload).payload
+        val decodedRequest = (serializer.deserialize(serializer.serialize(request)) as OfflineSyncPayload.AlertDispatchRequestPayload).payload
+
+        assertEquals(incident.payload.incidentId, decodedIncident.incidentId)
+        assertEquals(incident.payload.sessionId, decodedIncident.sessionId)
+        assertEquals(incident.payload.assessmentId, decodedIncident.assessmentId)
+        assertEquals(incident.payload.cause, decodedIncident.cause)
+        assertEquals(incident.payload.clientIncidentId, decodedIncident.clientIncidentId)
+        assertEquals(incident.payload.detectedAtEpochMillis, decodedIncident.detectedAtEpochMillis)
+        assertEquals(incident.payload.latitude, decodedIncident.latitude)
+        assertEquals(incident.payload.longitude, decodedIncident.longitude)
+        assertEquals(request.payload.requestId, decodedRequest.requestId)
+        assertEquals(request.payload.sessionId, decodedRequest.sessionId)
+        assertEquals(request.payload.assessmentId, decodedRequest.assessmentId)
+        assertEquals(request.payload.reason, decodedRequest.reason)
+        assertEquals(request.payload.clientAlertRequestId, decodedRequest.clientAlertRequestId)
+    }
+
+    @Test fun serializerDeserializesLegacyPayloadsWithoutFabricatingDurableFields() {
+        val legacyIncident = """
+            eventType=local-incident
+            schemaVersion=1
+            incidentId=11
+            sessionId=12
+            assessmentId=13
+            windowId=14
+            cause=Timeout
+            score=70
+            riskLevel=High
+            confidence=0.9
+            ruleSetVersion=rules-v1
+            validationPolicyVersion=policy-v1
+            gpsQuality=Good
+            occurredAtEpochMillis=1725000111000
+            createdAtElapsedRealtimeNanos=2000
+        """.trimIndent().toByteArray()
+        val legacyRequest = """
+            eventType=alert-dispatch-request
+            schemaVersion=1
+            requestId=15
+            incidentId=11
+            sessionId=12
+            assessmentId=13
+            priority=High
+            reason=Timeout
+            score=70
+            confidence=0.9
+            deliveryStatus=Pending
+            retryState=NotStarted
+            occurredAtEpochMillis=1725000111000
+            createdAtElapsedRealtimeNanos=2000
+        """.trimIndent().toByteArray()
+
+        val incident = (serializer.deserialize(legacyIncident) as OfflineSyncPayload.LocalIncidentPayload).payload
+        val request = (serializer.deserialize(legacyRequest) as OfflineSyncPayload.AlertDispatchRequestPayload).payload
+
+        assertNull(incident.clientIncidentId)
+        assertNull(incident.detectedAtEpochMillis)
+        assertNull(incident.latitude)
+        assertNull(incident.longitude)
+        assertNull(request.clientAlertRequestId)
+    }
+
+    @Test fun serializerPreservesAbsentAndPartialLocationsWithoutFabricatingCoordinates() {
+        val payloads = listOf(
+            LocalIncidentSyncPayload(1L, 2L, 3L, 4L, "Timeout", null, "High", 0.9, "rules", "policy", "Good", 1_000L, 2_000L, latitude = null, longitude = null),
+            LocalIncidentSyncPayload(5L, 2L, 3L, 4L, "Timeout", null, "High", 0.9, "rules", "policy", "Good", 1_000L, 2_000L, latitude = 19.4326, longitude = null),
+            LocalIncidentSyncPayload(6L, 2L, 3L, 4L, "Timeout", null, "High", 0.9, "rules", "policy", "Good", 1_000L, 2_000L, latitude = null, longitude = -99.1332)
+        )
+
+        payloads.forEach { payload ->
+            val decoded = (serializer.deserialize(serializer.serialize(OfflineSyncPayload.LocalIncidentPayload(payload))) as OfflineSyncPayload.LocalIncidentPayload).payload
+            assertEquals(payload.latitude, decoded.latitude)
+            assertEquals(payload.longitude, decoded.longitude)
+        }
+    }
+
     @Test fun serializerReturnsNullForCorruptOrUnknownPayloads() {
         assertNull(serializer.deserialize("eventType=unknown\nschemaVersion=1".toByteArray()))
         assertNull(serializer.deserialize("eventType=minor-event\nschemaVersion=99".toByteArray()))
