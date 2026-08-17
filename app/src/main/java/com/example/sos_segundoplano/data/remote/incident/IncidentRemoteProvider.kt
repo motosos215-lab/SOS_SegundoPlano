@@ -54,6 +54,9 @@ object IncidentRemoteProvider {
         }
     }
 
+    fun automaticSosAlertCreator(context: Context): AutomaticSosAlertCreator =
+        getAutomaticCreator(context.applicationContext)
+
     suspend fun requestManualSosAwait(context: Context): LocalIncident =
         getManualCoordinator(context.applicationContext).requestManualSos()
 

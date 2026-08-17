@@ -95,6 +95,31 @@ class AuthenticatedAutomaticSosAlertCreatorTest {
         assertEquals(IncidentRemoteCreationStatus.InvalidResponse("alert_not_prepared"), result.remoteCreationStatus)
     }
 
+    @Test fun recoveryInputReusesEveryDurableRequestValue() = runBlocking {
+        val remote = RecordingRemote(success())
+        val input = AutomaticSosRequestInput(
+            CLIENT_INCIDENT_ID, CLIENT_ALERT_ID, 1_722_513_600_000L,
+            19.4326, -99.1332, "trip-durable", IncidentCause.Timeout, RiskLevel.High, AlertPriority.High
+        )
+
+        val result = creator(remote).submit(input)
+
+        val sent = remote.requests.single()
+        assertEquals(CLIENT_INCIDENT_ID, sent.clientIncidentId)
+        assertEquals(CLIENT_ALERT_ID, sent.clientAlertRequestId)
+        assertEquals("trip-durable", sent.tripId)
+        assertEquals("2024-08-01T12:00:00Z", sent.detectedAtUtc)
+        assertEquals(19.4326, sent.latitude, 0.0)
+        assertEquals(-99.1332, sent.longitude, 0.0)
+        assertEquals(AutomaticSosSubmissionResult.Success("incident-1", "dispatch-1"), result)
+    }
+
+    @Test fun automaticSuccessRetainsRemoteAlertDispatchReceipt() = runBlocking {
+        val result = creator(RecordingRemote(success())).createAutomaticSosAlert(incident(IncidentCause.Timeout), request())
+
+        assertEquals("dispatch-1", result.remoteAlertDispatchId)
+    }
+
     private fun creator(
         remote: ManualSosAlertRemoteDataSource,
         locationProvider: ManualSosLocationProvider = ManualSosLocationProvider { location() }

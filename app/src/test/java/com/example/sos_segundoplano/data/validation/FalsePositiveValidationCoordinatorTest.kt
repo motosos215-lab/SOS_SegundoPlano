@@ -528,6 +528,30 @@ class FalsePositiveValidationCoordinatorTest {
         }
     }
 
+    @Test fun automaticNetworkFailureReleasesClaimForDurableRetry() = runTest {
+        val sink = RecordingAutomaticBundleSink()
+        val fixture = fixture(
+            offlineEventSink = sink,
+            automaticSosAlertCreator = RecordingAutomaticSosCreator(
+                location = location(),
+                status = IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable")
+            )
+        )
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-network")
+            runCurrent()
+
+            assertEquals(1, sink.releaseCalls)
+            assertEquals(false, sink.lastReleasePermanent)
+            assertTrue(fixture.incidents.items.value.isEmpty())
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
     @Test fun timeoutRemoteNetworkFailureKeepsLocalIncidentWithoutPublishingTerminalIncident() = runTest {
         val fixture = fixture(incidentRemoteCreator = FakeIncidentRemoteCreator(IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable")))
         try {
@@ -929,6 +953,8 @@ class FalsePositiveValidationCoordinatorTest {
         private val failUpdate: Boolean = false
     ) : OfflineEventSink {
         val updatedBundles = mutableListOf<Pair<LocalIncident, AlertDispatchRequest>>()
+        var releaseCalls = 0
+        var lastReleasePermanent: Boolean? = null
 
         override suspend fun enqueueMinorEvent(event: MinorEvent): OfflineQueueEnqueueResult = error("unused")
         override suspend fun enqueueIncident(incident: LocalIncident): OfflineQueueEnqueueResult = error("unused")
@@ -943,6 +969,42 @@ class FalsePositiveValidationCoordinatorTest {
             } else {
                 OfflineQueueEnqueueResult.PersistedAndScheduled(1L, "bundle")
             }
+        }
+
+        override suspend fun claimAutomaticSosBundle(
+            bundleKey: String,
+            workerId: String,
+            nowMillis: Long
+        ): com.example.sos_segundoplano.domain.offline.AutomaticSosBundleClaimResult {
+            val claim = com.example.sos_segundoplano.domain.offline.OfflineQueueClaim(1L, workerId, 1, nowMillis, "test-claim")
+            fun item(id: Long, type: com.example.sos_segundoplano.domain.offline.OfflineEventType) =
+                com.example.sos_segundoplano.domain.offline.ClaimedOfflineQueueItem(
+                    com.example.sos_segundoplano.domain.offline.OfflineQueueItem(
+                        id, "test-$id", type, 1, null, null, id.toString(), nowMillis, nowMillis, nowMillis,
+                        null, nowMillis, null, 1, com.example.sos_segundoplano.domain.offline.OfflineQueueStatus.InFlight,
+                        null, null, null, null, "rider", bundleKey
+                    ), byteArrayOf(1), byteArrayOf(2), 1, claim.copy(queueItemId = id)
+                )
+            return com.example.sos_segundoplano.domain.offline.AutomaticSosBundleClaimResult.Acquired(
+                com.example.sos_segundoplano.domain.offline.ClaimedAutomaticSosBundle("rider", bundleKey, item(1L, com.example.sos_segundoplano.domain.offline.OfflineEventType.LocalIncident), item(2L, com.example.sos_segundoplano.domain.offline.OfflineEventType.AlertDispatchRequest))
+            )
+        }
+
+        override suspend fun acknowledgeAutomaticSosBundle(
+            bundle: com.example.sos_segundoplano.domain.offline.ClaimedAutomaticSosBundle,
+            receipt: com.example.sos_segundoplano.domain.offline.AutomaticSosRemoteReceipt,
+            nowMillis: Long
+        ) = com.example.sos_segundoplano.domain.offline.OfflineQueueTransitionResult.Applied
+
+        override suspend fun releaseAutomaticSosBundle(
+            bundle: com.example.sos_segundoplano.domain.offline.ClaimedAutomaticSosBundle,
+            permanent: Boolean,
+            code: String,
+            nowMillis: Long
+        ): com.example.sos_segundoplano.domain.offline.OfflineQueueTransitionResult {
+            releaseCalls++
+            lastReleasePermanent = permanent
+            return com.example.sos_segundoplano.domain.offline.OfflineQueueTransitionResult.Applied
         }
     }
 
@@ -963,7 +1025,7 @@ class FalsePositiveValidationCoordinatorTest {
         override suspend fun createAutomaticSosAlert(incident: LocalIncident, request: AlertDispatchRequest): LocalIncident {
             submitted += incident to request
             return when (status) {
-                is IncidentRemoteCreationStatus.Success -> incident.copy(remoteIncidentId = status.incidentId, remoteCreationStatus = status)
+                is IncidentRemoteCreationStatus.Success -> incident.copy(remoteIncidentId = status.incidentId, remoteAlertDispatchId = "remote-dispatch-automatic", remoteCreationStatus = status)
                 else -> incident.copy(remoteCreationStatus = status)
             }
         }

@@ -3,7 +3,11 @@ package com.example.sos_segundoplano.data.offline
 import android.database.sqlite.SQLiteException
 import com.example.sos_segundoplano.domain.offline.ClaimedOfflineQueueItem
 import com.example.sos_segundoplano.domain.offline.OfflineQueueClaim
+import com.example.sos_segundoplano.domain.offline.AutomaticSosBundleClaimResult
+import com.example.sos_segundoplano.domain.offline.AutomaticSosRemoteReceipt
+import com.example.sos_segundoplano.domain.offline.ClaimedAutomaticSosBundle
 import com.example.sos_segundoplano.domain.offline.OfflineQueueConfig
+import com.example.sos_segundoplano.domain.offline.OfflineQueuePolicy
 import com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult
 import com.example.sos_segundoplano.domain.offline.OfflineQueueRepository
 import com.example.sos_segundoplano.domain.offline.OfflineQueueStatus
@@ -136,9 +140,72 @@ class RoomOfflineQueueRepository(
         queueDao.recoverableBundleKeysForOwner(ownerUserId)
     }
 
+    /** F.5C3 can reconcile trip finalization from these already acknowledged automatic bundles. */
+    suspend fun remotelyConfirmedAutomaticBundleKeysForCurrentRider(): List<String> = withContext(dispatcher) {
+        val ownerUserId = currentRiderOwnerId()?.trim()?.takeIf { it.isNotEmpty() } ?: return@withContext emptyList()
+        queueDao.confirmedAutomaticBundleKeysForOwner(ownerUserId)
+    }
+
+    suspend fun earliestAutomaticSosRetryForCurrentRider(): Long? = withContext(dispatcher) {
+        val ownerUserId = currentRiderOwnerId()?.trim()?.takeIf { it.isNotEmpty() } ?: return@withContext null
+        queueDao.earliestAutomaticBundleRetryForOwner(ownerUserId)
+    }
+
     override suspend fun recoverableIncidentBundleForCurrentRider(bundleKey: String): RecoverableOfflineIncidentBundle? = withContext(dispatcher) {
         val ownerUserId = currentRiderOwnerId()?.trim()?.takeIf { it.isNotEmpty() } ?: return@withContext null
         recoverableIncidentBundle(ownerUserId, bundleKey)
+    }
+
+    override suspend fun claimAutomaticSosBundle(bundleKey: String, workerId: String, nowMillis: Long): AutomaticSosBundleClaimResult = withContext(dispatcher) {
+        val owner = currentRiderOwnerId()?.trim()?.takeIf { it.isNotEmpty() } ?: return@withContext AutomaticSosBundleClaimResult.BusyOrUnavailable
+        claimedAutomaticBundle(owner, bundleKey, workerId, nowMillis)
+    }
+
+    suspend fun claimNextAutomaticSosBundle(workerId: String, nowMillis: Long): AutomaticSosBundleClaimResult = withContext(dispatcher) {
+        val owner = currentRiderOwnerId()?.trim()?.takeIf { it.isNotEmpty() } ?: return@withContext AutomaticSosBundleClaimResult.BusyOrUnavailable
+        val rows = queueDao.claimNextAutomaticBundle(owner, workerId, nowMillis)
+        mapClaimedAutomaticBundle(owner, rows)
+    }
+
+    private suspend fun claimedAutomaticBundle(owner: String, bundleKey: String, workerId: String, nowMillis: Long): AutomaticSosBundleClaimResult {
+        val key = bundleKey.trim().takeIf { it.isNotEmpty() } ?: return AutomaticSosBundleClaimResult.NotRecoverable
+        return mapClaimedAutomaticBundle(owner, queueDao.claimAutomaticBundle(owner, key, workerId, nowMillis))
+    }
+
+    private fun mapClaimedAutomaticBundle(owner: String, rows: List<OfflineQueueEntity>): AutomaticSosBundleClaimResult {
+        if (rows.isEmpty()) return AutomaticSosBundleClaimResult.BusyOrUnavailable
+        if (rows.size != 2 || rows.any { it.ownerUserId != owner || it.bundleKey.isNullOrBlank() }) return AutomaticSosBundleClaimResult.NotRecoverable
+        val claimed = rows.map { (it.toClaimedDomainResult() as? ClaimedOfflineQueueMappingResult.Success)?.item }
+        val incident = claimed.filterNotNull().singleOrNull { it.item.eventType == com.example.sos_segundoplano.domain.offline.OfflineEventType.LocalIncident }
+        val request = claimed.filterNotNull().singleOrNull { it.item.eventType == com.example.sos_segundoplano.domain.offline.OfflineEventType.AlertDispatchRequest }
+        return if (incident == null || request == null) AutomaticSosBundleClaimResult.NotRecoverable else AutomaticSosBundleClaimResult.Acquired(
+            ClaimedAutomaticSosBundle(owner, rows.first().bundleKey.orEmpty(), incident, request)
+        )
+    }
+
+    override suspend fun acknowledgeAutomaticSosBundle(bundle: ClaimedAutomaticSosBundle, receipt: AutomaticSosRemoteReceipt, nowMillis: Long): OfflineQueueTransitionResult = withContext(dispatcher) {
+        if (receipt.remoteIncidentId.isBlank() || receipt.remoteAlertDispatchId.isBlank()) return@withContext OfflineQueueTransitionResult.InvalidAcknowledgement
+        val token = bundle.incident.claim.claimToken
+        if (token != bundle.request.claim.claimToken || bundle.incident.claim.claimedBy != bundle.request.claim.claimedBy) return@withContext OfflineQueueTransitionResult.StaleClaim
+        if (queueDao.acknowledgeAutomaticBundleAtomically(bundle.ownerUserId, bundle.bundleKey, bundle.incident.claim.claimedBy, token, receipt.remoteIncidentId, receipt.remoteAlertDispatchId, nowMillis)) {
+            OfflineQueueTransitionResult.Applied
+        } else OfflineQueueTransitionResult.StaleClaim
+    }
+
+    override suspend fun releaseAutomaticSosBundle(
+        bundle: ClaimedAutomaticSosBundle,
+        permanent: Boolean,
+        code: String,
+        nowMillis: Long
+    ): OfflineQueueTransitionResult = withContext(dispatcher) {
+        val status = if (permanent) OfflineQueueStatus.FailedPermanent.name else OfflineQueueStatus.RetryPending.name
+        val nextAttempt = if (permanent) null else OfflineQueuePolicy(config).nextRetryAt(nowMillis, bundle.incident.item.attemptCount, null)
+        val updated = queueDao.releaseAutomaticBundle(
+            bundle.ownerUserId, bundle.bundleKey, bundle.incident.claim.claimedBy, bundle.incident.claim.claimToken,
+            status, if (permanent) OfflineSyncErrorCategory.Serialization.name else OfflineSyncErrorCategory.Transport.name,
+            sanitize(code).orEmpty(), "automatic_sos_bundle_$code", nextAttempt, nowMillis
+        )
+        if (updated == 2) OfflineQueueTransitionResult.Applied else OfflineQueueTransitionResult.StaleClaim
     }
 
     private suspend fun recoverableIncidentBundle(

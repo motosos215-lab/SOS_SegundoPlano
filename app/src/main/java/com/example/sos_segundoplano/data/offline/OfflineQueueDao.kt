@@ -56,6 +56,12 @@ interface OfflineQueueDao {
     )
     suspend fun recoverableBundleKeysForOwner(ownerUserId: String): List<String>
 
+    @Query(
+        "SELECT DISTINCT bundleKey FROM offline_queue_items WHERE ownerUserId = :ownerUserId AND bundleKey IS NOT NULL " +
+            "AND eventType = 'local-incident' AND status = 'Sent' AND remoteIncidentId IS NOT NULL AND remoteSuccessAtEpochMillis IS NOT NULL"
+    )
+    suspend fun confirmedAutomaticBundleKeysForOwner(ownerUserId: String): List<String>
+
     @Query("SELECT * FROM offline_queue_items WHERE queueItemId = :queueItemId")
     suspend fun getById(queueItemId: Long): OfflineQueueEntity?
 
@@ -65,6 +71,7 @@ interface OfflineQueueDao {
     @Query(
         "SELECT * FROM offline_queue_items " +
             "WHERE status IN (:readyStatuses) AND (nextAttemptAtEpochMillis IS NULL OR nextAttemptAtEpochMillis <= :nowMillis) " +
+            "AND NOT (ownerUserId IS NOT NULL AND bundleKey IS NOT NULL AND eventType IN ('local-incident', 'alert-dispatch-request')) " +
             "ORDER BY priority ASC, occurredAtEpochMillis ASC, queueItemId ASC LIMIT :limit"
     )
     suspend fun readyCandidates(readyStatuses: List<String>, nowMillis: Long, limit: Int): List<OfflineQueueEntity>
@@ -85,6 +92,77 @@ interface OfflineQueueDao {
 
     @Query("SELECT * FROM offline_queue_items WHERE queueItemId IN (:ids) AND status = :inFlightStatus AND claimedBy = :workerId AND claimToken = :claimToken ORDER BY priority ASC, occurredAtEpochMillis ASC, queueItemId ASC")
     suspend fun claimedByWorker(ids: List<Long>, inFlightStatus: String, workerId: String, claimToken: String): List<OfflineQueueEntity>
+
+    @Query(
+        "SELECT bundleKey FROM offline_queue_items WHERE ownerUserId = :ownerUserId AND bundleKey IS NOT NULL " +
+            "AND status IN ('Pending', 'RetryPending', 'PausedNotConfigured') " +
+            "AND (nextAttemptAtEpochMillis IS NULL OR nextAttemptAtEpochMillis <= :nowMillis) " +
+            "AND eventType IN ('local-incident', 'alert-dispatch-request') " +
+            "GROUP BY bundleKey HAVING COUNT(*) = 2 AND COUNT(DISTINCT eventType) = 2 ORDER BY MIN(occurredAtEpochMillis) ASC LIMIT 1"
+    )
+    suspend fun nextAutomaticBundleKey(ownerUserId: String, nowMillis: Long): String?
+
+    @Query(
+        "SELECT MIN(nextAttemptAtEpochMillis) FROM offline_queue_items WHERE ownerUserId = :ownerUserId " +
+            "AND bundleKey IS NOT NULL AND status = 'RetryPending' AND nextAttemptAtEpochMillis IS NOT NULL " +
+            "AND eventType IN ('local-incident', 'alert-dispatch-request') AND bundleKey IN (" +
+            "SELECT bundleKey FROM offline_queue_items WHERE ownerUserId = :ownerUserId AND bundleKey IS NOT NULL " +
+            "AND status = 'RetryPending' AND eventType IN ('local-incident', 'alert-dispatch-request') " +
+            "GROUP BY bundleKey HAVING COUNT(*) = 2 AND COUNT(DISTINCT eventType) = 2)"
+    )
+    suspend fun earliestAutomaticBundleRetryForOwner(ownerUserId: String): Long?
+
+    @Query(
+        "UPDATE offline_queue_items SET status = 'InFlight', claimedAtEpochMillis = :nowMillis, claimedBy = :workerId, " +
+            "attemptCount = attemptCount + 1, updatedAtEpochMillis = :nowMillis, lastAttemptAtEpochMillis = :nowMillis, " +
+            "nextAttemptAtEpochMillis = NULL, claimToken = :claimToken " +
+            "WHERE ownerUserId = :ownerUserId AND bundleKey = :bundleKey AND eventType IN ('local-incident', 'alert-dispatch-request') " +
+            "AND status IN ('Pending', 'RetryPending', 'PausedNotConfigured') " +
+            "AND (nextAttemptAtEpochMillis IS NULL OR nextAttemptAtEpochMillis <= :nowMillis)"
+    )
+    suspend fun claimAutomaticBundleRows(ownerUserId: String, bundleKey: String, workerId: String, claimToken: String, nowMillis: Long): Int
+
+    @Query(
+        "SELECT * FROM offline_queue_items WHERE ownerUserId = :ownerUserId AND bundleKey = :bundleKey AND status = 'InFlight' " +
+            "AND claimedBy = :workerId AND claimToken = :claimToken ORDER BY queueItemId ASC"
+    )
+    suspend fun claimedAutomaticBundleRows(ownerUserId: String, bundleKey: String, workerId: String, claimToken: String): List<OfflineQueueEntity>
+
+    @Transaction
+    suspend fun claimAutomaticBundle(ownerUserId: String, bundleKey: String, workerId: String, nowMillis: Long): List<OfflineQueueEntity> {
+        val token = "$workerId-$nowMillis-$bundleKey"
+        if (claimAutomaticBundleRows(ownerUserId, bundleKey, workerId, token, nowMillis) != 2) return emptyList()
+        val rows = claimedAutomaticBundleRows(ownerUserId, bundleKey, workerId, token)
+        return if (rows.size == 2 && rows.map { it.eventType }.toSet() == setOf("local-incident", "alert-dispatch-request")) rows else emptyList()
+    }
+
+    @Transaction
+    suspend fun claimNextAutomaticBundle(ownerUserId: String, workerId: String, nowMillis: Long): List<OfflineQueueEntity> {
+        val bundleKey = nextAutomaticBundleKey(ownerUserId, nowMillis) ?: return emptyList()
+        return claimAutomaticBundle(ownerUserId, bundleKey, workerId, nowMillis)
+    }
+
+    @Query(
+        "UPDATE offline_queue_items SET status = 'Sent', sentAtEpochMillis = COALESCE(sentAtEpochMillis, :nowMillis), updatedAtEpochMillis = :nowMillis, " +
+            "claimedAtEpochMillis = NULL, claimedBy = NULL, claimToken = NULL, lastErrorCategory = NULL, lastErrorCode = NULL, " +
+            "lastErrorMessageSanitized = NULL, ackSanitized = 'automatic_sos_ack', " +
+            "remoteIncidentId = :remoteIncidentId, remoteAlertDispatchId = :remoteAlertDispatchId, remoteSuccessAtEpochMillis = :nowMillis " +
+            "WHERE ownerUserId = :ownerUserId AND bundleKey = :bundleKey AND eventType IN ('local-incident', 'alert-dispatch-request') " +
+            "AND status = 'InFlight' AND claimedBy = :workerId AND claimToken = :claimToken"
+    )
+    suspend fun acknowledgeAutomaticBundle(ownerUserId: String, bundleKey: String, workerId: String, claimToken: String, remoteIncidentId: String, remoteAlertDispatchId: String, nowMillis: Long): Int
+
+    @Transaction
+    suspend fun acknowledgeAutomaticBundleAtomically(ownerUserId: String, bundleKey: String, workerId: String, claimToken: String, remoteIncidentId: String, remoteAlertDispatchId: String, nowMillis: Long): Boolean =
+        acknowledgeAutomaticBundle(ownerUserId, bundleKey, workerId, claimToken, remoteIncidentId, remoteAlertDispatchId, nowMillis) == 2
+
+    @Query(
+        "UPDATE offline_queue_items SET status = :status, nextAttemptAtEpochMillis = :nextAttemptAtMillis, updatedAtEpochMillis = :nowMillis, " +
+            "claimedAtEpochMillis = NULL, claimedBy = NULL, claimToken = NULL, lastErrorCategory = :category, lastErrorCode = :code, lastErrorMessageSanitized = :message " +
+            "WHERE ownerUserId = :ownerUserId AND bundleKey = :bundleKey AND eventType IN ('local-incident', 'alert-dispatch-request') " +
+            "AND status = 'InFlight' AND claimedBy = :workerId AND claimToken = :claimToken"
+    )
+    suspend fun releaseAutomaticBundle(ownerUserId: String, bundleKey: String, workerId: String, claimToken: String, status: String, category: String, code: String, message: String, nextAttemptAtMillis: Long?, nowMillis: Long): Int
 
     @Transaction
     suspend fun claimReadyBatch(workerId: String, nowMillis: Long, limit: Int): List<OfflineQueueEntity> {
@@ -139,16 +217,16 @@ interface OfflineQueueDao {
     )
     suspend fun recoverAbandoned(abandonedBeforeMillis: Long, nowMillis: Long): Int
 
-    @Query("SELECT MIN(nextAttemptAtEpochMillis) FROM offline_queue_items WHERE status IN ('Pending', 'RetryPending', 'PausedNotConfigured') AND nextAttemptAtEpochMillis IS NOT NULL")
+    @Query("SELECT MIN(nextAttemptAtEpochMillis) FROM offline_queue_items WHERE status IN ('Pending', 'RetryPending', 'PausedNotConfigured') AND nextAttemptAtEpochMillis IS NOT NULL AND NOT (ownerUserId IS NOT NULL AND bundleKey IS NOT NULL AND eventType IN ('local-incident', 'alert-dispatch-request'))")
     suspend fun earliestPendingAttemptAt(): Long?
 
-    @Query("SELECT COUNT(*) FROM offline_queue_items WHERE status IN ('Pending', 'RetryPending', 'PausedNotConfigured') AND (nextAttemptAtEpochMillis IS NULL OR nextAttemptAtEpochMillis <= :nowMillis)")
+    @Query("SELECT COUNT(*) FROM offline_queue_items WHERE status IN ('Pending', 'RetryPending', 'PausedNotConfigured') AND (nextAttemptAtEpochMillis IS NULL OR nextAttemptAtEpochMillis <= :nowMillis) AND NOT (ownerUserId IS NOT NULL AND bundleKey IS NOT NULL AND eventType IN ('local-incident', 'alert-dispatch-request'))")
     suspend fun countReadyPending(nowMillis: Long): Int
 
     @Query("DELETE FROM offline_queue_items WHERE status = 'Sent' AND sentAtEpochMillis IS NOT NULL AND sentAtEpochMillis < :cutoffEpochMillis")
     suspend fun deleteSentBefore(cutoffEpochMillis: Long): Int
 
-    @Query("SELECT COUNT(*) FROM offline_queue_items WHERE status IN ('Pending', 'RetryPending', 'InFlight', 'PausedNotConfigured')")
+    @Query("SELECT COUNT(*) FROM offline_queue_items WHERE status IN ('Pending', 'RetryPending', 'InFlight', 'PausedNotConfigured') AND NOT (ownerUserId IS NOT NULL AND bundleKey IS NOT NULL AND eventType IN ('local-incident', 'alert-dispatch-request'))")
     suspend fun countUnfinished(): Int
 
     @Query("SELECT status, COUNT(*) AS count FROM offline_queue_items GROUP BY status")

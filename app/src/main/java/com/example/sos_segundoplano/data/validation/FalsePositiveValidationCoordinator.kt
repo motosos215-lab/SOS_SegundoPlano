@@ -8,6 +8,9 @@ import com.example.sos_segundoplano.data.remote.incident.AutomaticSosAlertCreato
 import com.example.sos_segundoplano.data.remote.incident.NoOpAutomaticSosAlertCreator
 import com.example.sos_segundoplano.domain.offline.NoOpOfflineEventSink
 import com.example.sos_segundoplano.domain.offline.OfflineEventSink
+import com.example.sos_segundoplano.domain.offline.AutomaticSosBundleClaimResult
+import com.example.sos_segundoplano.domain.offline.AutomaticSosRemoteReceipt
+import com.example.sos_segundoplano.domain.offline.OfflineQueueTransitionResult
 import com.example.sos_segundoplano.domain.offline.isPersisted
 import com.example.sos_segundoplano.domain.rules.MovementContinuityState
 import com.example.sos_segundoplano.domain.rules.RiskAssessment
@@ -509,10 +512,54 @@ class FalsePositiveValidationCoordinator(
         }
         AutoIncidentDiagnostics.remoteCreateStarted()
         val incident = if (automatic) {
-            automaticSosAlertCreator.createAutomaticSosAlert(
+            val bundleKey = tripPreparedEvent.incident.clientIncidentId
+            val claim = bundleKey?.let {
+                offlineEventSink.claimAutomaticSosBundle(it, "coordinator-${tripPreparedEvent.key.assessmentId}", nowEpochMillis())
+            } ?: AutomaticSosBundleClaimResult.NotRecoverable
+            val acquired = (claim as? AutomaticSosBundleClaimResult.Acquired)?.bundle
+            if (acquired == null) {
+                AutoIncidentDiagnostics.bundleClaim(if (claim == AutomaticSosBundleClaimResult.BusyOrUnavailable) "busy" else "invalid")
+                publishRemoteFailureForRetry(tripPreparedEvent, tripPreparedEvent.incident.copy(
+                    remoteCreationStatus = IncidentRemoteCreationStatus.InvalidResponse("offline_bundle_claim_unavailable")
+                ))
+                return
+            }
+            AutoIncidentDiagnostics.bundleClaim("acquired")
+            val submitted = automaticSosAlertCreator.createAutomaticSosAlert(
                 tripPreparedEvent.incident.copy(remoteCreationStatus = IncidentRemoteCreationStatus.Pending),
                 tripPreparedEvent.request
             )
+            val status = submitted.remoteCreationStatus
+            val receipt = if (status is IncidentRemoteCreationStatus.Success) {
+                submitted.remoteIncidentId?.takeIf { it.isNotBlank() }?.let { remoteIncidentId ->
+                    submitted.remoteAlertDispatchId?.takeIf { it.isNotBlank() }?.let { remoteAlertDispatchId ->
+                        AutomaticSosRemoteReceipt(remoteIncidentId, remoteAlertDispatchId)
+                    }
+                }
+            } else null
+            if (status !is IncidentRemoteCreationStatus.Success) {
+                val permanent = status.isPermanentAutomaticSosFailure()
+                val released = offlineEventSink.releaseAutomaticSosBundle(
+                    acquired,
+                    permanent = permanent,
+                    code = "remote_submission_failed",
+                    nowMillis = nowEpochMillis()
+                )
+                AutoIncidentDiagnostics.bundleRelease(if (released == OfflineQueueTransitionResult.Applied) if (permanent) "permanent" else "retry" else "failure")
+                publishRemoteFailureForRetry(tripPreparedEvent, submitted)
+                return
+            }
+            if (receipt == null || offlineEventSink.acknowledgeAutomaticSosBundle(acquired, receipt, nowEpochMillis()) != OfflineQueueTransitionResult.Applied) {
+                if (receipt == null) {
+                    val released = offlineEventSink.releaseAutomaticSosBundle(acquired, permanent = false, code = "receipt_missing", nowMillis = nowEpochMillis())
+                    AutoIncidentDiagnostics.bundleRelease(if (released == OfflineQueueTransitionResult.Applied) "retry" else "failure")
+                }
+                publishRemoteFailureForRetry(tripPreparedEvent, submitted.copy(
+                    remoteCreationStatus = IncidentRemoteCreationStatus.InvalidResponse("offline_receipt_persistence_failed")
+                ))
+                return
+            }
+            submitted
         } else {
             createRemoteIncidentOnce(tripPreparedEvent)
         }
@@ -590,6 +637,12 @@ class FalsePositiveValidationCoordinator(
         IncidentCause.UserRequestedHelp,
         IncidentCause.CriticalPhysicalEvent -> true
         IncidentCause.ManualSos -> false
+    }
+
+    private fun IncidentRemoteCreationStatus.isPermanentAutomaticSosFailure(): Boolean = when (this) {
+        is IncidentRemoteCreationStatus.MissingRequiredData -> true
+        is IncidentRemoteCreationStatus.HttpError -> statusCode in 400..499 && statusCode !in setOf(401, 408, 429)
+        else -> false
     }
 
     private suspend fun publishPersistenceError(key: AssessmentIdentifier, metadata: ValidationMetadata) {

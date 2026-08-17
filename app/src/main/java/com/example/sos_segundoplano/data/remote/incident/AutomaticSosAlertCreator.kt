@@ -29,6 +29,27 @@ interface AutomaticSosAlertCreator {
     /** Resolves the trip before submission so the coordinator can durably persist it first. */
     suspend fun resolveRemoteTrip(incident: LocalIncident): LocalIncident = incident
     suspend fun createAutomaticSosAlert(incident: LocalIncident, request: AlertDispatchRequest): LocalIncident
+    /** Shared online/recovery submission seam. Inputs are already durable and must never be regenerated. */
+    suspend fun submit(input: AutomaticSosRequestInput): AutomaticSosSubmissionResult =
+        AutomaticSosSubmissionResult.NotConfigured
+}
+
+data class AutomaticSosRequestInput(
+    val clientIncidentId: String,
+    val clientAlertRequestId: String,
+    val detectedAtEpochMillis: Long,
+    val latitude: Double,
+    val longitude: Double,
+    val remoteTripId: String,
+    val cause: IncidentCause,
+    val riskLevel: RiskLevel,
+    val priority: AlertPriority
+)
+
+sealed interface AutomaticSosSubmissionResult {
+    data class Success(val remoteIncidentId: String, val remoteAlertDispatchId: String) : AutomaticSosSubmissionResult
+    data class Failure(val status: IncidentRemoteCreationStatus) : AutomaticSosSubmissionResult
+    data object NotConfigured : AutomaticSosSubmissionResult
 }
 
 object NoOpAutomaticSosAlertCreator : AutomaticSosAlertCreator {
@@ -92,37 +113,43 @@ class AuthenticatedAutomaticSosAlertCreator(
             ?: resolveRemoteTrip(incident).remoteTripId.normalized()
             ?: return incident.failed(IncidentRemoteCreationStatus.MissingRequiredData("active_remote_trip_missing"))
         AutoIncidentDiagnostics.remoteContext(remoteTripPresent = true, locationPresent = true)
-        val requestDto = incident.toRequest(
-            tripId = remoteTripId,
-            clientIncidentId = clientIncidentId,
-            clientAlertRequestId = clientAlertRequestId,
-            detectedAtUtc = Instant.ofEpochMilli(detectedAtEpochMillis).toString(),
-            latitude = latitude,
-            longitude = longitude,
-            priority = request.priority
-        ) ?: return incident.failed(IncidentRemoteCreationStatus.MissingRequiredData("automatic_sos_mapping_missing"))
+        val input = AutomaticSosRequestInput(clientIncidentId, clientAlertRequestId, detectedAtEpochMillis, latitude, longitude, remoteTripId, incident.cause, incident.riskLevel, request.priority)
+        return when (val submission = submit(input)) {
+            is AutomaticSosSubmissionResult.Success -> incident.copy(
+                remoteTripId = remoteTripId,
+                remoteIncidentId = submission.remoteIncidentId,
+                remoteAlertDispatchId = submission.remoteAlertDispatchId,
+                remoteCreationStatus = IncidentRemoteCreationStatus.Success(submission.remoteIncidentId)
+            )
+            is AutomaticSosSubmissionResult.Failure -> incident.copy(remoteTripId = remoteTripId).failed(submission.status)
+            AutomaticSosSubmissionResult.NotConfigured -> incident.copy(remoteTripId = remoteTripId).failed(IncidentRemoteCreationStatus.InvalidResponse("automatic_sos_not_configured"))
+        }
+    }
+
+    override suspend fun submit(input: AutomaticSosRequestInput): AutomaticSosSubmissionResult {
+        if (input.clientIncidentId.validUuid() == null || input.clientAlertRequestId.validUuid() == null || input.remoteTripId.normalized() == null) {
+            return AutomaticSosSubmissionResult.Failure(IncidentRemoteCreationStatus.MissingRequiredData("automatic_sos_identity_missing"))
+        }
+        if (!input.latitude.isFinite() || !input.longitude.isFinite() || input.latitude !in -90.0..90.0 || input.longitude !in -180.0..180.0 || (input.latitude == 0.0 && input.longitude == 0.0)) {
+            return AutomaticSosSubmissionResult.Failure(IncidentRemoteCreationStatus.MissingRequiredData("location_unavailable"))
+        }
+        val requestDto = input.toRequest() ?: return AutomaticSosSubmissionResult.Failure(IncidentRemoteCreationStatus.MissingRequiredData("automatic_sos_mapping_missing"))
         val token = when (val auth = authRepository.ensureValidAccessToken()) {
             is AuthResult.Success -> auth.value.reveal()
-            is AuthFailure -> return incident.copy(remoteTripId = remoteTripId).failed(auth.toRemoteStatus())
+            is AuthFailure -> return AutomaticSosSubmissionResult.Failure(auth.toRemoteStatus())
         }
         AutoIncidentDiagnostics.mobileSosStarted()
         val status = retryOnceAfterUnauthorized(remoteDataSource.createManualSosAlert("Bearer $token", requestDto), requestDto)
         return when (status) {
             is ManualSosAlertSubmissionStatus.Success -> {
                 if (!status.hasPreparedAttempt()) {
-                    incident.copy(remoteTripId = remoteTripId).failed(
-                        IncidentRemoteCreationStatus.InvalidResponse("alert_not_prepared")
-                    )
+                    AutomaticSosSubmissionResult.Failure(IncidentRemoteCreationStatus.InvalidResponse("alert_not_prepared"))
                 } else {
                     AutoIncidentDiagnostics.mobileSosSuccess(status.summary)
-                    incident.copy(
-                        remoteTripId = remoteTripId,
-                        remoteIncidentId = status.remoteIncidentId,
-                        remoteCreationStatus = IncidentRemoteCreationStatus.Success(status.remoteIncidentId)
-                    )
+                    AutomaticSosSubmissionResult.Success(status.remoteIncidentId, status.remoteAlertDispatchId)
                 }
             }
-            else -> incident.copy(remoteTripId = remoteTripId).failed(status.toRemoteStatus())
+            else -> AutomaticSosSubmissionResult.Failure(status.toRemoteStatus())
         }
     }
 
@@ -157,15 +184,7 @@ class AuthenticatedAutomaticSosAlertCreator(
         return remoteDataSource.createManualSosAlert("Bearer $token", request)
     }
 
-    private fun LocalIncident.toRequest(
-        tripId: String,
-        clientIncidentId: String,
-        clientAlertRequestId: String,
-        detectedAtUtc: String,
-        latitude: Double,
-        longitude: Double,
-        priority: AlertPriority
-    ): ManualSosAlertRequestDto? {
+    private fun AutomaticSosRequestInput.toRequest(): ManualSosAlertRequestDto? {
         val type = when (cause) {
             IncidentCause.Timeout -> MobileSosIncidentType.CountdownTimeout
             IncidentCause.UserRequestedHelp -> MobileSosIncidentType.UserRequestedHelp
@@ -179,12 +198,12 @@ class AuthenticatedAutomaticSosAlertCreator(
             IncidentCause.ManualSos -> return null
         }
         return ManualSosAlertRequestDto(
-            tripId = tripId,
+            tripId = remoteTripId,
             clientIncidentId = clientIncidentId,
             clientAlertRequestId = clientAlertRequestId,
             incidentType = type.apiValue,
             severity = riskLevel.toSeverity().apiValue,
-            detectedAtUtc = detectedAtUtc,
+            detectedAtUtc = Instant.ofEpochMilli(detectedAtEpochMillis).toString(),
             latitude = latitude,
             longitude = longitude,
             priority = priority.toMobilePriority().apiValue,

@@ -2,6 +2,7 @@ package com.example.sos_segundoplano.data.offline
 
 import android.content.Context
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationCoordinatorProvider
+import com.example.sos_segundoplano.data.remote.incident.IncidentRemoteProvider
 import com.example.sos_segundoplano.core.auth.AuthProvider
 import com.example.sos_segundoplano.domain.auth.SessionState
 import com.example.sos_segundoplano.domain.auth.UserRole
@@ -11,6 +12,11 @@ import com.example.sos_segundoplano.domain.offline.OfflineQueueConfig
 import com.example.sos_segundoplano.domain.offline.OfflineQueuePolicy
 import com.example.sos_segundoplano.domain.offline.SystemWallClock
 import com.example.sos_segundoplano.domain.offline.WallClock
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 
 class OfflineQueueDependencies(
     val database: OfflineQueueDatabase,
@@ -20,7 +26,8 @@ class OfflineQueueDependencies(
     val policy: OfflineQueuePolicy,
     val clock: WallClock,
     val config: OfflineQueueConfig,
-    val processor: OfflineQueueSyncProcessor
+    val processor: OfflineQueueSyncProcessor,
+    val automaticSosProcessor: AutomaticSosBundleRecoveryProcessor
 )
 
 private enum class DependencyOwnership { ProductionOwned, TestOwned }
@@ -33,11 +40,14 @@ private data class InstalledOfflineQueueDependencies(
 object OfflineQueueProvider {
     @Volatile private var installed: InstalledOfflineQueueDependencies? = null
     @Volatile private var lastInitializationScheduleResult: ScheduleResult? = null
+    private val schedulingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    @Volatile private var riderSchedulingObserverInstalled = false
 
     fun initialize(context: Context): OfflineQueueDependencies {
         val deps = get(context)
         FalsePositiveValidationCoordinatorProvider.setOfflineEventSink(deps.repository)
         lastInitializationScheduleResult = deps.repository.scheduleImmediateSyncSafely()
+        installRiderSchedulingObserver(context.applicationContext, deps)
         return deps
     }
 
@@ -102,7 +112,30 @@ object OfflineQueueProvider {
             policy = policy,
             clock = clock,
             config = config,
-            processor = OfflineQueueSyncProcessor(repository, transport, policy, clock, config)
+            processor = OfflineQueueSyncProcessor(repository, transport, policy, clock, config),
+            automaticSosProcessor = AutomaticSosBundleRecoveryProcessor(
+                repository,
+                IncidentRemoteProvider.automaticSosAlertCreator(context),
+                clock
+            )
         )
+    }
+
+    private fun installRiderSchedulingObserver(context: Context, deps: OfflineQueueDependencies) {
+        if (riderSchedulingObserverInstalled) return
+        synchronized(this) {
+            if (riderSchedulingObserverInstalled) return
+            riderSchedulingObserverInstalled = true
+            schedulingScope.launch {
+                AuthProvider.get(context).observeSession().collect { session ->
+                    val rider = when (session) {
+                        is SessionState.Authenticated -> session.user.role == UserRole.Rider
+                        is SessionState.Refreshing -> session.user.role == UserRole.Rider
+                        else -> false
+                    }
+                    if (rider) deps.repository.scheduleImmediateSyncSafely()
+                }
+            }
+        }
     }
 }

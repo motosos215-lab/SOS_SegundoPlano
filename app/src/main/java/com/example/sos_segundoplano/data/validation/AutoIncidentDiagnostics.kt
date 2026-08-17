@@ -58,6 +58,30 @@ object AutoIncidentDiagnostics {
         debug("event=auto_incident_remote_create_started")
     }
 
+    fun bundleClaim(result: String) {
+        debug("event=auto_incident_bundle_claim result=${safeType(result)}")
+    }
+
+    fun bundleRelease(result: String) {
+        debug("event=auto_incident_bundle_release result=${safeType(result)}")
+    }
+
+    fun retryScheduled(result: String) {
+        debug("event=auto_incident_retry_scheduled result=${safeType(result)}")
+    }
+
+    fun recoveryStarted() {
+        debug("event=auto_incident_recovery_started")
+    }
+
+    fun receiptPersistResult(result: String) {
+        debug("event=auto_incident_receipt_persist_result result=${safeType(result)}")
+    }
+
+    fun recoveryResult(result: String) {
+        debug("event=auto_incident_recovery_result result=${safeType(result)}")
+    }
+
     fun remoteCreateResult(status: IncidentRemoteCreationStatus) {
         val message = when (status) {
             is IncidentRemoteCreationStatus.Success -> "event=auto_incident_mobile_sos_result result=success"

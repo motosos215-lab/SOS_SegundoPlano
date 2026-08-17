@@ -79,6 +79,25 @@ data class RecoverableOfflineIncidentBundle(
     val request: OfflineQueueItem
 )
 
+/** Two queue rows that have been durably claimed as one automatic SOS operation. */
+data class ClaimedAutomaticSosBundle(
+    val ownerUserId: String,
+    val bundleKey: String,
+    val incident: ClaimedOfflineQueueItem,
+    val request: ClaimedOfflineQueueItem
+)
+
+data class AutomaticSosRemoteReceipt(
+    val remoteIncidentId: String,
+    val remoteAlertDispatchId: String
+)
+
+sealed interface AutomaticSosBundleClaimResult {
+    data class Acquired(val bundle: ClaimedAutomaticSosBundle) : AutomaticSosBundleClaimResult
+    data object BusyOrUnavailable : AutomaticSosBundleClaimResult
+    data object NotRecoverable : AutomaticSosBundleClaimResult
+}
+
 data class ClaimedOfflineQueueItem(
     val item: OfflineQueueItem,
     val encryptedPayload: ByteArray,

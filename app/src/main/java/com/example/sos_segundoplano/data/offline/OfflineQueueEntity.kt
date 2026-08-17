@@ -29,6 +29,10 @@ data class OfflineQueueEntity(
     val ownerUserId: String? = null,
     /** Stable identity shared by the two rows of a recoverable automatic SOS bundle. */
     val bundleKey: String? = null,
+    /** Canonical receipt fields for an automatic SOS bundle. Null until the remote POST is acknowledged. */
+    val remoteIncidentId: String? = null,
+    val remoteAlertDispatchId: String? = null,
+    val remoteSuccessAtEpochMillis: Long? = null,
     val sourceSessionId: Long?,
     val sourceAssessmentId: Long?,
     val sourceEventId: String,

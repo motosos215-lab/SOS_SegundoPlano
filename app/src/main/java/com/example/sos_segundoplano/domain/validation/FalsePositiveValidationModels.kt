@@ -158,6 +158,7 @@ data class LocalIncident(
     val remoteTripId: String? = null,
     val clientIncidentId: String? = null,
     val remoteIncidentId: String? = null,
+    val remoteAlertDispatchId: String? = null,
     val remoteCreationStatus: IncidentRemoteCreationStatus = IncidentRemoteCreationStatus.NotRequested,
     val deliveryStatus: AlertDeliveryStatus = AlertDeliveryStatus.Pending,
     val detectedAtEpochMillis: Long? = null,

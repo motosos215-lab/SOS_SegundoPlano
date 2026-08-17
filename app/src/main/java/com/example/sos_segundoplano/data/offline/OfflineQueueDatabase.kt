@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [OfflineQueueEntity::class, SyncErrorEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class OfflineQueueDatabase : RoomDatabase() {
@@ -23,7 +23,7 @@ abstract class OfflineQueueDatabase : RoomDatabase() {
             context.applicationContext,
             OfflineQueueDatabase::class.java,
             DATABASE_NAME
-        ).addMigrations(MIGRATION_1_2).build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
 
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(database: SupportSQLiteDatabase) {
@@ -33,6 +33,14 @@ abstract class OfflineQueueDatabase : RoomDatabase() {
                     "CREATE INDEX IF NOT EXISTS index_offline_queue_items_ownerUserId_bundleKey " +
                         "ON offline_queue_items(ownerUserId, bundleKey)"
                 )
+            }
+        }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE offline_queue_items ADD COLUMN remoteIncidentId TEXT")
+                database.execSQL("ALTER TABLE offline_queue_items ADD COLUMN remoteAlertDispatchId TEXT")
+                database.execSQL("ALTER TABLE offline_queue_items ADD COLUMN remoteSuccessAtEpochMillis INTEGER")
             }
         }
     }
