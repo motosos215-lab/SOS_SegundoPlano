@@ -5,7 +5,7 @@
 - Android CI ejecuta `testDebugUnitTest`, `lintDebug` y `assembleDebug`.
 - Gitleaks analiza el historial completo (`fetch-depth: 0`) en `push` y `pull_request`.
 - CodeQL analiza Java/Kotlin en `push` y `pull_request`. Usa `build-mode: none` para no requerir la configuración Firebase durante el análisis estático.
-- Dependency Review se ejecuta en pull requests.
+- Dependency Review no se habilita aún: GitHub informó que Dependency Graph está desactivado para este repositorio. Debe activarse en la configuración de Security & analysis antes de reintroducir el workflow.
 - Dependabot abre revisiones semanales para Gradle y GitHub Actions.
 - Las Actions se fijan a SHA completos verificados y los workflows aplican permisos mínimos. CodeQL requiere además `security-events: write` para publicar resultados.
 
@@ -37,5 +37,6 @@ No se deben versionar `google-services.json`, `local.properties`, `.env*`, certi
 ## Limitaciones conocidas
 
 - La generación de SBOM CycloneDX no se añade todavía: requiere evaluar un plugin compatible con el Android Gradle Plugin actual y su cadena de publicación. No se debe declarar una SBOM como generada hasta que exista un artefacto CI verificable.
+- Dependency Review permanece no disponible hasta habilitar Dependency Graph en GitHub Security & analysis.
 - R8/minificación de release sigue desactivada. Activarla exige validar reglas de Retrofit, Room, Firebase, Wear y serialización en un build release separado.
 - Los controles CI no sustituyen revisión humana, pruebas en dispositivos físicos ni rotación de credenciales comprometidas.

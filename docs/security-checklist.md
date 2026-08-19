@@ -7,7 +7,7 @@ Marcar únicamente después de evidencia verificable en la rama o el PR.
 - [ ] No secrets committed
 - [ ] Gitleaks passing
 - [ ] SAST passing
-- [ ] Dependency scan passing
+- [ ] Dependency Review: no disponible hasta habilitar GitHub Dependency Graph en Security & analysis; revisar dependencias manualmente mientras tanto.
 - [ ] Tests passing
 - [ ] ML tests passing
 - [ ] Android lint passing
@@ -24,6 +24,6 @@ Marcar únicamente después de evidencia verificable en la rama o el PR.
 
 - [ ] El PR no contiene `.env`, `local.properties`, certificados, llaves, APK/AAB o directorios de build.
 - [ ] Las Actions usan permisos mínimos y referencias fijadas a SHA verificable.
-- [ ] Los cambios de dependencia recibieron revisión.
+- [ ] Los cambios de dependencia recibieron revisión manual mientras Dependency Graph esté deshabilitado; reactivar Dependency Review al habilitarlo.
 - [ ] Se evaluaron logs, ubicación y datos persistidos para evitar exposición innecesaria.
 - [ ] Cualquier cambio release/R8 incluye validación de compatibilidad.
