@@ -25,6 +25,44 @@ class TripRemoteSessionReconcilerTest {
         assertEquals(2, remote.calls)
     }
 
+
+    @Test fun recoveredRemoteTripIsCorrelatedWithExistingLocalTripSessionKey() = runBlocking {
+        val store = InMemoryRemoteTripSessionStore()
+        val tripSessionKey = "00000000-0000-0000-0000-0000000000a1"
+        val reconciler = TripRemoteSessionReconciler(
+            authRepository = FakeAuthRepository(),
+            remoteDataSource = FakeTripRemoteDataSource(ActiveTripLookupResult.Found("remote-trip-1")),
+            store = store,
+            tripSessionKey = { tripSessionKey },
+        )
+
+        assertEquals(ActiveTripLookupResult.Found("remote-trip-1"), reconciler.resolveActiveTrip())
+        assertEquals("remote-trip-1", store.remoteTripId.value)
+        assertEquals(tripSessionKey, store.tripSessionKey.value)
+    }
+
+    @Test fun differentRecoveredRemoteTripDoesNotInheritPreviousStartedAt() = runBlocking {
+        val store = InMemoryRemoteTripSessionStore().apply {
+            setActiveSession(
+                remoteTripId = "remote-trip-old",
+                startedAtEpochMs = 1234L,
+                tripSessionKey = "00000000-0000-0000-0000-0000000000a0",
+            )
+        }
+        val newTripSessionKey = "00000000-0000-0000-0000-0000000000b1"
+        val reconciler = TripRemoteSessionReconciler(
+            authRepository = FakeAuthRepository(),
+            remoteDataSource = FakeTripRemoteDataSource(ActiveTripLookupResult.Found("remote-trip-new")),
+            store = store,
+            tripSessionKey = { newTripSessionKey },
+        )
+
+        assertEquals(ActiveTripLookupResult.Found("remote-trip-new"), reconciler.resolveActiveTrip())
+        assertEquals("remote-trip-new", store.remoteTripId.value)
+        assertEquals(newTripSessionKey, store.tripSessionKey.value)
+        assertEquals(null, store.startedAtEpochMs.value)
+    }
+
     @Test fun noActiveTripClearsRemoteTripIdWithoutInventingOne() = runBlocking {
         val store = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("stale-trip") }
         val reconciler = TripRemoteSessionReconciler(

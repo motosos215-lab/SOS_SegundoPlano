@@ -26,7 +26,13 @@ data class LocalIncidentSyncPayload(
     val validationPolicyVersion: String,
     val gpsQuality: String,
     val occurredAtEpochMillis: Long,
-    val createdAtElapsedRealtimeNanos: Long
+    val createdAtElapsedRealtimeNanos: Long,
+    val clientIncidentId: String? = null,
+    val detectedAtEpochMillis: Long? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val remoteTripId: String? = null,
+    val tripSessionKey: String? = null
 )
 
 data class AlertDispatchRequestSyncPayload(
@@ -41,7 +47,8 @@ data class AlertDispatchRequestSyncPayload(
     val deliveryStatus: String,
     val retryState: String,
     val occurredAtEpochMillis: Long,
-    val createdAtElapsedRealtimeNanos: Long
+    val createdAtElapsedRealtimeNanos: Long,
+    val clientAlertRequestId: String? = null
 )
 
 sealed interface OfflineSyncPayload {

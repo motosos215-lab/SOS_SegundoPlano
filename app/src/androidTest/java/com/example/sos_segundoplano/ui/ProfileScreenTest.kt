@@ -42,11 +42,13 @@ class ProfileScreenTest {
     @Test fun homeBottomBarOpensProfileAndBackReturnsHomeWithoutPermissionsOrService() {
         var starterCalls = 0
         setAppContent(
-            profileContent = { onHome, onSos ->
+            profileContent = { onHome, onTrips, onSos, onMap ->
                 ProfileScreen(
                     state = ProfileUiState(profile = profile()),
                     onHomeSelected = onHome,
+                    onTripsSelected = onTrips,
                     onSosSelected = onSos,
+                    onMapSelected = onMap,
                     onRetry = {},
                     onLogoutSelected = {},
                     onLogoutDismissed = {},
@@ -180,15 +182,15 @@ class ProfileScreenTest {
             startTrip = { state ->
                 startTripCalls++
                 when (state) {
-                    TripSessionState.Idle -> TripSessionState.Active
-                    TripSessionState.Active -> TripSessionState.Active
+                    TripSessionState.Idle -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
+                    is TripSessionState.Active -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
                 }
             }
         )
 
         composeRule.onNodeWithTag("bottom_nav_home").assertIsEnabled()
         composeRule.onNodeWithTag("bottom_nav_trips").assertIsEnabled()
-        composeRule.onNodeWithTag("bottom_nav_map").assertIsNotEnabled()
+        composeRule.onNodeWithTag("bottom_nav_map").assertIsEnabled()
         composeRule.onNodeWithTag("bottom_nav_sos").assertIsEnabled()
         composeRule.onNodeWithTag("bottom_nav_profile").assertIsEnabled()
         composeRule.onNodeWithTag("start_trip_button").performClick()
@@ -227,12 +229,12 @@ class ProfileScreenTest {
     }
 
     private fun setAppContent(
-        profileContent: (@androidx.compose.runtime.Composable (() -> Unit, () -> Unit) -> Unit)? = null,
+        profileContent: (@androidx.compose.runtime.Composable (() -> Unit, () -> Unit, () -> Unit, () -> Unit) -> Unit)? = null,
         monitoringServiceStarter: MonitoringServiceStarter = MonitoringServiceStarter { MonitoringServiceStartResult.Started },
         startTrip: (TripSessionState) -> TripSessionState = { state ->
             when (state) {
-                TripSessionState.Idle -> TripSessionState.Active
-                TripSessionState.Active -> TripSessionState.Active
+                TripSessionState.Idle -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
+                is TripSessionState.Active -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
             }
         }
     ) {

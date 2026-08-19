@@ -1,5 +1,6 @@
 package com.example.sos_segundoplano.data.repository
 
+import com.example.sos_segundoplano.data.local.auth.ClientDeviceInfoProvider
 import com.example.sos_segundoplano.data.remote.auth.AuthRemoteDataSource
 import com.example.sos_segundoplano.data.remote.auth.AuthUserDto
 import com.example.sos_segundoplano.data.remote.auth.LoginDataDto
@@ -7,7 +8,12 @@ import com.example.sos_segundoplano.data.remote.auth.LoginRequestDto
 import com.example.sos_segundoplano.data.remote.auth.LogoutRequestDto
 import com.example.sos_segundoplano.data.remote.auth.RefreshDataDto
 import com.example.sos_segundoplano.data.remote.auth.RefreshTokenRequestDto
+import com.example.sos_segundoplano.data.remote.auth.SessionTakeoverRequestDto
 import com.example.sos_segundoplano.domain.auth.AccessDenied
+import com.example.sos_segundoplano.domain.auth.ActiveMobileSessionInfo
+import com.example.sos_segundoplano.domain.auth.ActiveSessionExists
+import com.example.sos_segundoplano.domain.auth.ClientDeviceInfo
+import com.example.sos_segundoplano.domain.auth.SessionTakeoverChallenge
 import com.example.sos_segundoplano.domain.auth.AuthClock
 import com.example.sos_segundoplano.domain.auth.AuthFailure
 import com.example.sos_segundoplano.domain.auth.AuthResult
@@ -19,6 +25,7 @@ import com.example.sos_segundoplano.domain.auth.InvalidResponse
 import com.example.sos_segundoplano.domain.auth.NetworkUnavailable
 import com.example.sos_segundoplano.domain.auth.RemoteLogoutFailed
 import com.example.sos_segundoplano.domain.auth.SessionExpired
+import com.example.sos_segundoplano.domain.auth.SessionRevoked
 import com.example.sos_segundoplano.domain.auth.SessionSecrets
 import com.example.sos_segundoplano.domain.auth.SessionState
 import com.example.sos_segundoplano.domain.auth.SessionStorageFailureReason
@@ -326,6 +333,103 @@ class DefaultAuthRepositoryTest {
         assertEquals(original, store.stored)
     }
 
+    @Test fun loginAlwaysSendsStableClientDeviceMetadata() = runBlocking {
+        val remote = FakeAuthRemoteDataSource(AuthResult.Success(validLoginData(now.plusSeconds(300))))
+        val repo = repository(
+            remote,
+            FakeSessionStore(),
+            clientDeviceInfoProvider = ClientDeviceInfoProvider { testClientDevice() }
+        )
+
+        assertTrue(repo.login("rider@example.com", "password", true) is AuthResult.Success)
+
+        val device = requireNotNull(remote.lastLoginRequest?.clientDevice)
+        assertEquals("11111111-1111-1111-1111-111111111111", device.clientDeviceId)
+        assertEquals("Samsung SM-A346M", device.deviceName)
+        assertEquals("Android", device.platform)
+    }
+
+    @Test fun activeSessionConflictCanBeTakenOverWithoutActiveTrip() = runBlocking {
+        val challenge = SessionTakeoverChallenge(
+            activeSession = ActiveMobileSessionInfo("Old phone", "Android", null),
+            takeoverToken = "takeover-token",
+            takeoverExpiresAtUtc = now.plusSeconds(180).toString(),
+            hasActiveTrip = false,
+            activeTrip = null,
+            accountEmail = "rider@example.com",
+            rememberMe = true
+        )
+        val remote = FakeAuthRemoteDataSource(ActiveSessionExists(challenge)).apply {
+            takeoverResult = AuthResult.Success(validLoginData(now.plusSeconds(300)))
+        }
+        val repo = repository(
+            remote,
+            FakeSessionStore(),
+            clientDeviceInfoProvider = ClientDeviceInfoProvider { testClientDevice() }
+        )
+
+        val login = repo.login("rider@example.com", "password", true)
+        assertTrue(login is ActiveSessionExists)
+        val enriched = (login as ActiveSessionExists).challenge
+        assertTrue(repo.takeover(enriched) is AuthResult.Success)
+        assertEquals(false, remote.lastTakeoverRequest?.transferActiveTrip)
+        assertNull(remote.lastTakeoverRequest?.mobileDeviceId)
+        assertTrue(repo.observeSession().value is SessionState.Authenticated)
+    }
+
+    @Test fun activeTripTakeoverUsesOnlyCachedBackendMobileDeviceIdNeverClientDeviceId() = runBlocking {
+        val challenge = SessionTakeoverChallenge(
+            activeSession = ActiveMobileSessionInfo("Old phone", "Android", null),
+            takeoverToken = "takeover-token",
+            takeoverExpiresAtUtc = now.plusSeconds(180).toString(),
+            hasActiveTrip = true,
+            activeTrip = com.example.sos_segundoplano.domain.auth.ActiveTripTakeoverInfo("trip-1", now.toString(), "old-mobile"),
+            accountEmail = "rider@example.com",
+            rememberMe = true
+        )
+        val remote = FakeAuthRemoteDataSource(ActiveSessionExists(challenge)).apply {
+            takeoverResult = AuthResult.Success(validLoginData(now.plusSeconds(300)))
+        }
+        val repo = repository(
+            remote,
+            FakeSessionStore(),
+            clientDeviceInfoProvider = ClientDeviceInfoProvider { testClientDevice() },
+            linkedMobileDeviceIdForAccount = { "backend-mobile-new" }
+        )
+
+        val login = repo.login("rider@example.com", "password", true) as ActiveSessionExists
+        assertTrue(login.challenge.transferDeviceAvailable)
+        assertTrue(repo.takeover(login.challenge) is AuthResult.Success)
+        assertEquals(true, remote.lastTakeoverRequest?.transferActiveTrip)
+        assertEquals("backend-mobile-new", remote.lastTakeoverRequest?.mobileDeviceId)
+        assertTrue(remote.lastTakeoverRequest?.mobileDeviceId != remote.lastTakeoverRequest?.clientDevice?.clientDeviceId)
+    }
+
+    @Test fun validateCurrentSessionRevokesOldPhoneImmediatelyAfterBackendTakeover() = runBlocking {
+        val remote = FakeAuthRemoteDataSource(AuthResult.Success(validLoginData(now.plusSeconds(300))))
+        val store = FakeSessionStore()
+        val repo = repository(remote, store)
+        assertTrue(repo.login("rider@example.com", "password", true) is AuthResult.Success)
+        remote.currentUserResult = SessionRevoked
+
+        assertEquals(SessionRevoked, repo.validateCurrentSession())
+        assertNull(store.stored)
+        assertTrue(repo.observeSession().value is SessionState.Expired)
+        assertEquals(SessionExpired, repo.ensureValidAccessToken())
+    }
+
+    @Test fun validateCurrentSessionDoesNotLogoutOnTransientNetworkFailure() = runBlocking {
+        val remote = FakeAuthRemoteDataSource(AuthResult.Success(validLoginData(now.plusSeconds(300))))
+        val store = FakeSessionStore()
+        val repo = repository(remote, store)
+        assertTrue(repo.login("rider@example.com", "password", true) is AuthResult.Success)
+        remote.currentUserResult = NetworkUnavailable("network_unavailable")
+
+        assertTrue(repo.validateCurrentSession() is NetworkUnavailable)
+        assertTrue(repo.observeSession().value is SessionState.Authenticated)
+        assertTrue(store.stored != null)
+    }
+
     @Test fun persistenceFailureAfterRefreshDropsMemoryAndStoredSession() = runBlocking {
         val remote = FakeAuthRemoteDataSource(AuthResult.Success(validLoginData(now.plusSeconds(30))))
         val store = FakeSessionStore()
@@ -458,10 +562,17 @@ class DefaultAuthRepositoryTest {
         assertFalse(session.secrets.toString().contains("refresh-token"))
     }
 
-    private fun repository(remote: FakeAuthRemoteDataSource, store: FakeSessionStore) = DefaultAuthRepository(
+    private fun repository(
+        remote: FakeAuthRemoteDataSource,
+        store: FakeSessionStore,
+        clientDeviceInfoProvider: ClientDeviceInfoProvider = ClientDeviceInfoProvider { testClientDevice() },
+        linkedMobileDeviceIdForAccount: (String) -> String? = { null }
+    ) = DefaultAuthRepository(
         remoteDataSource = remote,
         sessionStore = store,
         clock = clock,
+        clientDeviceInfoProvider = clientDeviceInfoProvider,
+        linkedMobileDeviceIdForAccount = linkedMobileDeviceIdForAccount,
         expirationMargin = Duration.ofSeconds(60)
     )
 }
@@ -482,6 +593,9 @@ private class FakeAuthRemoteDataSource(
     var lastLoginRequest: LoginRequestDto? = null
     var loginBlock: (suspend () -> AuthResult<LoginDataDto>)? = null
     var refreshResult: AuthResult<RefreshDataDto> = InvalidResponse()
+    var currentUserResult: AuthResult<AuthUserDto> = InvalidResponse(sanitizedMessage = "current_user_not_configured")
+    var takeoverResult: AuthResult<LoginDataDto> = InvalidResponse()
+    var lastTakeoverRequest: SessionTakeoverRequestDto? = null
     var logoutResult: AuthResult<Unit> = AuthResult.Success(Unit)
     var refreshBlock: (suspend () -> AuthResult<RefreshDataDto>)? = null
     val refreshCalls = AtomicInteger(0)
@@ -491,12 +605,20 @@ private class FakeAuthRemoteDataSource(
         return loginBlock?.invoke() ?: loginResult
     }
 
+    override suspend fun takeover(request: SessionTakeoverRequestDto): AuthResult<LoginDataDto> {
+        lastTakeoverRequest = request
+        return takeoverResult
+    }
+
+    override suspend fun currentUser(accessToken: String): AuthResult<AuthUserDto> = currentUserResult
+
     override suspend fun refresh(request: RefreshTokenRequestDto): AuthResult<RefreshDataDto> {
         refreshCalls.incrementAndGet()
         return refreshBlock?.invoke() ?: refreshResult
     }
 
     override suspend fun logout(request: LogoutRequestDto): AuthResult<Unit> = logoutResult
+    override suspend fun logout(accessToken: String, request: LogoutRequestDto): AuthResult<Unit> = logoutResult
 }
 
 private class FakeSessionStore(
@@ -523,6 +645,14 @@ private class FakeSessionStore(
         return SessionStoreResult.Success(Unit)
     }
 }
+
+private fun testClientDevice(): ClientDeviceInfo = ClientDeviceInfo(
+    clientDeviceId = "11111111-1111-1111-1111-111111111111",
+    deviceName = "Samsung SM-A346M",
+    platform = "Android",
+    osVersion = "Android 16",
+    appVersion = "1.0"
+)
 
 private fun validLoginData(expiration: Instant): LoginDataDto = LoginDataDto(
     accessToken = "access-token",

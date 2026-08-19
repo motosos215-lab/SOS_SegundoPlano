@@ -5,6 +5,7 @@ import com.example.sos_segundoplano.domain.monitor.MonitorAlertAcknowledgement
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertsRepository
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertsResult
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertStatus
+import com.example.sos_segundoplano.domain.monitor.MonitorAlertStatusLocation
 import com.example.sos_segundoplano.domain.monitor.NotificationDeliveryAttemptId
 import com.example.sos_segundoplano.domain.push.MonitorPushPayload
 import com.example.sos_segundoplano.domain.push.PendingMonitorAlert
@@ -56,6 +57,20 @@ class MonitorAlertsViewModelTest {
         val repository = FakeRepository()
         MonitorAlertsViewModel(repository, PendingMonitorAlertCoordinator(FakeStore("attempt-1")), isMonitorSession = { false })
         assertTrue(repository.detailIds.isEmpty())
+    }
+
+    @Test fun dedicatedLocationEndpointFillsCoordinatesWhenAggregatedStatusIsUnavailable() = runTest {
+        val repository = FakeRepository().apply {
+            locationStatusResult = MonitorAlertsResult.Success(
+                MonitorAlertStatusLocation(true, 19.4326, -99.1332, 8.0, "MobileApp", null, null, true, false)
+            )
+        }
+        val viewModel = MonitorAlertsViewModel(repository, PendingMonitorAlertCoordinator(FakeStore("attempt-1")))
+
+        val alert = viewModel.state.value as MonitorAlertsUiState.Alert
+        assertEquals(19.4326, alert.status?.location?.latitude ?: Double.NaN, 0.0)
+        assertEquals(-99.1332, alert.status?.location?.longitude ?: Double.NaN, 0.0)
+        assertEquals(listOf("attempt-1"), repository.locationIds)
     }
 
     @Test fun refreshKeepsDetailAndDoesNotMarkViewedAgain() = runTest {
@@ -126,14 +141,19 @@ class MonitorAlertsViewModelTest {
         body = null
     )
     private class FakeRepository : MonitorAlertsRepository {
-        val detailIds = mutableListOf<String>(); val viewIds = mutableListOf<String>(); val acknowledgeIds = mutableListOf<String>(); val declineIds = mutableListOf<String>()
+        val detailIds = mutableListOf<String>(); val viewIds = mutableListOf<String>(); val acknowledgeIds = mutableListOf<String>(); val declineIds = mutableListOf<String>(); val locationIds = mutableListOf<String>()
         var acknowledgeResult: MonitorAlertsResult<MonitorAlertDetail> = MonitorAlertsResult.Success(MonitorAlertDetail(null))
+        var locationStatusResult: MonitorAlertsResult<MonitorAlertStatusLocation?> = MonitorAlertsResult.Success(null)
         var declineResult: MonitorAlertsResult<MonitorAlertDetail> = MonitorAlertsResult.Success(MonitorAlertDetail(null))
         override suspend fun listAlerts(): MonitorAlertsResult<List<MonitorAlertAcknowledgement>> = MonitorAlertsResult.Success(emptyList())
         override suspend fun getAlerts() = error("unused")
         override suspend fun getAlert(id: NotificationDeliveryAttemptId): MonitorAlertsResult<MonitorAlertDetail> { detailIds += id.value; return MonitorAlertsResult.Success(MonitorAlertDetail(null)) }
         override suspend fun getStatus(id: NotificationDeliveryAttemptId): MonitorAlertsResult<MonitorAlertStatus> = MonitorAlertsResult.Failure(null, null, "unavailable")
         override suspend fun getLocation(id: NotificationDeliveryAttemptId) = error("unused")
+        override suspend fun getLocationStatus(id: NotificationDeliveryAttemptId): MonitorAlertsResult<MonitorAlertStatusLocation?> {
+            locationIds += id.value
+            return locationStatusResult
+        }
         override suspend fun markViewed(id: NotificationDeliveryAttemptId): MonitorAlertsResult<com.example.sos_segundoplano.domain.monitor.MonitorAlertOpaquePayload> { viewIds += id.value; return MonitorAlertsResult.Success(com.example.sos_segundoplano.domain.monitor.MonitorAlertOpaquePayload(Unit)) }
         override suspend fun acknowledge(id: NotificationDeliveryAttemptId, responseType: String, message: String): MonitorAlertsResult<MonitorAlertDetail> { acknowledgeIds += id.value; return acknowledgeResult }
         override suspend fun decline(id: NotificationDeliveryAttemptId, reason: String): MonitorAlertsResult<MonitorAlertDetail> { declineIds += id.value; return declineResult }

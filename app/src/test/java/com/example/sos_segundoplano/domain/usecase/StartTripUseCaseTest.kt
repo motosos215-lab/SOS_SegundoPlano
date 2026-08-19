@@ -2,6 +2,7 @@ package com.example.sos_segundoplano.domain.usecase
 
 import com.example.sos_segundoplano.domain.model.TripSessionState
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StartTripUseCaseTest {
@@ -11,25 +12,26 @@ class StartTripUseCaseTest {
     fun idleStateChangesToActiveWhenTripStarts() {
         val result = startTripUseCase(TripSessionState.Idle)
 
-        assertSame(TripSessionState.Active, result)
+        assertTrue(result is TripSessionState.Active)
     }
 
     @Test
     fun activeStateRemainsActiveWhenTripStartsAgain() {
-        val result = startTripUseCase(TripSessionState.Active)
+        val active = TripSessionState.Active("trip-session-test")
+        val result = startTripUseCase(active)
 
-        assertSame(TripSessionState.Active, result)
+        assertSame(active, result)
     }
 
     @Test
     fun startTripOnlyProducesActiveState() {
         val results = listOf(
             startTripUseCase(TripSessionState.Idle),
-            startTripUseCase(TripSessionState.Active)
+            startTripUseCase(TripSessionState.Active("trip-session-test"))
         )
 
         results.forEach { result ->
-            assertSame(TripSessionState.Active, result)
+            assertTrue(result is TripSessionState.Active)
         }
     }
 
@@ -47,7 +49,7 @@ class StartTripUseCaseTest {
         val firstResult = startTripUseCase(TripSessionState.Idle)
         val secondResult = startTripUseCase(firstResult)
 
-        assertSame(TripSessionState.Active, firstResult)
-        assertSame(TripSessionState.Active, secondResult)
+        assertTrue(firstResult is TripSessionState.Active)
+        assertSame(firstResult, secondResult)
     }
 }

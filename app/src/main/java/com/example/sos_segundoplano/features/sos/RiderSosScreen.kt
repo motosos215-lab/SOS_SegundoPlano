@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,12 +18,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -49,6 +54,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.sos_segundoplano.R
 import com.example.sos_segundoplano.data.remote.incident.ManualSosRequestState
+import com.example.sos_segundoplano.data.remote.incident.ManualSosSubmissionOptions
+import com.example.sos_segundoplano.domain.sos.MobileSosPriority
+import com.example.sos_segundoplano.domain.sos.MobileSosSeverity
 import com.example.sos_segundoplano.ui.components.MotoAssetIcon
 import com.example.sos_segundoplano.ui.components.MotoBottomBar
 import com.example.sos_segundoplano.ui.components.MotoBottomBarItem
@@ -63,16 +71,23 @@ private val SosNavRed = lerp(MotoAlert, Color.Black, 0.72f)
 @Composable
 fun RiderSosScreen(
     canSubmitManualSos: Boolean,
-    onSubmitManualSos: () -> Unit,
+    onSubmitManualSos: (ManualSosSubmissionOptions) -> Unit,
     requestState: ManualSosRequestState = ManualSosRequestState.Idle,
     onNavigateBack: () -> Unit,
     onHomeSelected: () -> Unit = onNavigateBack,
+    onTripsSelected: () -> Unit = onNavigateBack,
+    onMapSelected: () -> Unit = onNavigateBack,
     onProfileSelected: () -> Unit = onNavigateBack,
     modifier: Modifier = Modifier
 ) {
     val sendDescription = stringResource(R.string.sos_manual_send_cd)
     val cancelDescription = stringResource(R.string.sos_manual_cancel_cd)
     var showUnavailable by rememberSaveable { mutableStateOf(false) }
+    var selectedSeverityName by rememberSaveable { mutableStateOf(MobileSosSeverity.Unknown.name) }
+    var selectedPriorityName by rememberSaveable { mutableStateOf(MobileSosPriority.High.name) }
+    var showClassificationDialog by rememberSaveable { mutableStateOf(false) }
+    val selectedSeverity = runCatching { MobileSosSeverity.valueOf(selectedSeverityName) }.getOrDefault(MobileSosSeverity.Unknown)
+    val selectedPriority = runCatching { MobileSosPriority.valueOf(selectedPriorityName) }.getOrDefault(MobileSosPriority.High)
     val isSubmissionInProgress = requestState is ManualSosRequestState.Preparing ||
         requestState is ManualSosRequestState.Retrying ||
         requestState is ManualSosRequestState.WaitingForLocation ||
@@ -119,6 +134,33 @@ fun RiderSosScreen(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(0.9f)
             )
+            Spacer(Modifier.height(18.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MotoSurface.copy(alpha = 0.12f), RoundedCornerShape(18.dp))
+                    .border(1.dp, MotoSurface.copy(alpha = 0.22f), RoundedCornerShape(18.dp))
+                    .padding(horizontal = 18.dp, vertical = 14.dp)
+                    .testTag("sos_delivery_summary")
+            ) {
+                Text(
+                    text = stringResource(R.string.sos_manual_includes_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MotoSurface,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(stringResource(R.string.sos_manual_includes_location), style = MaterialTheme.typography.bodyMedium, color = MotoSurface.copy(alpha = 0.92f))
+                Text(stringResource(R.string.sos_manual_includes_time), style = MaterialTheme.typography.bodyMedium, color = MotoSurface.copy(alpha = 0.92f))
+                Text(stringResource(R.string.sos_manual_includes_contacts), style = MaterialTheme.typography.bodyMedium, color = MotoSurface.copy(alpha = 0.92f))
+            }
+            Spacer(Modifier.height(12.dp))
+            ManualSosClassificationSummary(
+                severity = selectedSeverity,
+                priority = selectedPriority,
+                enabled = !isSubmissionInProgress,
+                onClick = { showClassificationDialog = true }
+            )
             if (showUnavailable) {
                 Spacer(Modifier.height(12.dp))
                 Text(
@@ -130,30 +172,44 @@ fun RiderSosScreen(
                 )
             }
             val requestStatus = when (requestState) {
-                ManualSosRequestState.Idle -> null
+                ManualSosRequestState.Idle,
+                ManualSosRequestState.Sent -> null
                 ManualSosRequestState.Preparing -> R.string.sos_manual_preparing
                 ManualSosRequestState.Retrying -> R.string.sos_manual_retrying
                 ManualSosRequestState.WaitingForLocation -> R.string.sos_manual_waiting_for_location
                 ManualSosRequestState.Sending -> R.string.sos_manual_sending
-                ManualSosRequestState.Sent -> R.string.sos_manual_sent
                 ManualSosRequestState.LocationUnavailable -> R.string.sos_manual_location_unavailable
                 ManualSosRequestState.RetryableFailure -> R.string.sos_manual_retryable_failure
             }
             if (requestStatus != null) {
                 Spacer(Modifier.height(12.dp))
-                Text(
-                    text = stringResource(requestStatus),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MotoSurface,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.testTag("sos_request_status")
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MotoSurface.copy(alpha = 0.14f), RoundedCornerShape(16.dp))
+                        .border(1.dp, MotoSurface.copy(alpha = 0.2f), RoundedCornerShape(16.dp))
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .testTag("sos_request_status")
+                ) {
+                    Text(
+                        text = stringResource(requestStatus),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MotoSurface,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
             Spacer(Modifier.height(28.dp))
             Button(
                 onClick = {
                     if (canSubmitManualSos && !isSubmissionInProgress) {
-                        onSubmitManualSos()
+                        onSubmitManualSos(
+                            ManualSosSubmissionOptions(
+                                severity = selectedSeverity,
+                                priority = selectedPriority
+                            )
+                        )
                     } else if (!canSubmitManualSos) {
                         showUnavailable = true
                     }
@@ -206,9 +262,17 @@ fun RiderSosScreen(
         }
         MotoBottomBar(
             selectedItem = MotoBottomBarItem.Sos,
-            enabledItems = setOf(MotoBottomBarItem.Home, MotoBottomBarItem.Sos, MotoBottomBarItem.Profile),
+            enabledItems = setOf(
+                MotoBottomBarItem.Home,
+                MotoBottomBarItem.Trips,
+                MotoBottomBarItem.Sos,
+                MotoBottomBarItem.Map,
+                MotoBottomBarItem.Profile
+            ),
             onHomeSelected = onHomeSelected,
+            onTripsSelected = onTripsSelected,
             onSosSelected = {},
+            onMapSelected = onMapSelected,
             onProfileSelected = onProfileSelected,
             containerColor = SosNavRed,
             contentColor = MotoSurface.copy(alpha = 0.72f),
@@ -216,6 +280,126 @@ fun RiderSosScreen(
             dividerColor = MotoSurface.copy(alpha = 0.16f)
         )
     }
+
+    if (showClassificationDialog) {
+        ManualSosClassificationDialog(
+            severity = selectedSeverity,
+            priority = selectedPriority,
+            onSeveritySelected = { selectedSeverityName = it.name },
+            onPrioritySelected = { selectedPriorityName = it.name },
+            onDismiss = { showClassificationDialog = false }
+        )
+    }
+}
+
+@Composable
+private fun ManualSosClassificationSummary(
+    severity: MobileSosSeverity,
+    priority: MobileSosPriority,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    val riskLabel = when (severity) {
+        MobileSosSeverity.Unknown -> "Sin definir"
+        MobileSosSeverity.Low -> "Bajo"
+        MobileSosSeverity.Medium -> "Medio"
+        MobileSosSeverity.High -> "Alto"
+    }
+    val priorityLabel = when (priority) {
+        MobileSosPriority.Low -> "Baja"
+        MobileSosPriority.Medium -> "Media"
+        MobileSosPriority.High -> "Alta"
+        MobileSosPriority.Critical -> "Crítica"
+    }
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth().testTag("sos_manual_classification")
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("Clasificación opcional", color = MotoSurface, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Riesgo: $riskLabel  •  Prioridad: $priorityLabel",
+                color = MotoSurface.copy(alpha = 0.88f),
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+}
+
+@Composable
+private fun ManualSosClassificationDialog(
+    severity: MobileSosSeverity,
+    priority: MobileSosPriority,
+    onSeveritySelected: (MobileSosSeverity) -> Unit,
+    onPrioritySelected: (MobileSosPriority) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Clasificación de la emergencia") },
+        text = {
+            Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
+                Text("Es opcional. Si no estás seguro, deja Riesgo en Sin definir y Prioridad en Alta.")
+                Text("Riesgo", fontWeight = FontWeight.SemiBold)
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(
+                        MobileSosSeverity.Unknown to "Sin definir",
+                        MobileSosSeverity.Low to "Bajo",
+                        MobileSosSeverity.Medium to "Medio",
+                        MobileSosSeverity.High to "Alto"
+                    ).forEach { (value, label) ->
+                        EmergencyChoiceChip(
+                            label = label,
+                            selected = severity == value,
+                            enabled = true,
+                            onClick = { onSeveritySelected(value) }
+                        )
+                    }
+                }
+                Text("Prioridad", fontWeight = FontWeight.SemiBold)
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(
+                        MobileSosPriority.Low to "Baja",
+                        MobileSosPriority.Medium to "Media",
+                        MobileSosPriority.High to "Alta",
+                        MobileSosPriority.Critical to "Crítica"
+                    ).forEach { (value, label) ->
+                        EmergencyChoiceChip(
+                            label = label,
+                            selected = priority == value,
+                            enabled = true,
+                            onClick = { onPrioritySelected(value) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) { Text("Listo") }
+        }
+    )
+}
+
+@Composable
+private fun EmergencyChoiceChip(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        enabled = enabled,
+        label = { Text(label) }
+    )
 }
 
 @Composable
@@ -299,11 +483,9 @@ private fun SendIcon() {
             moveTo(2.dp.toPx(), 3.dp.toPx())
             lineTo(20.dp.toPx(), 11.dp.toPx())
             lineTo(2.dp.toPx(), 19.dp.toPx())
-            lineTo(6.dp.toPx(), 12.5.dp.toPx())
-            lineTo(13.dp.toPx(), 11.dp.toPx())
-            lineTo(6.dp.toPx(), 9.5.dp.toPx())
+            lineTo(6.dp.toPx(), 12.dp.toPx())
             close()
         }
-        drawPath(path, color = MotoSurface)
+        drawPath(path = path, color = MotoSurface)
     }
 }

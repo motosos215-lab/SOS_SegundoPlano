@@ -66,8 +66,50 @@ data class OfflineQueueItem(
     val lastErrorCategory: OfflineSyncErrorCategory?,
     val lastErrorCode: String?,
     val lastErrorMessageSanitized: String?,
-    val ackSanitized: String?
+    val ackSanitized: String?,
+    val ownerUserId: String? = null,
+    val bundleKey: String? = null
 )
+
+/** A complete, owner-scoped automatic SOS bundle ready for a future recovery transport. */
+data class RecoverableOfflineIncidentBundle(
+    val ownerUserId: String,
+    val bundleKey: String,
+    val incident: OfflineQueueItem,
+    val request: OfflineQueueItem
+)
+
+/** Two queue rows that have been durably claimed as one automatic SOS operation. */
+data class ClaimedAutomaticSosBundle(
+    val ownerUserId: String,
+    val bundleKey: String,
+    val incident: ClaimedOfflineQueueItem,
+    val request: ClaimedOfflineQueueItem
+)
+
+data class AutomaticSosRemoteReceipt(
+    val remoteIncidentId: String,
+    val remoteAlertDispatchId: String
+)
+
+sealed interface AutomaticSosBundleClaimResult {
+    data class Acquired(val bundle: ClaimedAutomaticSosBundle) : AutomaticSosBundleClaimResult
+    data object BusyOrUnavailable : AutomaticSosBundleClaimResult
+    data object NotRecoverable : AutomaticSosBundleClaimResult
+}
+
+data class ClaimedAutomaticTripFinalization(
+    val ownerUserId: String,
+    val bundleKey: String,
+    val remoteTripId: String,
+    val claimToken: String
+)
+
+sealed interface AutomaticTripFinalizationClaimResult {
+    data class Acquired(val value: ClaimedAutomaticTripFinalization) : AutomaticTripFinalizationClaimResult
+    data object BusyOrUnavailable : AutomaticTripFinalizationClaimResult
+    data object NotRecoverable : AutomaticTripFinalizationClaimResult
+}
 
 data class ClaimedOfflineQueueItem(
     val item: OfflineQueueItem,

@@ -19,6 +19,10 @@ object WearProtocol {
     const val PATH_HANDSHAKE: String = "/motosos/v1/handshake"
     const val PATH_STATUS: String = "/motosos/v1/status"
     const val PATH_SNAPSHOT: String = "/motosos/v1/snapshot"
+    const val PATH_TRIP_STATE: String = "/motosos/v1/trip/state"
+    const val PATH_ACTION_START_TRIP: String = "/motosos/v1/action/start-trip"
+    const val PATH_ACTION_FINISH_TRIP: String = "/motosos/v1/action/finish-trip"
+    const val PATH_ACTION_MANUAL_SOS: String = "/motosos/v1/action/manual-sos"
 
     /**
      * Límite de transporte del Wearable Data Layer (mensajes RPC, no datos de archivos).

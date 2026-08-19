@@ -10,26 +10,65 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.time.Instant
 
 interface RemoteTripSessionStore {
     val remoteTripId: StateFlow<String?>
+    val startedAtEpochMs: StateFlow<Long?>
+    /** Durable logical session correlated with [remoteTripId], when known. */
+    val tripSessionKey: StateFlow<String?>
+    fun setActiveSession(remoteTripId: String, startedAtEpochMs: Long?, tripSessionKey: String? = null): Boolean
     fun setRemoteTripId(remoteTripId: String): Boolean
+    fun setStartedAtEpochMs(startedAtEpochMs: Long?): Boolean
     fun clearRemoteTripId(): Boolean
+    fun clearIfMatches(tripSessionKey: String, remoteTripId: String): RemoteTripSessionClearResult = RemoteTripSessionClearResult.LegacyUncorrelated
 }
+
+enum class RemoteTripSessionClearResult { Cleared, AlreadyEmpty, DifferentTrip, LegacyUncorrelated }
 
 class InMemoryRemoteTripSessionStore : RemoteTripSessionStore {
     private val mutableRemoteTripId = MutableStateFlow<String?>(null)
+    private val mutableStartedAtEpochMs = MutableStateFlow<Long?>(null)
+    private val mutableTripSessionKey = MutableStateFlow<String?>(null)
     override val remoteTripId: StateFlow<String?> = mutableRemoteTripId
+    override val startedAtEpochMs: StateFlow<Long?> = mutableStartedAtEpochMs
+    override val tripSessionKey: StateFlow<String?> = mutableTripSessionKey
 
-    override fun setRemoteTripId(remoteTripId: String): Boolean {
+    override fun setActiveSession(remoteTripId: String, startedAtEpochMs: Long?, tripSessionKey: String?): Boolean {
         val normalized = remoteTripId.trim().takeIf { it.isNotEmpty() } ?: return false
+        val nextStartedAt = if (mutableRemoteTripId.value == normalized && mutableStartedAtEpochMs.value != null) {
+            mutableStartedAtEpochMs.value
+        } else {
+            startedAtEpochMs?.takeIf { it >= 0L }
+        }
+        val nextKey = tripSessionKey?.trim()?.takeIf { it.isNotEmpty() }
+            ?: mutableTripSessionKey.value.takeIf { mutableRemoteTripId.value == normalized }
         mutableRemoteTripId.value = normalized
+        mutableStartedAtEpochMs.value = nextStartedAt
+        mutableTripSessionKey.value = nextKey
         return true
+    }
+
+    override fun setRemoteTripId(remoteTripId: String): Boolean = setActiveSession(remoteTripId, null, null)
+
+    override fun setStartedAtEpochMs(startedAtEpochMs: Long?): Boolean {
+        val remoteTripId = mutableRemoteTripId.value ?: return false
+        return setActiveSession(remoteTripId, startedAtEpochMs, null)
     }
 
     override fun clearRemoteTripId(): Boolean {
         mutableRemoteTripId.value = null
+        mutableStartedAtEpochMs.value = null
+        mutableTripSessionKey.value = null
         return true
+    }
+
+    override fun clearIfMatches(tripSessionKey: String, remoteTripId: String): RemoteTripSessionClearResult {
+        val currentTrip = mutableRemoteTripId.value ?: return RemoteTripSessionClearResult.AlreadyEmpty
+        val currentKey = mutableTripSessionKey.value ?: return RemoteTripSessionClearResult.LegacyUncorrelated
+        if (currentTrip != remoteTripId || currentKey != tripSessionKey) return RemoteTripSessionClearResult.DifferentTrip
+        clearRemoteTripId()
+        return RemoteTripSessionClearResult.Cleared
     }
 }
 
@@ -45,10 +84,15 @@ fun interface RemoteTripFinisher {
     suspend fun finishTrip(request: FinishTripRequestDto): TripMutationResult
 }
 
+interface RemoteTripIdFinisher : RemoteTripFinisher {
+    suspend fun finishTrip(remoteTripId: String, request: FinishTripRequestDto): TripMutationResult
+}
+
 class AuthenticatedRemoteTripStarter(
     private val authRepository: AuthRepository,
     private val remoteDataSource: TripRemoteDataSource,
-    private val store: RemoteTripSessionStore
+    private val store: RemoteTripSessionStore,
+    private val tripSessionKey: () -> String? = { null }
 ) : RemoteTripStarter {
     private val mutex = Mutex()
 
@@ -61,13 +105,14 @@ class AuthenticatedRemoteTripStarter(
         }
         val token = when (val result = authRepository.ensureValidAccessToken()) {
             is AuthResult.Success -> result.value.reveal()
-            is AuthFailure -> return@withLock result.toTripMutationResult()
+            is AuthFailure -> return result.toTripMutationResult()
         }
         val first = remoteDataSource.startTrip("Bearer $token", request)
         val mutation = retryStartOnceAfterUnauthorized(first, request)
         when (val result = mutation) {
             is TripMutationResult.Success -> {
-                if (!store.setRemoteTripId(result.remoteTripId)) {
+                val key = tripSessionKey()?.trim()?.takeIf { it.isNotEmpty() }
+                if (key == null || !store.setActiveSession(result.remoteTripId, request.clientStartedAtUtc.toEpochMillisOrNull(), key)) {
                     TripMutationResult.InvalidResponse("remote_trip_persistence_failed")
                 } else {
                     result
@@ -91,33 +136,68 @@ class AuthenticatedRemoteTripStarter(
     }
 }
 
+private fun String?.toEpochMillisOrNull(): Long? = try {
+    this?.let(Instant::parse)?.toEpochMilli()?.takeIf { it >= 0L }
+} catch (_: java.time.format.DateTimeParseException) {
+    null
+}
+
 class AuthenticatedRemoteTripFinisher(
     private val authRepository: AuthRepository,
     private val remoteDataSource: TripRemoteDataSource,
     private val store: RemoteTripSessionStore
-) : RemoteTripFinisher {
+) : RemoteTripIdFinisher {
     private val mutex = Mutex()
 
     override suspend fun finishTrip(request: FinishTripRequestDto): TripMutationResult = mutex.withLock {
         val remoteTripId = store.remoteTripId.value?.trim()?.takeIf { it.isNotEmpty() }
             ?: return@withLock TripMutationResult.MissingRequiredData("remote_trip_id_missing")
+        val tripSessionKey = store.tripSessionKey.value
+        finishTripLocked(remoteTripId, request, clearSession = true, tripSessionKey = tripSessionKey)
+    }
+    override suspend fun finishTrip(remoteTripId: String, request: FinishTripRequestDto): TripMutationResult = mutex.withLock {
+        finishTripLocked(
+            remoteTripId.trim().takeIf { it.isNotEmpty() }
+                ?: return@withLock TripMutationResult.MissingRequiredData("remote_trip_id_missing"),
+            request,
+            clearSession = false,
+            tripSessionKey = null
+        )
+    }
+
+    private suspend fun finishTripLocked(
+        remoteTripId: String,
+        request: FinishTripRequestDto,
+        clearSession: Boolean,
+        tripSessionKey: String?
+    ): TripMutationResult {
         val token = when (val result = authRepository.ensureValidAccessToken()) {
             is AuthResult.Success -> result.value.reveal()
-            is AuthFailure -> return@withLock result.toTripMutationResult()
+            is AuthFailure -> return result.toTripMutationResult()
         }
         val first = remoteDataSource.finishTrip("Bearer $token", remoteTripId, request)
         val mutation = retryFinishOnceAfterUnauthorized(first, remoteTripId, request)
-        when (val result = mutation) {
+        return when (val result = mutation) {
             is TripMutationResult.Success -> {
                 if (result.remoteTripId != remoteTripId) {
                     TripMutationResult.InvalidResponse("remote_trip_id_mismatch")
-                } else if (!store.clearRemoteTripId()) {
+                } else if (clearSession && !clearFinishedSession(tripSessionKey, remoteTripId)) {
                     TripMutationResult.InvalidResponse("remote_trip_clear_failed")
                 } else {
                     result
                 }
             }
             else -> result
+        }
+    }
+
+    private fun clearFinishedSession(tripSessionKey: String?, remoteTripId: String): Boolean {
+        if (tripSessionKey.isNullOrBlank()) return store.clearRemoteTripId()
+        return when (store.clearIfMatches(tripSessionKey, remoteTripId)) {
+            RemoteTripSessionClearResult.Cleared,
+            RemoteTripSessionClearResult.AlreadyEmpty -> true
+            RemoteTripSessionClearResult.DifferentTrip,
+            RemoteTripSessionClearResult.LegacyUncorrelated -> false
         }
     }
 
@@ -140,7 +220,8 @@ class TripRemoteSessionReconciler(
     private val authRepository: AuthRepository,
     private val remoteDataSource: TripRemoteDataSource,
     private val store: RemoteTripSessionStore,
-    private val logger: TripRemoteSessionLogger = NoOpTripRemoteSessionLogger
+    private val logger: TripRemoteSessionLogger = NoOpTripRemoteSessionLogger,
+    private val tripSessionKey: () -> String? = { null },
 ) : ActiveTripRemoteResolver {
     private val mutex = Mutex()
 
@@ -152,7 +233,18 @@ class TripRemoteSessionReconciler(
         val first = remoteDataSource.activeTrip("Bearer $token")
         when (val lookup = retryLookupOnceAfterUnauthorized(first)) {
             is ActiveTripLookupResult.Found -> {
-                if (!store.setRemoteTripId(lookup.remoteTripId)) {
+                val previousRemoteTripId = store.remoteTripId.value
+                val currentTripSessionKey = tripSessionKey()?.trim()?.takeIf { it.isNotEmpty() }
+                val persisted = if (currentTripSessionKey == null) {
+                    store.setRemoteTripId(lookup.remoteTripId)
+                } else {
+                    store.setActiveSession(
+                        remoteTripId = lookup.remoteTripId,
+                        startedAtEpochMs = store.startedAtEpochMs.value.takeIf { previousRemoteTripId == lookup.remoteTripId },
+                        tripSessionKey = currentTripSessionKey,
+                    )
+                }
+                if (!persisted) {
                     logger.tripPersistenceFailed()
                     return@withLock ActiveTripLookupResult.InvalidResponse("remote_trip_persistence_failed")
                 }

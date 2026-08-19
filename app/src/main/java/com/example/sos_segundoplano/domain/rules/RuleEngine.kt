@@ -4,6 +4,7 @@ import com.example.sos_segundoplano.domain.preprocessing.DataQuality
 import com.example.sos_segundoplano.domain.preprocessing.ProcessedSignalWindow
 import com.example.sos_segundoplano.domain.preprocessing.RawSignalValue
 import com.example.sos_segundoplano.domain.preprocessing.SignalKind
+import com.example.sos_segundoplano.domain.preprocessing.SignalSourceId
 import com.example.sos_segundoplano.domain.preprocessing.WindowedSample
 import com.example.sos_segundoplano.domain.signals.NetworkTransport
 import kotlin.math.PI
@@ -44,16 +45,32 @@ class RuleEngine(private val config: RuleEngineConfig = RuleEngineConfig()) {
         trimHistory(window.endNanos)
 
         val orderedHistory = history.toList().sortedWith(compareBy<ProcessedSignalWindow> { it.startNanos }.thenBy { it.windowId })
+        // Keep the same effective evidence horizon that made the automatic SOS reliable before
+        // the source-aware sensor refactor.  The previous fixed 6 s window could discard the
+        // free-fall/impact evidence just before the post-impact immobility window completed, so
+        // the final assessment looked harmless and never reached the countdown.  Clamp the
+        // correlation horizon to the history configured by the caller so short-history tests and
+        // custom configurations remain valid.
+        val evidenceHorizonNanos = minOf(config.physicalEvidenceRetentionNanos, config.historyDurationNanos)
+        val correlatedHistory = orderedHistory.filter { historyWindow ->
+            window.endNanos - historyWindow.endNanos <= evidenceHorizonNanos
+        }
         val gps = evaluateGpsQuality(window)
         val device = evaluateDeviceReadiness(window)
-        val impact = evaluateImpact(window)
-        val braking = evaluateHarshBraking(orderedHistory)
-        val orientation = evaluateOrientation(window)
+        val currentImpact = evaluateImpact(window)
+        val currentOrientation = evaluateOrientation(window)
+        val impact = currentImpact.takeIf { it.status == RuleEvaluationStatus.Triggered }
+            ?: correlatedHistory.asReversed().asSequence().map(::evaluateImpact)
+                .firstOrNull { it.status == RuleEvaluationStatus.Triggered }
+            ?: currentImpact
+        val orientation = currentOrientation.takeIf { it.status == RuleEvaluationStatus.Triggered }
+            ?: correlatedHistory.asReversed().asSequence().map(::evaluateOrientation)
+                .firstOrNull { it.status == RuleEvaluationStatus.Triggered }
+            ?: currentOrientation
+        val braking = evaluateHarshBraking(correlatedHistory)
         val immobility = evaluateImmobility(orderedHistory)
         val continuity = evaluateMovementContinuity(orderedHistory)
-        val historicalImpact = orderedHistory.map { evaluateImpact(it) }.lastOrNull { it.status == RuleEvaluationStatus.Triggered } ?: impact
-        val historicalOrientation = orderedHistory.map { evaluateOrientation(it) }.lastOrNull { it.status == RuleEvaluationStatus.Triggered } ?: orientation
-        val fall = evaluateFall(orderedHistory, historicalImpact, historicalOrientation)
+        val fall = evaluateFall(correlatedHistory, impact, orientation)
         val outcomes = listOf(gps.second, device.second, impact, braking, orientation, immobility, continuity.second, fall)
         val score = RiskScoreCalculator(config).calculate(outcomes)
         val confidence = confidence(window, outcomes, score.confidence, droppedProcessedWindows)
@@ -85,44 +102,153 @@ class RuleEngine(private val config: RuleEngineConfig = RuleEngineConfig()) {
     }
 
     fun evaluateImpact(window: ProcessedSignalWindow): RuleOutcome {
-        val accelerometer = window.samples.filter { it.sample.valid && it.sample.event.signalKind == SignalKind.Accelerometer }
-        val values = accelerometer.mapNotNull { it.vectorMagnitude() }.filter { it.isFinite() }
-        if (values.isEmpty()) return outcome(RuleId.Impact, RuleEvaluationStatus.Indeterminate, null, 0.0, "accelerometer_missing", setOf(SignalKind.Accelerometer), window)
-        if (window.context.mobileCoverageRatio < config.minimumCoverageRatio) return outcome(RuleId.Impact, RuleEvaluationStatus.Indeterminate, null, 0.25, "insufficient_coverage", setOf(SignalKind.Accelerometer), window)
-        val peak = values.maxOrNull() ?: return outcome(RuleId.Impact, RuleEvaluationStatus.Indeterminate, null, 0.0, "invalid_peak", setOf(SignalKind.Accelerometer), window)
-        val baseline = values.median() ?: values.average()
-        val excess = peak - baseline
-        val outliers = accelerometer.count { it.outlier.isOutlier }
-        val triggered = peak >= config.impactThresholdMetersPerSecondSquared && excess >= config.impactBaselineExcessMetersPerSecondSquared && values.size > 1
-        val severity = ratio(max(peak - config.impactThresholdMetersPerSecondSquared, excess), config.impactThresholdMetersPerSecondSquared)
-        val confidence = if (outliers > 0) 0.85 else 0.7
+        val accelerometer = window.samples.filter {
+            it.sample.valid && it.sample.event.signalKind == SignalKind.Accelerometer
+        }
+        if (accelerometer.isEmpty()) {
+            return outcome(
+                RuleId.Impact,
+                RuleEvaluationStatus.Indeterminate,
+                null,
+                0.0,
+                "accelerometer_missing",
+                setOf(SignalKind.Accelerometer),
+                window
+            )
+        }
+
+        var hadEnoughSamplesButPoorCoverage = false
+        val candidates = accelerometer.groupBy { it.sample.event.sourceId }.mapNotNull { (source, samples) ->
+            val values = samples.mapNotNull { it.vectorMagnitude() }.filter { it.isFinite() }
+            if (values.size < 2) return@mapNotNull null
+            val coverage = when (source) {
+                SignalSourceId.Phone -> window.context.mobileCoverageRatio
+                SignalSourceId.Wear -> window.context.wearCoverageRatio
+            }
+            if (coverage < config.minimumCoverageRatio) {
+                hadEnoughSamplesButPoorCoverage = true
+                return@mapNotNull null
+            }
+            val peak = values.maxOrNull() ?: return@mapNotNull null
+            val baseline = values.median() ?: values.average()
+            val excess = peak - baseline
+            val outliers = samples.count { it.outlier.isOutlier }
+            val triggered = peak >= config.impactThresholdMetersPerSecondSquared &&
+                excess >= config.impactBaselineExcessMetersPerSecondSquared
+            ImpactEvidence(
+                source = source,
+                peak = peak,
+                baseline = baseline,
+                excess = excess,
+                outliers = outliers,
+                triggered = triggered,
+                severity = if (triggered) {
+                    ratio(
+                        max(peak - config.impactThresholdMetersPerSecondSquared, excess),
+                        config.impactThresholdMetersPerSecondSquared
+                    )
+                } else {
+                    0.0
+                }
+            )
+        }
+
+        if (candidates.isEmpty()) {
+            return outcome(
+                RuleId.Impact,
+                RuleEvaluationStatus.Indeterminate,
+                null,
+                if (hadEnoughSamplesButPoorCoverage) 0.25 else 0.0,
+                if (hadEnoughSamplesButPoorCoverage) "insufficient_coverage" else "accelerometer_insufficient",
+                setOf(SignalKind.Accelerometer),
+                window
+            )
+        }
+
+        val selected = candidates.maxWithOrNull(
+            compareBy<ImpactEvidence> { if (it.triggered) 1 else 0 }
+                .thenBy { it.severity }
+                .thenBy { it.excess }
+        ) ?: return outcome(
+            RuleId.Impact,
+            RuleEvaluationStatus.Indeterminate,
+            null,
+            0.0,
+            "invalid_peak",
+            setOf(SignalKind.Accelerometer),
+            window
+        )
+        val confidence = when {
+            selected.outliers > 0 -> 0.85
+            selected.source == SignalSourceId.Phone -> 0.80
+            else -> 0.75
+        }
         return outcome(
             RuleId.Impact,
-            if (triggered) RuleEvaluationStatus.Triggered else RuleEvaluationStatus.NotTriggered,
-            if (triggered) severity else 0.0,
+            if (selected.triggered) RuleEvaluationStatus.Triggered else RuleEvaluationStatus.NotTriggered,
+            if (selected.triggered) selected.severity else 0.0,
             confidence,
-            if (triggered) "impact_threshold_exceeded" else "impact_below_threshold",
+            if (selected.triggered) "impact_threshold_exceeded" else "impact_below_threshold",
             emptySet(),
             window,
-            metrics = mapOf("peak" to peak, "baseline" to baseline, "excess" to excess, "outliers" to outliers.toDouble()),
-            thresholds = mapOf("impact" to config.impactThresholdMetersPerSecondSquared, "baselineExcess" to config.impactBaselineExcessMetersPerSecondSquared)
+            metrics = mapOf(
+                "peak" to selected.peak,
+                "baseline" to selected.baseline,
+                "excess" to selected.excess,
+                "outliers" to selected.outliers.toDouble(),
+                "sourceCode" to selected.source.code().toDouble()
+            ),
+            thresholds = mapOf(
+                "impact" to config.impactThresholdMetersPerSecondSquared,
+                "baselineExcess" to config.impactBaselineExcessMetersPerSecondSquared
+            )
         )
     }
 
     fun evaluateFall(windows: List<ProcessedSignalWindow>, impact: RuleOutcome, orientation: RuleOutcome): RuleOutcome {
-        val sameSession = windows.filter { it.sessionId == windows.lastOrNull()?.sessionId }
-        val accel = sameSession.flatMap { it.samples }.filter { it.sample.valid && it.sample.event.signalKind == SignalKind.Accelerometer }
-            .mapNotNull { sample -> sample.vectorMagnitude()?.let { sample.sample.event.timestamp.phoneTimeNanos to it } }
-            .sortedBy { it.first }
-        if (accel.isEmpty()) return outcome(RuleId.Fall, RuleEvaluationStatus.Indeterminate, null, 0.0, "accelerometer_missing", setOf(SignalKind.Accelerometer), windows.lastOrNull())
-        val low = accel.filter { it.second <= config.freeFallThresholdMetersPerSecondSquared }
-        val freeFallStart = low.firstOrNull()?.first
-        val freeFallEnd = low.lastOrNull()?.first
-        val hasFreeFall = freeFallStart != null && freeFallEnd != null && freeFallEnd - freeFallStart >= config.freeFallMinimumDurationNanos
+        val latestWindow = windows.lastOrNull()
+        val sameSession = windows.filter { it.sessionId == latestWindow?.sessionId }
+        val accelerometer = sameSession.flatMap { it.samples }
+            .filter { it.sample.valid && it.sample.event.signalKind == SignalKind.Accelerometer }
+        if (accelerometer.isEmpty()) {
+            return outcome(
+                RuleId.Fall,
+                RuleEvaluationStatus.Indeterminate,
+                null,
+                0.0,
+                "accelerometer_missing",
+                setOf(SignalKind.Accelerometer),
+                latestWindow
+            )
+        }
+
         val impactTime = if (impact.status == RuleEvaluationStatus.Triggered) impact.endNanos else null
-        val impactInWindow = hasFreeFall && impactTime != null && impactTime - freeFallEnd!! in 0..config.fallImpactWindowNanos
-        val orientationSupports = orientation.status == RuleEvaluationStatus.Triggered
-        val triggered = impactInWindow && (orientationSupports || impact.confidence >= 0.7)
+        val impactSource = impact.evidence.metrics["sourceCode"]?.toInt()?.toSignalSourceId()
+        val sourceSamples = accelerometer.groupBy { it.sample.event.sourceId }
+        val preferredSources = buildList {
+            impactSource?.let(::add)
+            sourceSamples.keys.filterNot { it == impactSource }.forEach(::add)
+        }
+        val freeFall = preferredSources.asSequence().mapNotNull { source ->
+            val values = sourceSamples[source].orEmpty().mapNotNull { sample ->
+                sample.vectorMagnitude()?.takeIf { it.isFinite() }?.let {
+                    sample.sample.event.timestamp.phoneTimeNanos to it
+                }
+            }.sortedBy { it.first }
+            latestFreeFallSegment(values, impactTime)?.let { segment -> source to segment }
+        }.firstOrNull()
+
+        val freeFallStart = freeFall?.second?.startNanos
+        val freeFallEnd = freeFall?.second?.endNanos
+        val freeFallSource = freeFall?.first
+        val hasFreeFall = freeFall != null
+        val impactInWindow = hasFreeFall && impactTime != null &&
+            impactTime - freeFallEnd!! in 0..config.fallImpactWindowNanos &&
+            (impactSource == null || freeFallSource == impactSource)
+        val orientationSource = orientation.evidence.metrics["sourceCode"]?.toInt()?.toSignalSourceId()
+        val orientationSupports = orientation.status == RuleEvaluationStatus.Triggered &&
+            (impactSource == null || orientationSource == null || impactSource == orientationSource)
+        val triggered = impactInWindow && (orientationSupports || impact.confidence >= 0.75)
         val status = when {
             triggered -> RuleEvaluationStatus.Triggered
             hasFreeFall || impact.status == RuleEvaluationStatus.Triggered -> RuleEvaluationStatus.NotTriggered
@@ -141,12 +267,20 @@ class RuleEngine(private val config: RuleEngineConfig = RuleEngineConfig()) {
             RuleId.Fall,
             status,
             severity,
-            if (triggered) 0.8 else 0.55,
+            if (triggered) 0.85 else 0.55,
             if (triggered) "free_fall_impact_pattern" else "fall_pattern_not_complete",
             emptySet(),
-            windows.lastOrNull(),
-            metrics = mapOf("freeFallStart" to freeFallStart?.toDouble(), "freeFallEnd" to freeFallEnd?.toDouble(), "impactTime" to impactTime?.toDouble()),
-            thresholds = mapOf("freeFall" to config.freeFallThresholdMetersPerSecondSquared, "fallImpactWindowNanos" to config.fallImpactWindowNanos.toDouble())
+            latestWindow,
+            metrics = mapOf(
+                "freeFallStart" to freeFallStart?.toDouble(),
+                "freeFallEnd" to freeFallEnd?.toDouble(),
+                "impactTime" to impactTime?.toDouble(),
+                "sourceCode" to (impactSource ?: freeFallSource)?.code()?.toDouble()
+            ),
+            thresholds = mapOf(
+                "freeFall" to config.freeFallThresholdMetersPerSecondSquared,
+                "fallImpactWindowNanos" to config.fallImpactWindowNanos.toDouble()
+            )
         )
     }
 
@@ -181,25 +315,112 @@ class RuleEngine(private val config: RuleEngineConfig = RuleEngineConfig()) {
     }
 
     fun evaluateOrientation(window: ProcessedSignalWindow): RuleOutcome {
-        val vectors = window.samples.filter { it.sample.valid && it.sample.event.signalKind == SignalKind.Accelerometer }.mapNotNull { it.vector() }
-        val gyro = window.samples.filter { it.sample.valid && it.sample.event.signalKind == SignalKind.Gyroscope }
-        if (vectors.size < 2) return outcome(RuleId.OrientationChange, RuleEvaluationStatus.Indeterminate, null, 0.0, "accelerometer_insufficient", setOf(SignalKind.Accelerometer), window)
-        val first = vectors.take(max(1, vectors.size / 3)).meanVector()
-        val last = vectors.takeLast(max(1, vectors.size / 3)).meanVector()
-        val angle = angleDegrees(first, last) ?: return outcome(RuleId.OrientationChange, RuleEvaluationStatus.Indeterminate, null, 0.0, "zero_magnitude_vector", emptySet(), window)
-        val gyroRotation = integrateGyro(gyro)
-        val triggered = angle >= config.orientationChangeDegrees || gyroRotation >= config.gyroscopeRotationThresholdRadians
-        val severity = ratio(max(angle / config.orientationChangeDegrees, gyroRotation / config.gyroscopeRotationThresholdRadians), 2.0)
+        val accelerometerBySource = window.samples
+            .filter { it.sample.valid && it.sample.event.signalKind == SignalKind.Accelerometer }
+            .groupBy { it.sample.event.sourceId }
+        val gyroscopeBySource = window.samples
+            .filter { it.sample.valid && it.sample.event.signalKind == SignalKind.Gyroscope }
+            .groupBy { it.sample.event.sourceId }
+        val sources = (accelerometerBySource.keys + gyroscopeBySource.keys).toSet()
+        if (sources.isEmpty()) {
+            return outcome(
+                RuleId.OrientationChange,
+                RuleEvaluationStatus.Indeterminate,
+                null,
+                0.0,
+                "motion_orientation_signals_missing",
+                setOf(SignalKind.Accelerometer, SignalKind.Gyroscope),
+                window
+            )
+        }
+
+        val candidates = sources.mapNotNull { source ->
+            val vectors = accelerometerBySource[source].orEmpty().mapNotNull { it.vector() }
+            val angle = if (vectors.size >= 2) {
+                val first = vectors.take(max(1, vectors.size / 3)).meanVector()
+                val last = vectors.takeLast(max(1, vectors.size / 3)).meanVector()
+                angleDegrees(first, last)
+            } else {
+                null
+            }
+            val gyro = gyroscopeBySource[source].orEmpty()
+            val gyroRotation = if (gyro.size >= 2) integrateGyro(gyro) else 0.0
+            if (angle == null && gyro.size < 2) return@mapNotNull null
+            val safeAngle = angle ?: 0.0
+            val triggered = safeAngle >= config.orientationChangeDegrees ||
+                gyroRotation >= config.gyroscopeRotationThresholdRadians
+            val severity = if (triggered) {
+                ratio(
+                    max(
+                        safeAngle / config.orientationChangeDegrees,
+                        gyroRotation / config.gyroscopeRotationThresholdRadians
+                    ),
+                    2.0
+                )
+            } else {
+                0.0
+            }
+            OrientationEvidence(
+                source = source,
+                angleDegrees = angle,
+                gyroRotationRadians = gyroRotation,
+                triggered = triggered,
+                severity = severity,
+                hasAccelerometer = vectors.size >= 2,
+                hasGyroscope = gyro.size >= 2
+            )
+        }
+
+        if (candidates.isEmpty()) {
+            return outcome(
+                RuleId.OrientationChange,
+                RuleEvaluationStatus.Indeterminate,
+                null,
+                0.0,
+                "orientation_samples_insufficient",
+                setOf(SignalKind.Accelerometer, SignalKind.Gyroscope),
+                window
+            )
+        }
+        val selected = candidates.maxWithOrNull(
+            compareBy<OrientationEvidence> { if (it.triggered) 1 else 0 }
+                .thenBy { it.severity }
+                .thenBy { it.angleDegrees ?: 0.0 }
+                .thenBy { it.gyroRotationRadians }
+        ) ?: return outcome(
+            RuleId.OrientationChange,
+            RuleEvaluationStatus.Indeterminate,
+            null,
+            0.0,
+            "orientation_samples_insufficient",
+            setOf(SignalKind.Accelerometer, SignalKind.Gyroscope),
+            window
+        )
+        val missing = buildSet {
+            if (!selected.hasAccelerometer) add(SignalKind.Accelerometer)
+            if (!selected.hasGyroscope) add(SignalKind.Gyroscope)
+        }
         return outcome(
             RuleId.OrientationChange,
-            if (triggered) RuleEvaluationStatus.Triggered else RuleEvaluationStatus.NotTriggered,
-            if (triggered) severity else 0.0,
-            if (gyro.isEmpty()) 0.6 else 0.85,
-            if (triggered) "orientation_change" else "orientation_stable",
-            if (gyro.isEmpty()) setOf(SignalKind.Gyroscope) else emptySet(),
+            if (selected.triggered) RuleEvaluationStatus.Triggered else RuleEvaluationStatus.NotTriggered,
+            if (selected.triggered) selected.severity else 0.0,
+            when {
+                selected.hasAccelerometer && selected.hasGyroscope -> 0.90
+                selected.hasGyroscope -> 0.75
+                else -> 0.65
+            },
+            if (selected.triggered) "orientation_change" else "orientation_stable",
+            missing,
             window,
-            metrics = mapOf("angleDegrees" to angle, "gyroRotationRadians" to gyroRotation),
-            thresholds = mapOf("angleDegrees" to config.orientationChangeDegrees, "gyroRotationRadians" to config.gyroscopeRotationThresholdRadians)
+            metrics = mapOf(
+                "angleDegrees" to selected.angleDegrees,
+                "gyroRotationRadians" to selected.gyroRotationRadians,
+                "sourceCode" to selected.source.code().toDouble()
+            ),
+            thresholds = mapOf(
+                "angleDegrees" to config.orientationChangeDegrees,
+                "gyroRotationRadians" to config.gyroscopeRotationThresholdRadians
+            )
         )
     }
 
@@ -305,15 +526,17 @@ class RuleEngine(private val config: RuleEngineConfig = RuleEngineConfig()) {
 
     private fun isMoving(window: ProcessedSignalWindow): Boolean {
         val speed = window.features.scalar[SignalKind.Speed]?.mean
-        val accelStd = window.features.vector[SignalKind.Accelerometer]?.magnitudeStandardDeviation
-        val gyroStd = window.features.vector[SignalKind.Gyroscope]?.magnitudeStandardDeviation
-        return (speed != null && speed >= config.movementContinuityMinSpeedMetersPerSecond) || (accelStd != null && accelStd > config.immobilityMaxAccelerometerStdDev) || (gyroStd != null && gyroStd > config.immobilityMaxGyroscopeStdDev)
+        val accelStd = window.maxSourceMagnitudeStandardDeviation(SignalKind.Accelerometer)
+        val gyroStd = window.maxSourceMagnitudeStandardDeviation(SignalKind.Gyroscope)
+        return (speed != null && speed >= config.movementContinuityMinSpeedMetersPerSecond) ||
+            (accelStd != null && accelStd > config.immobilityMaxAccelerometerStdDev) ||
+            (gyroStd != null && gyroStd > config.immobilityMaxGyroscopeStdDev)
     }
 
     private fun isStill(window: ProcessedSignalWindow): Boolean {
         val speed = window.features.scalar[SignalKind.Speed]?.mean
-        val accelStd = window.features.vector[SignalKind.Accelerometer]?.magnitudeStandardDeviation
-        val gyroStd = window.features.vector[SignalKind.Gyroscope]?.magnitudeStandardDeviation
+        val accelStd = window.maxSourceMagnitudeStandardDeviation(SignalKind.Accelerometer)
+        val gyroStd = window.maxSourceMagnitudeStandardDeviation(SignalKind.Gyroscope)
         if (speed == null && accelStd == null && gyroStd == null) return false
         return (speed == null || speed <= config.immobilityMaxSpeedMetersPerSecond) &&
             (accelStd == null || accelStd <= config.immobilityMaxAccelerometerStdDev) &&
@@ -349,6 +572,52 @@ class RuleEngine(private val config: RuleEngineConfig = RuleEngineConfig()) {
         )
     }
 
+    private fun latestFreeFallSegment(
+        samples: List<Pair<Long, Double>>,
+        impactTime: Long?
+    ): FreeFallSegment? {
+        var activeStart: Long? = null
+        var activeEnd: Long? = null
+        var latestQualified: FreeFallSegment? = null
+        samples.forEach { (timestamp, magnitude) ->
+            if (impactTime != null && timestamp > impactTime) return@forEach
+            if (magnitude <= config.freeFallThresholdMetersPerSecondSquared) {
+                if (activeStart == null) activeStart = timestamp
+                activeEnd = timestamp
+                val start = activeStart ?: timestamp
+                val end = activeEnd ?: timestamp
+                if (end - start >= config.freeFallMinimumDurationNanos) {
+                    latestQualified = FreeFallSegment(start, end)
+                }
+            } else {
+                activeStart = null
+                activeEnd = null
+            }
+        }
+        return latestQualified
+    }
+
+    private data class ImpactEvidence(
+        val source: SignalSourceId,
+        val peak: Double,
+        val baseline: Double,
+        val excess: Double,
+        val outliers: Int,
+        val triggered: Boolean,
+        val severity: Double
+    )
+
+    private data class OrientationEvidence(
+        val source: SignalSourceId,
+        val angleDegrees: Double?,
+        val gyroRotationRadians: Double,
+        val triggered: Boolean,
+        val severity: Double,
+        val hasAccelerometer: Boolean,
+        val hasGyroscope: Boolean
+    )
+
+    private data class FreeFallSegment(val startNanos: Long, val endNanos: Long)
     private data class BrakingEvidence(val initialSpeed: Double, val finalSpeed: Double, val seconds: Double, val deceleration: Double)
 
     private companion object {
@@ -364,13 +633,27 @@ class RiskScoreCalculator(private val config: RuleEngineConfig = RuleEngineConfi
             return RiskScore(null, RiskLevel.Unknown, 0.0, emptyList(), config.ruleSetVersion)
         }
         val fallTriggered = byId[RuleId.Fall]?.status == RuleEvaluationStatus.Triggered
+        val impactTriggered = byId[RuleId.Impact]?.status == RuleEvaluationStatus.Triggered
+        val brakingTriggered = byId[RuleId.HarshBraking]?.status == RuleEvaluationStatus.Triggered
+        val primaryPhysicalEvent = fallTriggered || impactTriggered || brakingTriggered
         val contributions = physical.map { id ->
             val outcome = byId[id]
             val severity = if (outcome?.status == RuleEvaluationStatus.Triggered) outcome.severity ?: 0.0 else 0.0
             val weight = weight(id)
             val raw = weight * severity
-            val absorbed = fallTriggered && (id == RuleId.Impact || id == RuleId.OrientationChange)
-            RiskContribution(id, raw, if (absorbed) 0.0 else raw, if (absorbed) RuleId.Fall else null)
+            val absorbedBy = when {
+                fallTriggered && (id == RuleId.Impact || id == RuleId.OrientationChange) -> RuleId.Fall
+                id == RuleId.OrientationChange && !impactTriggered -> null
+                id == RuleId.Immobility && !primaryPhysicalEvent -> null
+                else -> null
+            }
+            val effective = when {
+                fallTriggered && (id == RuleId.Impact || id == RuleId.OrientationChange) -> 0.0
+                id == RuleId.OrientationChange && !impactTriggered && !fallTriggered -> 0.0
+                id == RuleId.Immobility && !primaryPhysicalEvent -> 0.0
+                else -> raw
+            }
+            RiskContribution(id, raw, effective, absorbedBy)
         }
         val value = contributions.sumOf { it.effectiveContribution }.roundToInt().coerceIn(0, config.maxScore)
         val level = when {
@@ -391,6 +674,36 @@ class RiskScoreCalculator(private val config: RuleEngineConfig = RuleEngineConfi
         RuleId.GpsQuality -> config.gpsWeight
         RuleId.DeviceReadiness -> config.deviceReadinessWeight
     }
+}
+
+private fun ProcessedSignalWindow.maxSourceMagnitudeStandardDeviation(kind: SignalKind): Double? =
+    samples.asSequence()
+        .filter { it.sample.valid && it.sample.event.signalKind == kind }
+        .groupBy { it.sample.event.sourceId }
+        .values
+        .mapNotNull { sourceSamples ->
+            sourceSamples.mapNotNull { it.vectorMagnitude() }
+                .filter { it.isFinite() }
+                .standardDeviationOrNull()
+        }
+        .maxOrNull()
+
+private fun SignalSourceId.code(): Int = when (this) {
+    SignalSourceId.Phone -> 0
+    SignalSourceId.Wear -> 1
+}
+
+private fun Int.toSignalSourceId(): SignalSourceId? = when (this) {
+    0 -> SignalSourceId.Phone
+    1 -> SignalSourceId.Wear
+    else -> null
+}
+
+private fun List<Double>.standardDeviationOrNull(): Double? {
+    val valid = filter { it.isFinite() }
+    if (valid.size < 2) return if (valid.size == 1) 0.0 else null
+    val mean = valid.average()
+    return sqrt(valid.sumOf { value -> (value - mean) * (value - mean) } / valid.size)
 }
 
 private fun WindowedSample.vector(): RawSignalValue.Vector? = sample.filteredValue as? RawSignalValue.Vector

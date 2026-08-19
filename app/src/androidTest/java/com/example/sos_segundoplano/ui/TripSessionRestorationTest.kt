@@ -25,6 +25,7 @@ import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatusP
 import com.example.sos_segundoplano.data.trip.InMemoryTripSessionStore
 import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.domain.trip.TripTimingState
+import com.example.sos_segundoplano.domain.trip.TripTimingClearResult
 import com.example.sos_segundoplano.domain.trip.TripTimingStore
 import com.example.sos_segundoplano.domain.rules.BatteryReadinessStatus
 import com.example.sos_segundoplano.domain.rules.ConnectivityReadinessStatus
@@ -57,7 +58,7 @@ class TripSessionRestorationTest {
     }
 
     @Test fun activeSessionOpensMonitoringWithoutStartClick() {
-        setAppContent(store = InMemoryTripSessionStore(TripSessionState.Active))
+        setAppContent(store = InMemoryTripSessionStore(TripSessionState.Active("00000000-0000-0000-0000-000000000001")))
 
         composeRule.onNodeWithTag("monitoring_screen").assertIsDisplayed()
         composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
@@ -66,7 +67,7 @@ class TripSessionRestorationTest {
 
     @Test fun activeSessionWithCountdownOpensAccidentScreenFirst() {
         setAppContent(
-            store = InMemoryTripSessionStore(TripSessionState.Active),
+            store = InMemoryTripSessionStore(TripSessionState.Active("00000000-0000-0000-0000-000000000001")),
             validationState = fakeCountdownState()
         )
 
@@ -76,8 +77,34 @@ class TripSessionRestorationTest {
         composeRule.onAllNodesWithTag("trip_local_summary_screen").assertCountEquals(0)
     }
 
+    @Test fun countdownOverridesAnotherTabWhenRiskArrivesDuringActiveTrip() {
+        val store = InMemoryTripSessionStore(TripSessionState.Active("00000000-0000-0000-0000-000000000001"))
+        val validation = MutableStateFlow<FalsePositiveValidationState>(FalsePositiveValidationState.Idle)
+        composeRule.setContent {
+            SOS_SegundoPlanoTheme {
+                MotoSosApp(
+                    tripSessionStore = store,
+                    locationPermissionStatusProvider = BackgroundLocationPermissionStatusProvider { BackgroundLocationPermissionStatus.Granted },
+                    notificationStatusProvider = AppNotificationStatusProvider { AppNotificationStatus.Enabled },
+                    bluetoothRequirementStatusProvider = BluetoothRequirementStatusProvider { BluetoothRequirementStatus.Enabled },
+                    monitoringServiceStarter = FakeRestorationMonitoringServiceStarter(),
+                    monitoringServiceStopper = FakeRestorationMonitoringServiceStopper(MonitoringServiceStopResult.Stopped),
+                    validationStates = validation
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("bottom_nav_sos").performClick()
+        composeRule.onNodeWithTag("rider_sos_screen").assertIsDisplayed()
+        composeRule.runOnIdle { validation.value = fakeCountdownState() }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("accident_countdown_screen").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("rider_sos_screen").assertCountEquals(0)
+    }
+
     @Test fun safeConfirmedKeepsActiveSessionOnMonitoring() {
-        val store = InMemoryTripSessionStore(TripSessionState.Active)
+        val store = InMemoryTripSessionStore(TripSessionState.Active("00000000-0000-0000-0000-000000000001"))
         setAppContent(
             store = store,
             validationState = FalsePositiveValidationState.SafeConfirmed(fakeMetadata(), "safe-1")
@@ -87,7 +114,7 @@ class TripSessionRestorationTest {
         composeRule.onAllNodesWithTag("accident_countdown_screen").assertCountEquals(0)
         composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
         composeRule.onAllNodesWithTag("trip_local_summary_screen").assertCountEquals(0)
-        assertEquals(TripSessionState.Active, store.states.value)
+        assertEquals(TripSessionState.Active("00000000-0000-0000-0000-000000000001"), store.states.value)
     }
 
     @Test fun activeSessionSurvivesNewCompositionWithSameStore() {
@@ -112,7 +139,7 @@ class TripSessionRestorationTest {
 
         composeRule.onNodeWithTag("start_trip_button").performClick()
         composeRule.onNodeWithTag("monitoring_screen").assertIsDisplayed()
-        assertEquals(TripSessionState.Active, store.states.value)
+        assertEquals(TripSessionState.Active("00000000-0000-0000-0000-000000000001"), store.states.value)
 
         composeRule.runOnIdle { compositionKey++ }
 
@@ -122,7 +149,7 @@ class TripSessionRestorationTest {
     }
 
     @Test fun successfulFinishMarksIdleShowsSummaryAndReturnsHome() {
-        val store = InMemoryTripSessionStore(TripSessionState.Active)
+        val store = InMemoryTripSessionStore(TripSessionState.Active("00000000-0000-0000-0000-000000000001"))
         setAppContent(
             store = store,
             stopper = FakeRestorationMonitoringServiceStopper(MonitoringServiceStopResult.Stopped)
@@ -142,7 +169,7 @@ class TripSessionRestorationTest {
     }
 
     @Test fun alreadyStoppedFinishMarksIdleShowsSummaryAndReturnsHome() {
-        val store = InMemoryTripSessionStore(TripSessionState.Active)
+        val store = InMemoryTripSessionStore(TripSessionState.Active("00000000-0000-0000-0000-000000000001"))
         setAppContent(
             store = store,
             stopper = FakeRestorationMonitoringServiceStopper(MonitoringServiceStopResult.AlreadyStopped)
@@ -162,8 +189,8 @@ class TripSessionRestorationTest {
     }
 
     @Test fun successfulFinishClearsActiveTripTiming() {
-        val sessionStore = InMemoryTripSessionStore(TripSessionState.Active)
-        val timingStore = FakeRestorationTripTimingStore(TripTimingState.Active(1_000L))
+        val sessionStore = InMemoryTripSessionStore(TripSessionState.Active("00000000-0000-0000-0000-000000000001"))
+        val timingStore = FakeRestorationTripTimingStore(TripTimingState.Active(1_000L, "00000000-0000-0000-0000-000000000001"))
         composeRule.setContent {
             SOS_SegundoPlanoTheme {
                 MotoSosApp(
@@ -188,7 +215,7 @@ class TripSessionRestorationTest {
     }
 
     @Test fun failedFinishKeepsActiveMonitoring() {
-        val store = InMemoryTripSessionStore(TripSessionState.Active)
+        val store = InMemoryTripSessionStore(TripSessionState.Active("00000000-0000-0000-0000-000000000001"))
         setAppContent(
             store = store,
             stopper = FakeRestorationMonitoringServiceStopper(MonitoringServiceStopResult.Failed)
@@ -198,7 +225,7 @@ class TripSessionRestorationTest {
 
         composeRule.onNodeWithTag("monitoring_screen").assertIsDisplayed()
         composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
-        assertEquals(TripSessionState.Active, store.states.value)
+        assertEquals(TripSessionState.Active("00000000-0000-0000-0000-000000000001"), store.states.value)
     }
 
     private fun setAppContent(
@@ -295,10 +322,21 @@ private class FakeRestorationMonitoringServiceStopper(
 private class FakeRestorationTripTimingStore(initial: TripTimingState) : TripTimingStore {
     private val mutableStates = MutableStateFlow(initial)
     override val states: StateFlow<TripTimingState> = mutableStates
-    override fun beginConfirmedTrip() {
-        mutableStates.value = TripTimingState.Active(0L)
+    override fun beginConfirmedTrip(tripSessionKey: String?) {
+        mutableStates.value = TripTimingState.Active(0L, tripSessionKey)
     }
     override fun clear() {
         mutableStates.value = TripTimingState.Unknown
+    }
+    override fun clearIfMatches(tripSessionKey: String): TripTimingClearResult = when (val state = mutableStates.value) {
+        TripTimingState.Unknown -> TripTimingClearResult.AlreadyEmpty
+        is TripTimingState.Active -> when {
+            state.tripSessionKey == null -> TripTimingClearResult.LegacyUncorrelated
+            state.tripSessionKey != tripSessionKey -> TripTimingClearResult.DifferentTrip
+            else -> {
+                mutableStates.value = TripTimingState.Unknown
+                TripTimingClearResult.Cleared
+            }
+        }
     }
 }

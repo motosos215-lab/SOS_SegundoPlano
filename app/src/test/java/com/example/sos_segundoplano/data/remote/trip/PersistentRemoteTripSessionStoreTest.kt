@@ -45,6 +45,119 @@ class PersistentRemoteTripSessionStoreTest {
         assertNull(store.remoteTripId.value)
         assertEquals(1, persistence.clearCalls)
     }
+
+    @Test fun inMemorySessionKeepsRemoteTripAndCanonicalStartedAtTogether() {
+        val store = InMemoryRemoteTripSessionStore()
+        assertTrue(store.setActiveSession("remote-trip-1", 1_723_766_400_000L))
+        assertEquals("remote-trip-1", store.remoteTripId.value)
+        assertEquals(1_723_766_400_000L, store.startedAtEpochMs.value)
+    }
+
+    @Test fun sameRemoteTripKeepsItsFirstConfirmedStartedAt() {
+        val store = InMemoryRemoteTripSessionStore()
+
+        assertTrue(store.setActiveSession("remote-trip-1", 1_723_766_400_000L))
+        assertTrue(store.setStartedAtEpochMs(1_723_766_500_000L))
+
+        assertEquals("remote-trip-1", store.remoteTripId.value)
+        assertEquals(1_723_766_400_000L, store.startedAtEpochMs.value)
+    }
+
+    @Test fun sameRemoteTripWithTheSameStartedAtRemainsStable() {
+        val store = InMemoryRemoteTripSessionStore()
+
+        assertTrue(store.setActiveSession("remote-trip-1", 1_723_766_400_000L))
+        assertTrue(store.setStartedAtEpochMs(1_723_766_400_000L))
+
+        assertEquals(1_723_766_400_000L, store.startedAtEpochMs.value)
+    }
+
+    @Test fun legacySessionCanBeCompletedOnceButNotReplaced() {
+        val store = InMemoryRemoteTripSessionStore()
+
+        assertTrue(store.setActiveSession("remote-trip-1", null))
+        assertTrue(store.setStartedAtEpochMs(1_723_766_400_000L))
+        assertTrue(store.setStartedAtEpochMs(1_723_766_500_000L))
+
+        assertEquals("remote-trip-1", store.remoteTripId.value)
+        assertEquals(1_723_766_400_000L, store.startedAtEpochMs.value)
+    }
+
+    @Test fun newRemoteTripReplacesTheEntireSession() {
+        val store = InMemoryRemoteTripSessionStore()
+
+        assertTrue(store.setActiveSession("remote-trip-1", 1_723_766_400_000L))
+        assertTrue(store.setActiveSession("remote-trip-2", 1_723_766_500_000L))
+
+        assertEquals("remote-trip-2", store.remoteTripId.value)
+        assertEquals(1_723_766_500_000L, store.startedAtEpochMs.value)
+    }
+
+    @Test fun persistentSessionRestoresCanonicalStartedAtWithoutRegeneratingIt() {
+        val persistence = FakeRemoteTripSessionPersistence()
+        val first = PersistentRemoteTripSessionStore(persistence, RemoteTripSessionClock { 1234L })
+        first.setActiveSession("remote-trip-1", 1_723_766_400_000L)
+
+        val restored = PersistentRemoteTripSessionStore(persistence)
+        assertEquals("remote-trip-1", restored.remoteTripId.value)
+        assertEquals(1_723_766_400_000L, restored.startedAtEpochMs.value)
+    }
+
+    @Test fun clearRemovesRemoteTripAndStartedAtTogether() {
+        val store = PersistentRemoteTripSessionStore(FakeRemoteTripSessionPersistence())
+        store.setActiveSession("remote-trip-1", 1_723_766_400_000L)
+
+        assertTrue(store.clearRemoteTripId())
+        assertNull(store.remoteTripId.value)
+        assertNull(store.startedAtEpochMs.value)
+    }
+
+
+    @Test fun correlatedSessionKeyIsClearedFromMemoryAndPersistence() {
+        val persistence = FakeRemoteTripSessionPersistence()
+        val store = PersistentRemoteTripSessionStore(persistence, RemoteTripSessionClock { 1234L })
+        val key = "00000000-0000-0000-0000-0000000000a1"
+        assertTrue(store.setActiveSession("remote-trip-1", 10L, key))
+        assertEquals(key, store.tripSessionKey.value)
+
+        assertTrue(store.clearRemoteTripId())
+
+        assertNull(store.tripSessionKey.value)
+        assertNull(persistence.value)
+    }
+
+    @Test fun differentRemoteTripNeverInheritsPreviousTripSessionKey() {
+        val persistence = FakeRemoteTripSessionPersistence()
+        val store = PersistentRemoteTripSessionStore(persistence, RemoteTripSessionClock { 1234L })
+        val key = "00000000-0000-0000-0000-0000000000a1"
+        assertTrue(store.setActiveSession("remote-trip-A", 10L, key))
+
+        assertTrue(store.setRemoteTripId("remote-trip-B"))
+
+        assertEquals("remote-trip-B", store.remoteTripId.value)
+        assertNull(store.tripSessionKey.value)
+        assertNull(persistence.value?.tripSessionKey)
+    }
+
+    @Test fun sameRemoteTripPreservesCorrelatedSessionKeyWhenUpdatingStartedAt() {
+        val persistence = FakeRemoteTripSessionPersistence()
+        val store = PersistentRemoteTripSessionStore(persistence, RemoteTripSessionClock { 1234L })
+        val key = "00000000-0000-0000-0000-0000000000a1"
+        assertTrue(store.setActiveSession("remote-trip-A", null, key))
+
+        assertTrue(store.setStartedAtEpochMs(50L))
+
+        assertEquals(key, store.tripSessionKey.value)
+        assertEquals(key, persistence.value?.tripSessionKey)
+    }
+
+    @Test fun legacyPersistedSessionWithoutStartedAtRemainsReadableWithoutInventingOne() {
+        val store = PersistentRemoteTripSessionStore(
+            FakeRemoteTripSessionPersistence(value = PersistedRemoteTripSession("remote-trip-1", 1234L))
+        )
+        assertEquals("remote-trip-1", store.remoteTripId.value)
+        assertNull(store.startedAtEpochMs.value)
+    }
 }
 
 private class FakeRemoteTripSessionPersistence(

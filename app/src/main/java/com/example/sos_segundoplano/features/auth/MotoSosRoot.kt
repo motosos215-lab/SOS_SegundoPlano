@@ -12,6 +12,8 @@ import com.example.sos_segundoplano.domain.repository.AuthRepository
 fun MotoSosRoot(
     authRepository: AuthRepository,
     initialSessionRestoration: InitialSessionRestoration,
+    onRegisterWebSelected: () -> Unit = {},
+    onPasswordRecoverySelected: () -> Unit = {},
     riderContent: @Composable () -> Unit,
     monitorContent: @Composable () -> Unit
 ) {
@@ -28,9 +30,11 @@ fun MotoSosRoot(
         onRememberMeChanged = loginViewModel::onRememberMeChanged,
         onPasswordVisibilityChanged = loginViewModel::onPasswordVisibilityChanged,
         onSubmit = loginViewModel::submitLogin,
+        onConfirmTakeover = loginViewModel::confirmTakeover,
+        onCancelTakeover = loginViewModel::cancelTakeover,
         onDismissMessage = loginViewModel::dismissMessage,
-        onRegisterWebSelected = loginViewModel::onRegisterWebSelected,
-        onPasswordRecoverySelected = loginViewModel::onPasswordRecoverySelected,
+        onRegisterWebSelected = onRegisterWebSelected,
+        onPasswordRecoverySelected = onPasswordRecoverySelected,
         riderContent = riderContent,
         monitorContent = monitorContent
     )
@@ -44,6 +48,8 @@ fun MotoSosRoot(
     onRememberMeChanged: (Boolean) -> Unit = {},
     onPasswordVisibilityChanged: () -> Unit = {},
     onSubmit: () -> Unit = {},
+    onConfirmTakeover: () -> Unit = {},
+    onCancelTakeover: () -> Unit = {},
     onDismissMessage: () -> Unit = {},
     onRegisterWebSelected: () -> Unit = {},
     onPasswordRecoverySelected: () -> Unit = {},
@@ -61,6 +67,8 @@ fun MotoSosRoot(
             onRememberMeChanged = onRememberMeChanged,
             onPasswordVisibilityChanged = onPasswordVisibilityChanged,
             onSubmit = onSubmit,
+            onConfirmTakeover = onConfirmTakeover,
+            onCancelTakeover = onCancelTakeover,
             onDismissMessage = onDismissMessage,
             onRegisterWebSelected = onRegisterWebSelected,
             onPasswordRecoverySelected = onPasswordRecoverySelected

@@ -3,6 +3,8 @@ package com.example.sos_segundoplano.core.auth
 import android.content.Context
 import com.example.sos_segundoplano.BuildConfig
 import com.example.sos_segundoplano.data.local.auth.KeystoreEncryptedSessionStore
+import com.example.sos_segundoplano.data.local.auth.AndroidClientDeviceInfoProvider
+import com.example.sos_segundoplano.data.local.auth.LinkedMobileDeviceIdStore
 import com.example.sos_segundoplano.data.remote.auth.AuthNetworkFactory
 import com.example.sos_segundoplano.data.remote.auth.RetrofitAuthRemoteDataSource
 import com.example.sos_segundoplano.data.repository.DefaultAuthRepository
@@ -41,10 +43,13 @@ object AuthProvider {
     private fun create(context: Context): AuthRepository {
         val moshi = AuthNetworkFactory.createMoshi()
         val api = AuthNetworkFactory.createApi(BuildConfig.MOTOSOS_API_BASE_URL, moshi)
+        val linkedMobileDeviceStore = LinkedMobileDeviceIdStore(context)
         val baseRepository = DefaultAuthRepository(
             remoteDataSource = RetrofitAuthRemoteDataSource(api, moshi),
             sessionStore = KeystoreEncryptedSessionStore(context, moshi),
-            clock = SystemAuthClock
+            clock = SystemAuthClock,
+            clientDeviceInfoProvider = AndroidClientDeviceInfoProvider(context),
+            linkedMobileDeviceIdForAccount = linkedMobileDeviceStore::readForAccount
         )
         return PushAwareAuthRepository(
             delegate = baseRepository,

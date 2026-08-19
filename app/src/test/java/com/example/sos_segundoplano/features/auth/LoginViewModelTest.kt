@@ -1,6 +1,9 @@
 package com.example.sos_segundoplano.features.auth
 
 import com.example.sos_segundoplano.domain.auth.AccessDenied
+import com.example.sos_segundoplano.domain.auth.ActiveMobileSessionInfo
+import com.example.sos_segundoplano.domain.auth.ActiveSessionExists
+import com.example.sos_segundoplano.domain.auth.SessionTakeoverChallenge
 import com.example.sos_segundoplano.domain.auth.AccessToken
 import com.example.sos_segundoplano.domain.auth.AuthResult
 import com.example.sos_segundoplano.domain.auth.AuthUser
@@ -162,6 +165,32 @@ class LoginViewModelTest {
     }
 
     @Test
+    fun activeSessionConflictShowsTakeoverAndConfirmUsesChallenge() = runTest {
+        val challenge = SessionTakeoverChallenge(
+            activeSession = ActiveMobileSessionInfo("Samsung A34", "Android", "2026-08-18T20:00:00Z"),
+            takeoverToken = "secret-token",
+            takeoverExpiresAtUtc = "2026-08-18T20:03:00Z",
+            hasActiveTrip = false,
+            activeTrip = null,
+            accountEmail = "rider@example.com",
+            rememberMe = true
+        )
+        val repository = FakeAuthRepository(loginResult = ActiveSessionExists(challenge)).apply {
+            takeoverResult = AuthResult.Success(validUser())
+        }
+        val viewModel = viewModel(repository)
+        enterValidCredentials(viewModel)
+
+        viewModel.submitLogin()
+        assertEquals("Samsung A34", viewModel.uiState.value.takeoverChallenge?.activeSession?.deviceName)
+        assertFalse(viewModel.uiState.value.toString().contains("secret-token"))
+
+        viewModel.confirmTakeover()
+        assertEquals(1, repository.takeoverCalls)
+        assertNull(viewModel.uiState.value.takeoverChallenge)
+    }
+
+    @Test
     fun deniedAndInactiveAccountsMapMessageAndClearPassword() = runTest {
         val cases = listOf(
             AccessDenied(UserRole.Monitor) to AuthUiMessage.AccessDenied,
@@ -266,6 +295,8 @@ private class FakeAuthRepository(
     var lastEmail: String? = null
     var lastPassword: String? = null
     var lastRememberMe: Boolean? = null
+    var takeoverResult: AuthResult<AuthUser> = AuthResult.Success(validUser())
+    var takeoverCalls: Int = 0
 
     override suspend fun login(email: String, password: String, rememberMe: Boolean): AuthResult<AuthUser> {
         loginCalls++
@@ -283,6 +314,11 @@ private class FakeAuthRepository(
             }
         }
         return result
+    }
+
+    override suspend fun takeover(challenge: SessionTakeoverChallenge): AuthResult<AuthUser> {
+        takeoverCalls++
+        return takeoverResult
     }
 
     override suspend fun restoreSession(): AuthResult<AuthUser?> = AuthResult.Success(null)

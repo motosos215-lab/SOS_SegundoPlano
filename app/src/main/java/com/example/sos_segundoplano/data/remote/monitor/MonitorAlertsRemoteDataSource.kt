@@ -19,7 +19,7 @@ interface MonitorAlertsRemoteDataSource {
     suspend fun list(authorization: String): MonitorAlertsRemoteResult<MonitorAlertHistoryDataDto>
     suspend fun detail(authorization: String, id: String): MonitorAlertsRemoteResult<MonitorAlertDetailDataDto>
     suspend fun status(authorization: String, id: String): MonitorAlertsRemoteResult<MonitorAlertStatusDataDto>
-    suspend fun location(authorization: String, id: String): MonitorAlertsRemoteResult<Any>
+    suspend fun location(authorization: String, id: String): MonitorAlertsRemoteResult<MonitorAlertLocationDataDto>
     suspend fun view(authorization: String, id: String): MonitorAlertsRemoteResult<Any>
     suspend fun acknowledge(authorization: String, id: String, request: AcknowledgeMonitorAlertRequestDto): MonitorAlertsRemoteResult<MonitorAlertDetailDataDto>
     suspend fun decline(authorization: String, id: String, request: DeclineMonitorAlertRequestDto): MonitorAlertsRemoteResult<MonitorAlertDetailDataDto>

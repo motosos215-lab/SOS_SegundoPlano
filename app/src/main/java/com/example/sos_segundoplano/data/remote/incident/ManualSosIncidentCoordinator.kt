@@ -32,6 +32,11 @@ class ManualSosIncidentCoordinator(
 
     suspend fun requestManualSos(
         progressReporter: ManualSosProgressReporter = ManualSosProgressReporter {}
+    ): LocalIncident = requestManualSos(ManualSosSubmissionOptions(), progressReporter)
+
+    suspend fun requestManualSos(
+        options: ManualSosSubmissionOptions,
+        progressReporter: ManualSosProgressReporter = ManualSosProgressReporter {}
     ): LocalIncident {
         val (request, owner) = synchronized(inFlightLock) {
             val existing = inFlight
@@ -45,7 +50,7 @@ class ManualSosIncidentCoordinator(
         }
         if (!owner) return request.await()
         return try {
-            performRequest(progressReporter).also(request::complete)
+            performRequest(options, progressReporter).also(request::complete)
         } catch (failure: Throwable) {
             request.completeExceptionally(failure)
             throw failure
@@ -56,7 +61,10 @@ class ManualSosIncidentCoordinator(
         }
     }
 
-    private suspend fun performRequest(progressReporter: ManualSosProgressReporter): LocalIncident = mutex.withLock {
+    private suspend fun performRequest(
+        options: ManualSosSubmissionOptions,
+        progressReporter: ManualSosProgressReporter
+    ): LocalIncident = mutex.withLock {
         val pendingLink = remoteIncidentLinkStore.readPendingManualSos()
         progressReporter.report(
             if (pendingLink == null) ManualSosRequestState.Preparing else ManualSosRequestState.Retrying
@@ -64,7 +72,7 @@ class ManualSosIncidentCoordinator(
         val incident = if (pendingLink != null) {
             pendingLink.toLocalIncident()
         } else {
-            createAndPersistLocalAttempt()
+            createAndPersistLocalAttempt(options)
         }
         if (incident.remoteCreationStatus is IncidentRemoteCreationStatus.InvalidResponse) {
             return@withLock incidentStore.add(incident).also {
@@ -78,7 +86,7 @@ class ManualSosIncidentCoordinator(
         result
     }
 
-    private fun createAndPersistLocalAttempt(): LocalIncident {
+    private fun createAndPersistLocalAttempt(options: ManualSosSubmissionOptions): LocalIncident {
         val detectedAtUtc = nowUtc()
         val incident = newLocalIncident(
             localIncidentId = nextIncidentId(),
@@ -94,7 +102,9 @@ class ManualSosIncidentCoordinator(
                 updatedAtEpochMillis = detectedAtUtc.toEpochMilli(),
                 clientAlertRequestId = nextClientAlertRequestId(),
                 detectedAtUtc = detectedAtUtc.toString(),
-                remoteAlertDispatchId = null
+                remoteAlertDispatchId = null,
+                manualSeverity = options.severity.apiValue,
+                manualPriority = options.priority.apiValue
             )
         )
         return if (persisted) incident else incident.copy(

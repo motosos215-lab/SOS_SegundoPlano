@@ -5,9 +5,13 @@ import android.util.Log
 import com.example.sos_segundoplano.BuildConfig
 import com.example.sos_segundoplano.core.auth.AuthProvider
 import com.example.sos_segundoplano.data.remote.auth.AuthNetworkFactory
+import com.example.sos_segundoplano.data.local.auth.LinkedMobileDeviceIdStore
+import com.example.sos_segundoplano.domain.auth.SessionState
 import com.example.sos_segundoplano.data.remote.incident.AndroidCurrentManualSosLocationProvider
 import com.example.sos_segundoplano.data.remote.incident.TripSignalManualSosLocationProvider
 import com.example.sos_segundoplano.data.signals.TripSignalStoreProvider
+import com.example.sos_segundoplano.data.trip.TripSessionStoreProvider
+import com.example.sos_segundoplano.domain.model.TripSessionState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -17,7 +21,7 @@ class TripRemoteSessionDependencies(
     val starter: RemoteTripStarter,
     val resolvedStarter: ResolvedRemoteTripStarter,
     val startLocationCaptureStates: StateFlow<TripStartLocationCaptureState>,
-    val finisher: RemoteTripFinisher
+    val finisher: RemoteTripIdFinisher
 )
 
 object TripRemoteSessionProvider {
@@ -37,7 +41,9 @@ object TripRemoteSessionProvider {
         )
         val authRepository = AuthProvider.get(context)
         val remoteDataSource = RetrofitTripRemoteDataSource(api, moshi)
-        val starter = AuthenticatedRemoteTripStarter(authRepository, remoteDataSource, store)
+        val starter = AuthenticatedRemoteTripStarter(authRepository, remoteDataSource, store) {
+            (TripSessionStoreProvider.store.states.value as? TripSessionState.Active)?.tripSessionKey
+        }
         val startLocationCaptureStates = MutableStateFlow(TripStartLocationCaptureState.Idle)
         return TripRemoteSessionDependencies(
             store = store,
@@ -45,11 +51,27 @@ object TripRemoteSessionProvider {
                 authRepository = authRepository,
                 remoteDataSource = remoteDataSource,
                 store = store,
-                logger = AndroidTripRemoteSessionLogger
+                logger = AndroidTripRemoteSessionLogger,
+                tripSessionKey = {
+                    (TripSessionStoreProvider.store.states.value as? TripSessionState.Active)?.tripSessionKey
+                },
             ),
             starter = starter,
             resolvedStarter = DefaultResolvedRemoteTripStarter(
-                resourcesResolver = AuthenticatedTripStartResourcesResolver(authRepository, remoteDataSource),
+                resourcesResolver = AuthenticatedTripStartResourcesResolver(
+                    authRepository,
+                    remoteDataSource,
+                    onMobileDeviceResolved = { mobileDeviceId ->
+                        val email = when (val state = authRepository.observeSession().value) {
+                            is SessionState.Authenticated -> state.user.email
+                            is SessionState.Refreshing -> state.user.email
+                            else -> null
+                        }
+                        if (!email.isNullOrBlank()) {
+                            LinkedMobileDeviceIdStore(context).saveForAccount(email, mobileDeviceId)
+                        }
+                    }
+                ),
                 remoteTripStarter = starter,
                 locationProvider = TripSignalManualSosLocationProvider(
                     TripSignalStoreProvider.store,

@@ -17,3 +17,14 @@ local.properties
 *.log
 secrets.properties
 google-services.json
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.key
+*.crt
+service-account*.json
+firebase-adminsdk*.json
+credentials*.json
+secrets/

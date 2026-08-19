@@ -65,6 +65,15 @@ object WearDataLayerProtocol {
                 putLong("windowId", state.metadata.windowId)
                 putLong("updatedAtElapsedRealtimeNanos", state.metadata.timestampElapsedRealtimeNanos)
             }
+            is FalsePositiveValidationState.IncidentDeliveryRetrying -> {
+                putString("state", "incident_delivery_retrying")
+                putLong("sessionId", state.metadata.sessionId)
+                putLong("assessmentId", state.metadata.assessmentId)
+                putLong("windowId", state.metadata.windowId)
+                putInt("attempt", state.attempt)
+                putInt("maxAttempts", state.maxAttempts)
+                putLong("updatedAtElapsedRealtimeNanos", state.metadata.timestampElapsedRealtimeNanos)
+            }
             is FalsePositiveValidationState.MinorEventRecorded -> {
                 putString("state", "minor_event_recorded")
                 putLong("sessionId", state.metadata.sessionId)

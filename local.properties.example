@@ -1,0 +1,4 @@
+# Android Studio normalmente genera sdk.dir automáticamente en local.properties.
+# Los mapas integrados usan MapLibre + OpenFreeMap y no requieren API key.
+# Ejemplo Windows:
+# sdk.dir=C\:\\Users\\TU_USUARIO\\AppData\\Local\\Android\\Sdk

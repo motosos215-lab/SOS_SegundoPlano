@@ -1,23 +1,29 @@
-# Checklist De Seguridad
+# Checklist de seguridad MotoSOS
 
-## Android
+Marcar únicamente después de evidencia verificable en la rama o el PR.
 
-- Backups desactivados para evitar extraccion de datos sensibles.
-- Reglas de backup y data extraction cerradas por defecto.
-- Permisos deben solicitarse solo cuando el flujo los requiera.
-- Los datos sensibles locales deben cifrarse antes de persistirse.
-- Las acciones criticas deben registrarse en bitacora de auditoria.
+## Antes de integrar
 
-## Codigo
+- [ ] No secrets committed
+- [ ] Gitleaks passing
+- [ ] SAST passing
+- [ ] Dependency scan passing
+- [ ] Tests passing
+- [ ] ML tests passing
+- [ ] Android lint passing
+- [ ] Debug build passing
+- [ ] `google-services.json` not tracked
+- [ ] No sensitive production logs
+- [ ] HTTPS enforced
+- [ ] Tokens protected by Android Keystore/AES-GCM
+- [ ] SOS manual independent from ML
+- [ ] Hard Rules independent from ML
+- [ ] FalsePositiveValidation and the 20-second countdown remain in the automatic SOS path
 
-- No registrar tokens, ubicaciones sensibles, payloads personales o secretos en logs.
-- Validar payloads antes de procesarlos o enviarlos.
-- Manejar errores sin exponer informacion interna.
-- Evitar duplicados en eventos offline e incidentes.
+## Revisión de cambios
 
-## CI/CD
-
-- Ejecutar pruebas unitarias en cada push y pull request.
-- Ejecutar Android Lint en cada push y pull request.
-- Escanear secretos antes de integrar cambios.
-- Revisar dependencias antes de releases.
+- [ ] El PR no contiene `.env`, `local.properties`, certificados, llaves, APK/AAB o directorios de build.
+- [ ] Las Actions usan permisos mínimos y referencias fijadas a SHA verificable.
+- [ ] Los cambios de dependencia recibieron revisión.
+- [ ] Se evaluaron logs, ubicación y datos persistidos para evitar exposición innecesaria.
+- [ ] Cualquier cambio release/R8 incluye validación de compatibilidad.

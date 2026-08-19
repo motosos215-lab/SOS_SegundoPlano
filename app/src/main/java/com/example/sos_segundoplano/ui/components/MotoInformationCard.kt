@@ -2,6 +2,7 @@ package com.example.sos_segundoplano.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -50,7 +51,8 @@ fun MotoInformationCard(
     @DrawableRes iconRes: Int? = null,
     iconViewportSize: Dp = 40.dp,
     iconAssetSize: Dp = 64.dp,
-    iconTint: Color? = MotoPrimaryBlue
+    iconTint: Color? = MotoPrimaryBlue,
+    onClick: (() -> Unit)? = null
 ) {
     Row(
         modifier = modifier
@@ -58,10 +60,11 @@ fun MotoInformationCard(
             .heightIn(min = 94.dp)
             .background(MotoSurface, RoundedCornerShape(16.dp))
             .border(1.dp, MotoDivider, RoundedCornerShape(16.dp))
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(14.dp)
             .semantics {
                 this.contentDescription = contentDescription
-                disabled()
+                if (onClick == null) disabled()
             },
         verticalAlignment = Alignment.CenterVertically
     ) {

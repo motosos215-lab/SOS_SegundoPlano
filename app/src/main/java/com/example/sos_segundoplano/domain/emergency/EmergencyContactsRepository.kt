@@ -53,6 +53,7 @@ data class EmergencyInvitation(
 )
 
 interface EmergencyContactsRepository {
+    suspend fun list(): EmergencyContactsResult<List<EmergencyContact>>
     suspend fun create(request: CreateEmergencyContact): EmergencyContactsResult<EmergencyContact>
     suspend fun invite(contactId: String): EmergencyContactsResult<EmergencyContact>
     suspend fun getInvitation(code: String): EmergencyContactsResult<EmergencyInvitation>

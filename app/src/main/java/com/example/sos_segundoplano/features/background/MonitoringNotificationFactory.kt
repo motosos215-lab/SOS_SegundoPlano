@@ -143,6 +143,7 @@ class MonitoringNotificationFactory(
     private fun notificationTitle(state: FalsePositiveValidationState): String = when (state) {
         is FalsePositiveValidationState.CountdownActive -> appContext.getString(R.string.validation_countdown_title)
         is FalsePositiveValidationState.HelpRequested -> appContext.getString(R.string.validation_request_help)
+        is FalsePositiveValidationState.IncidentDeliveryRetrying -> appContext.getString(R.string.validation_delivery_retry_title)
         is FalsePositiveValidationState.ImmediateAlertRequested -> appContext.getString(R.string.validation_immediate_alert_requested_title)
         is FalsePositiveValidationState.IncidentGenerated -> appContext.getString(R.string.validation_incident_generated)
         is FalsePositiveValidationState.Error -> appContext.getString(R.string.validation_local_registration_failed_title)
@@ -161,6 +162,7 @@ class MonitoringNotificationFactory(
             IncidentCause.ManualSos -> appContext.getString(R.string.validation_help_requested)
         }
         is FalsePositiveValidationState.HelpRequested -> appContext.getString(R.string.validation_help_requested)
+        is FalsePositiveValidationState.IncidentDeliveryRetrying -> appContext.getString(R.string.validation_delivery_retry)
         is FalsePositiveValidationState.ImmediateAlertRequested -> appContext.getString(R.string.validation_immediate_alert_requested)
         is FalsePositiveValidationState.Error -> appContext.getString(R.string.validation_local_registration_failed)
         else -> appContext.getString(R.string.monitoring_notification_content)
@@ -178,6 +180,7 @@ class MonitoringNotificationFactory(
 private fun FalsePositiveValidationState.isEmergencyNotificationState(): Boolean = when (this) {
     is FalsePositiveValidationState.CountdownActive,
     is FalsePositiveValidationState.HelpRequested,
+    is FalsePositiveValidationState.IncidentDeliveryRetrying,
     is FalsePositiveValidationState.IncidentGenerated,
     is FalsePositiveValidationState.ImmediateAlertRequested,
     is FalsePositiveValidationState.Error -> true

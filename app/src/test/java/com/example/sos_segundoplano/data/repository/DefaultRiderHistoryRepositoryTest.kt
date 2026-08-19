@@ -12,6 +12,10 @@ import com.example.sos_segundoplano.data.remote.trip.TripHistoryDto
 import com.example.sos_segundoplano.data.remote.trip.TripLocationDto
 import com.example.sos_segundoplano.data.remote.trip.TripHistoryPageDto
 import com.example.sos_segundoplano.data.remote.trip.TripMutationDataDto
+import com.example.sos_segundoplano.data.remote.trip.TripRouteDataDto
+import com.example.sos_segundoplano.data.remote.trip.TripRoutePointDto
+import com.example.sos_segundoplano.data.remote.trip.TripRoutePointsBatchDataDto
+import com.example.sos_segundoplano.data.remote.trip.TripRoutePointsBatchRequestDto
 import com.example.sos_segundoplano.data.remote.trip.TripsApi
 import com.example.sos_segundoplano.domain.auth.AccessToken
 import com.example.sos_segundoplano.domain.auth.AuthResult
@@ -47,6 +51,32 @@ class DefaultRiderHistoryRepositoryTest {
         assertTrue(incidents.value.isEmpty())
     }
 
+
+    @Test fun loadsPreviewRouteAsOrderedRealGpsPoints() = runBlocking {
+        val route = TripRouteDataDto(
+            tripId = "trip-123",
+            routePoints = listOf(
+                TripRoutePointDto(clientRoutePointId = "b", sequence = 2, latitude = 19.44, longitude = -99.12, accuracyMeters = 7.0),
+                TripRoutePointDto(clientRoutePointId = "a", sequence = 1, latitude = 19.43, longitude = -99.13, accuracyMeters = 8.0)
+            )
+        )
+        val api = FakeTripsApi(
+            response = ApiEnvelopeDto(true, TripHistoryPageDto(emptyList()), null),
+            routeResponse = ApiEnvelopeDto(true, route, null)
+        )
+        val repository = DefaultRiderHistoryRepository(
+            RiderAuth(),
+            api,
+            FakeIncidentsApi(ApiEnvelopeDto(true, IncidentHistoryPageDto(emptyList()), null))
+        )
+
+        val result = repository.route("trip-123", preview = true) as RiderHistoryResult.Success
+
+        assertEquals(listOf(1L, 2L), result.value.map { it.sequence })
+        assertEquals("preview", api.lastRouteMode)
+        assertEquals("trip-123", api.lastRouteTripId)
+    }
+
     @Test fun moshiParsingFailureBecomesControlledRepositoryFailure() = runBlocking {
         val repository = DefaultRiderHistoryRepository(
             RiderAuth(),
@@ -72,8 +102,11 @@ private class RiderAuth : AuthRepository {
 
 private class FakeTripsApi(
     private val response: ApiEnvelopeDto<TripHistoryPageDto>? = null,
-    private val failure: Exception? = null
+    private val failure: Exception? = null,
+    private val routeResponse: ApiEnvelopeDto<TripRouteDataDto>? = null
 ) : TripsApi {
+    var lastRouteMode: String? = null
+    var lastRouteTripId: String? = null
     override suspend fun listTrips(authorization: String): Response<ApiEnvelopeDto<TripHistoryPageDto>> {
         failure?.let { throw it }
         return Response.success(requireNotNull(response))
@@ -83,6 +116,12 @@ private class FakeTripsApi(
     override suspend fun activeTrip(authorization: String): Response<ApiEnvelopeDto<ActiveTripDataDto>> = error("unused")
     override suspend fun startTrip(authorization: String, request: StartTripRequestDto): Response<ApiEnvelopeDto<TripMutationDataDto>> = error("unused")
     override suspend fun finishTrip(authorization: String, tripId: String, request: FinishTripRequestDto): Response<ApiEnvelopeDto<TripMutationDataDto>> = error("unused")
+    override suspend fun uploadRoutePoints(authorization: String, tripId: String, request: TripRoutePointsBatchRequestDto): Response<ApiEnvelopeDto<TripRoutePointsBatchDataDto>> = error("unused")
+    override suspend fun route(authorization: String, tripId: String, mode: String?): Response<ApiEnvelopeDto<TripRouteDataDto>> {
+        lastRouteTripId = tripId
+        lastRouteMode = mode
+        return Response.success(requireNotNull(routeResponse))
+    }
 }
 
 private class FakeIncidentsApi(

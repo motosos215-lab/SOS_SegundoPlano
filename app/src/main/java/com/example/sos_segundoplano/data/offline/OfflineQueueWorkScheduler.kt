@@ -26,7 +26,8 @@ class OfflineQueueWorkScheduler(
 ) {
     fun scheduleImmediateSync(): ScheduleResult = schedule(ExistingWorkPolicy.KEEP, 0L)
 
-    fun scheduleDeferredSync(delayMillis: Long): ScheduleResult = schedule(ExistingWorkPolicy.APPEND_OR_REPLACE, delayMillis)
+    /** REPLACE lets an earlier durable retry supersede a previously scheduled later retry. */
+    fun scheduleDeferredSync(delayMillis: Long): ScheduleResult = schedule(ExistingWorkPolicy.REPLACE, delayMillis)
 
     private fun schedule(policy: ExistingWorkPolicy, delayMillis: Long): ScheduleResult = try {
         enqueuer.enqueueUnique(UNIQUE_WORK_NAME, policy, createSyncWorkRequest(delayMillis))

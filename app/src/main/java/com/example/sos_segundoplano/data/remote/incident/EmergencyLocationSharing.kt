@@ -8,6 +8,7 @@ import com.squareup.moshi.JsonClass
 import com.squareup.moshi.JsonDataException
 import com.squareup.moshi.JsonEncodingException
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.Header
@@ -60,15 +61,23 @@ object NoOpEmergencyLocationPublisher : EmergencyLocationPublisher {
         EmergencyLocationPublicationResult.Failed("location_publisher_unavailable")
 }
 
-suspend fun EmergencyLocationPublisher.publishSafely(snapshot: EmergencyLocationSnapshotRequestDto) {
+suspend fun EmergencyLocationPublisher.publishSafely(
+    snapshot: EmergencyLocationSnapshotRequestDto,
+    timeoutMillis: Long = SECONDARY_LOCATION_PUBLISH_TIMEOUT_MILLIS
+) {
+    if (timeoutMillis <= 0L) return
     try {
-        publish(snapshot)
+        // The SOS itself has already been created at this point. Location sharing is secondary and
+        // must never keep Manual/Automatic SOS stuck in "Sending" if this endpoint is slow.
+        withTimeoutOrNull(timeoutMillis) { publish(snapshot) }
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: RuntimeException) {
-        // Location sharing is secondary to an emergency that was already created.
+        // Best effort only. The primary emergency remains successful.
     }
 }
+
+private const val SECONDARY_LOCATION_PUBLISH_TIMEOUT_MILLIS = 2_500L
 
 class AuthenticatedEmergencyLocationPublisher(
     private val authRepository: AuthRepository,

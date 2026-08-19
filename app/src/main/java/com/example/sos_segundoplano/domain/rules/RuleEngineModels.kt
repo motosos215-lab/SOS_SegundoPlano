@@ -7,6 +7,7 @@ import com.example.sos_segundoplano.domain.signals.WearableStatus
 data class RuleEngineConfig(
     val processedWindowBufferCapacity: Int = 64,
     val historyDurationNanos: Long = 15_000_000_000L,
+    val physicalEvidenceRetentionNanos: Long = 15_000_000_000L,
     val maxRetainedWindows: Int = 32,
     val lateWindowToleranceNanos: Long = 500_000_000L,
     val duplicateTimestampToleranceNanos: Long = 0L,
@@ -50,6 +51,7 @@ data class RuleEngineConfig(
     init {
         require(processedWindowBufferCapacity > 0)
         require(historyDurationNanos > 0)
+        require(physicalEvidenceRetentionNanos > 0)
         require(maxRetainedWindows > 0)
         require(lateWindowToleranceNanos >= 0)
         require(duplicateTimestampToleranceNanos >= 0)
@@ -166,7 +168,11 @@ data class RiskAssessment(
     val lateWindows: Long,
     val droppedRawEvents: Long,
     val ruleSetVersion: String,
-    val partialWindow: Boolean
+    val partialWindow: Boolean,
+    val mlProbability: Double? = null,
+    val mlDetected: Boolean = false,
+    val mlHardRuleDetected: Boolean = false,
+    val mlModelVersion: String? = null
 )
 
 sealed interface RiskAssessmentState {

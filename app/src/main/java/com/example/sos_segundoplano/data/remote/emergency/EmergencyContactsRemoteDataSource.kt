@@ -16,6 +16,7 @@ sealed interface EmergencyContactsRemoteResult<out T> {
 }
 
 interface EmergencyContactsRemoteDataSource {
+    suspend fun list(authorization: String): EmergencyContactsRemoteResult<List<EmergencyContactDto>>
     suspend fun create(authorization: String, request: CreateEmergencyContactRequestDto): EmergencyContactsRemoteResult<EmergencyContactDto>
     suspend fun invite(authorization: String, contactId: String): EmergencyContactsRemoteResult<EmergencyContactDto>
     suspend fun invitation(authorization: String, code: String): EmergencyContactsRemoteResult<EmergencyInvitationDto>
@@ -29,6 +30,9 @@ class RetrofitEmergencyContactsRemoteDataSource(
     private val errorAdapter: JsonAdapter<ApiEnvelopeDto<Any>> = moshi.adapter(
         Types.newParameterizedType(ApiEnvelopeDto::class.java, Any::class.java)
     )
+
+    override suspend fun list(authorization: String) =
+        execute({ api.list(authorization) }) { it.contacts }
 
     override suspend fun create(authorization: String, request: CreateEmergencyContactRequestDto) =
         execute({ api.create(authorization, request) }) { it.contact }

@@ -3,6 +3,7 @@ package com.example.sos_segundoplano.data.trip
 import android.content.Context
 import android.os.SystemClock
 import android.provider.Settings
+import com.example.sos_segundoplano.domain.trip.TripTimingClearResult
 import com.example.sos_segundoplano.domain.trip.ElapsedRealtimeClock
 import com.example.sos_segundoplano.domain.trip.TripTimingState
 import com.example.sos_segundoplano.domain.trip.TripTimingStore
@@ -12,7 +13,8 @@ import kotlinx.coroutines.flow.asStateFlow
 
 data class PersistedTripTiming(
     val startedAtElapsedRealtimeMillis: Long,
-    val bootSessionId: Long
+    val bootSessionId: Long,
+    val tripSessionKey: String? = null
 )
 
 interface TripTimingPersistence {
@@ -33,7 +35,7 @@ class DefaultTripTimingStore(
     private val mutableStates = MutableStateFlow(restoreState())
     override val states: StateFlow<TripTimingState> = mutableStates.asStateFlow()
 
-    override fun beginConfirmedTrip() {
+    override fun beginConfirmedTrip(tripSessionKey: String?) {
         val startedAt = clock.nowMillis()
         if (startedAt < 0L) {
             persistence.clear()
@@ -42,16 +44,24 @@ class DefaultTripTimingStore(
         }
         val bootSessionId = bootSessionProvider.currentBootSessionId()
         if (bootSessionId != null && bootSessionId >= 0L) {
-            persistence.save(PersistedTripTiming(startedAt, bootSessionId))
+            persistence.save(PersistedTripTiming(startedAt, bootSessionId, tripSessionKey))
         } else {
             persistence.clear()
         }
-        mutableStates.value = TripTimingState.Active(startedAt)
+        mutableStates.value = TripTimingState.Active(startedAt, tripSessionKey)
     }
 
     override fun clear() {
         persistence.clear()
         mutableStates.value = TripTimingState.Unknown
+    }
+    override fun clearIfMatches(tripSessionKey: String): TripTimingClearResult = when (val state = mutableStates.value) {
+        TripTimingState.Unknown -> TripTimingClearResult.AlreadyEmpty
+        is TripTimingState.Active -> when {
+            state.tripSessionKey == null -> TripTimingClearResult.LegacyUncorrelated
+            state.tripSessionKey != tripSessionKey -> TripTimingClearResult.DifferentTrip
+            else -> { clear(); TripTimingClearResult.Cleared }
+        }
     }
 
     private fun restoreState(): TripTimingState {
@@ -66,7 +76,7 @@ class DefaultTripTimingStore(
             persistence.clear()
             return TripTimingState.Unknown
         }
-        return TripTimingState.Active(persisted.startedAtElapsedRealtimeMillis)
+        return TripTimingState.Active(persisted.startedAtElapsedRealtimeMillis, persisted.tripSessionKey)
     }
 }
 
@@ -78,12 +88,14 @@ class SharedPreferencesTripTimingPersistence(context: Context) : TripTimingPersi
         return PersistedTripTiming(
             startedAtElapsedRealtimeMillis = preferences.getLong(KEY_STARTED_AT, -1L),
             bootSessionId = preferences.getLong(KEY_BOOT_SESSION, -1L)
+            , tripSessionKey = preferences.getString(KEY_TRIP_SESSION_KEY, null)
         )
     }
 
     override fun save(value: PersistedTripTiming): Boolean = preferences.edit()
         .putLong(KEY_STARTED_AT, value.startedAtElapsedRealtimeMillis)
         .putLong(KEY_BOOT_SESSION, value.bootSessionId)
+        .apply { if (value.tripSessionKey == null) remove(KEY_TRIP_SESSION_KEY) else putString(KEY_TRIP_SESSION_KEY, value.tripSessionKey) }
         .commit()
 
     override fun clear() {
@@ -94,6 +106,7 @@ class SharedPreferencesTripTimingPersistence(context: Context) : TripTimingPersi
         const val PREFERENCES_NAME = "trip_timing_v1"
         const val KEY_STARTED_AT = "started_at_elapsed_realtime_millis"
         const val KEY_BOOT_SESSION = "boot_session_id"
+        const val KEY_TRIP_SESSION_KEY = "trip_session_key"
     }
 }
 

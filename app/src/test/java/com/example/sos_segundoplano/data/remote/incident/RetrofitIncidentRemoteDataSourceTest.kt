@@ -39,9 +39,13 @@ class RetrofitIncidentRemoteDataSourceTest {
         assertTrue(body.contains("\"source\":\"MobileDetection\""))
         assertTrue(body.contains("\"cause\":\"CountdownTimeout\""))
         assertTrue(body.contains("\"riskLevel\":\"High\""))
-        assertTrue(body.contains("\"assessmentId\":2"))
-        assertTrue(body.contains("\"windowId\":3"))
-        assertTrue(body.contains("\"hasLocation\":false"))
+        assertTrue(body.contains("\"score\":75"))
+        assertTrue(body.contains("\"confidence\":0.8"))
+        assertTrue(body.contains("\"gpsQuality\":\"Good\""))
+        assertTrue(body.contains("\"ruleSetVersion\":\"local-rules-v1\""))
+        assertTrue(body.contains("\"validationPolicyVersion\":\"false-positive-validation-v1\""))
+        assertTrue(!body.contains("\"location\""))
+        assertTrue(!body.contains("\"evidenceSummary\""))
         assertTrue(body.contains("\"occurredAtUtc\":\"2026-08-08T14:20:00Z\""))
     }
 
@@ -94,13 +98,12 @@ class RetrofitIncidentRemoteDataSourceTest {
         source = "MobileDetection",
         cause = "CountdownTimeout",
         riskLevel = "High",
+        score = 75,
+        confidence = 0.8,
+        gpsQuality = "Good",
+        ruleSetVersion = "local-rules-v1",
+        validationPolicyVersion = "false-positive-validation-v1",
         occurredAtUtc = "2026-08-08T14:20:00Z",
-        evidenceSummary = IncidentEvidenceSummaryDto(
-            assessmentId = 2L,
-            windowId = 3L,
-            triggeredRules = emptyList(),
-            hasLocation = false
-        )
     )
 
     private fun jsonResponse(code: Int, body: String): MockResponse = MockResponse()

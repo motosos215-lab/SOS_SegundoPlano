@@ -8,8 +8,11 @@ import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
+import com.example.sos_segundoplano.domain.signals.GpsCalibrationCompletion
+import com.example.sos_segundoplano.domain.signals.GpsCalibrationState
 import com.example.sos_segundoplano.domain.signals.LocationSample
 import com.example.sos_segundoplano.domain.signals.SignalAvailability
 import com.example.sos_segundoplano.domain.signals.SignalReading
@@ -20,14 +23,45 @@ class AndroidLocationSignalSource(
 ) : SignalSource {
     private val appContext = context.applicationContext
     private val locationManager = appContext.getSystemService(LocationManager::class.java)
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var started = false
+    private val calibrator = GpsStartupCalibrator()
     private var provider: String? = null
+
+    private val calibrationTimeout = Runnable {
+        if (!started) return@Runnable
+        val current = store.snapshots.value.gpsCalibration
+        if (current is GpsCalibrationState.Calibrating) {
+            val primaryLocation = store.snapshots.value.location
+            store.updateGpsCalibration(calibrator.onTimeout())
+            // The location was already kept as the primary fix during calibration. Re-publish the
+            // same reading once the gate opens so preprocessing/speed can start immediately even
+            // if Android does not deliver another callback while the motorcycle is stationary.
+            if (primaryLocation.availability == SignalAvailability.Available && primaryLocation.sample != null) {
+                store.updateLocation(primaryLocation)
+            }
+        }
+    }
+
     private val listener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
-            store.updateLocation(SignalReading(SignalAvailability.Available, location.toSample()))
+            val sample = location.toSample()
+            // Update the primary location on every valid Android callback regardless of accuracy.
+            // Calibration never hides this fix from trip/SOS consumers.
+            val calibrationState = calibrator.onSample(sample)
+            store.updateGpsCalibration(calibrationState)
+            store.updateLocation(SignalReading(SignalAvailability.Available, sample))
+            if (calibrationState is GpsCalibrationState.Ready &&
+                calibrationState.completion == GpsCalibrationCompletion.AccurateSamples
+            ) {
+                mainHandler.removeCallbacks(calibrationTimeout)
+            }
         }
 
         override fun onProviderDisabled(provider: String) {
+            mainHandler.removeCallbacks(calibrationTimeout)
+            calibrator.reset()
+            store.updateGpsCalibration(GpsCalibrationState.Idle)
             store.updateLocation(SignalReading(SignalAvailability.Disabled))
         }
 
@@ -54,6 +88,7 @@ class AndroidLocationSignalSource(
         }
 
         try {
+            store.updateGpsCalibration(calibrator.start())
             locationManager.requestLocationUpdates(
                 selectedProvider,
                 MIN_TIME_MILLIS,
@@ -64,21 +99,34 @@ class AndroidLocationSignalSource(
             provider = selectedProvider
             started = true
             store.updateLocation(SignalReading(SignalAvailability.Waiting))
+            mainHandler.removeCallbacks(calibrationTimeout)
+            mainHandler.postDelayed(calibrationTimeout, GpsStartupCalibrator.MAX_STARTUP_CALIBRATION_MILLIS)
         } catch (_: SecurityException) {
+            mainHandler.removeCallbacks(calibrationTimeout)
+            calibrator.reset()
+            store.updateGpsCalibration(GpsCalibrationState.Idle)
             store.updateLocation(SignalReading(SignalAvailability.PermissionMissing))
         } catch (_: IllegalArgumentException) {
+            mainHandler.removeCallbacks(calibrationTimeout)
+            calibrator.reset()
+            store.updateGpsCalibration(GpsCalibrationState.Idle)
             store.updateLocation(SignalReading(SignalAvailability.Unsupported))
         }
     }
 
     override fun stop() {
-        if (!started) return
+        mainHandler.removeCallbacks(calibrationTimeout)
+        if (!started) {
+            calibrator.reset()
+            return
+        }
         try {
             locationManager.removeUpdates(listener)
         } catch (_: SecurityException) {
         }
         provider = null
         started = false
+        calibrator.reset()
     }
 
     private fun selectProvider(): String? {
@@ -104,6 +152,6 @@ class AndroidLocationSignalSource(
 
     private companion object {
         const val MIN_TIME_MILLIS = 1_000L
-        const val MIN_DISTANCE_METERS = 1f
+        const val MIN_DISTANCE_METERS = 0f
     }
 }

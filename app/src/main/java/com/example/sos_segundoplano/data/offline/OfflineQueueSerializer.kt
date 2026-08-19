@@ -40,7 +40,13 @@ class OfflineQueueSerializer {
             "validationPolicyVersion" to payload.payload.validationPolicyVersion,
             "gpsQuality" to payload.payload.gpsQuality,
             "occurredAtEpochMillis" to payload.payload.occurredAtEpochMillis.toString(),
-            "createdAtElapsedRealtimeNanos" to payload.payload.createdAtElapsedRealtimeNanos.toString()
+            "createdAtElapsedRealtimeNanos" to payload.payload.createdAtElapsedRealtimeNanos.toString(),
+            "clientIncidentId" to payload.payload.clientIncidentId.orEmpty(),
+            "detectedAtEpochMillis" to payload.payload.detectedAtEpochMillis?.toString().orEmpty(),
+            "latitude" to payload.payload.latitude?.toString().orEmpty(),
+            "longitude" to payload.payload.longitude?.toString().orEmpty(),
+            "remoteTripId" to payload.payload.remoteTripId.orEmpty(),
+            "tripSessionKey" to payload.payload.tripSessionKey.orEmpty()
         )
 
         is OfflineSyncPayload.AlertDispatchRequestPayload -> fields(
@@ -57,7 +63,8 @@ class OfflineQueueSerializer {
             "deliveryStatus" to payload.payload.deliveryStatus,
             "retryState" to payload.payload.retryState,
             "occurredAtEpochMillis" to payload.payload.occurredAtEpochMillis.toString(),
-            "createdAtElapsedRealtimeNanos" to payload.payload.createdAtElapsedRealtimeNanos.toString()
+            "createdAtElapsedRealtimeNanos" to payload.payload.createdAtElapsedRealtimeNanos.toString(),
+            "clientAlertRequestId" to payload.payload.clientAlertRequestId.orEmpty()
         )
     }
 
@@ -96,7 +103,13 @@ class OfflineQueueSerializer {
                     validationPolicyVersion = values["validationPolicyVersion"] ?: return null,
                     gpsQuality = values["gpsQuality"]?.takeIf { it in GPS_QUALITIES } ?: return null,
                     occurredAtEpochMillis = values.long("occurredAtEpochMillis") ?: return null,
-                    createdAtElapsedRealtimeNanos = values.long("createdAtElapsedRealtimeNanos") ?: return null
+                    createdAtElapsedRealtimeNanos = values.long("createdAtElapsedRealtimeNanos") ?: return null,
+                    clientIncidentId = values["clientIncidentId"]?.takeIf { it.isNotBlank() },
+                    detectedAtEpochMillis = values.long("detectedAtEpochMillis"),
+                    latitude = values.doubleOrNull("latitude"),
+                    longitude = values.doubleOrNull("longitude"),
+                    remoteTripId = values["remoteTripId"]?.takeIf { it.isNotBlank() },
+                    tripSessionKey = values["tripSessionKey"]?.takeIf { it.isNotBlank() }
                 ),
                 schemaVersion
             )
@@ -114,7 +127,8 @@ class OfflineQueueSerializer {
                     deliveryStatus = values["deliveryStatus"]?.takeIf { it == "Pending" } ?: return null,
                     retryState = values["retryState"]?.takeIf { it == "NotStarted" } ?: return null,
                     occurredAtEpochMillis = values.long("occurredAtEpochMillis") ?: return null,
-                    createdAtElapsedRealtimeNanos = values.long("createdAtElapsedRealtimeNanos") ?: return null
+                    createdAtElapsedRealtimeNanos = values.long("createdAtElapsedRealtimeNanos") ?: return null,
+                    clientAlertRequestId = values["clientAlertRequestId"]?.takeIf { it.isNotBlank() }
                 ),
                 schemaVersion
             )
@@ -140,6 +154,7 @@ class OfflineQueueSerializer {
     private fun decode(value: String): String = URLDecoder.decode(value, Charsets.UTF_8.name())
     private fun Map<String, String>.long(key: String): Long? = this[key]?.toLongOrNull()
     private fun Map<String, String>.double(key: String): Double? = this[key]?.toDoubleOrNull()
+    private fun Map<String, String>.doubleOrNull(key: String): Double? = this[key]?.takeIf { it.isNotBlank() }?.toDoubleOrNull()
     private fun Map<String, String>.intOrNull(key: String): Int? = this[key]?.takeIf { it.isNotBlank() }?.toIntOrNull()
 
     companion object {

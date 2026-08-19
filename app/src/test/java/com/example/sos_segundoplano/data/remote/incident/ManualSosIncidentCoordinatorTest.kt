@@ -5,6 +5,8 @@ import com.example.sos_segundoplano.domain.offline.OfflineEventSink
 import com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult
 import com.example.sos_segundoplano.domain.offline.OfflineSyncErrorCategory
 import com.example.sos_segundoplano.domain.rules.RiskLevel
+import com.example.sos_segundoplano.domain.sos.MobileSosPriority
+import com.example.sos_segundoplano.domain.sos.MobileSosSeverity
 import com.example.sos_segundoplano.domain.validation.AlertDispatchRequest
 import com.example.sos_segundoplano.domain.validation.IncidentCause
 import com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus
@@ -54,8 +56,35 @@ class ManualSosIncidentCoordinatorTest {
         val link = links.read("123e4567-e89b-12d3-a456-426614174041")
         assertEquals("223e4567-e89b-12d3-a456-426614174041", link?.clientAlertRequestId)
         assertEquals("2026-08-11T15:55:00Z", link?.detectedAtUtc)
+        assertEquals("Unknown", link?.manualSeverity)
+        assertEquals("High", link?.manualPriority)
         assertNotNull(UUID.fromString(requireNotNull(link?.clientIncidentId)))
         assertNotNull(UUID.fromString(requireNotNull(link?.clientAlertRequestId)))
+    }
+
+    @Test fun selectedManualClassificationIsPersistedBeforeRemoteSubmission() = runBlocking {
+        val links = InMemoryRemoteIncidentLinkStore()
+        val coordinator = ManualSosIncidentCoordinator(
+            remoteCreator = CapturingRemoteCreator(),
+            offlineEventSink = CapturingOfflineEventSink(),
+            remoteIncidentLinkStore = links,
+            incidentStore = InMemoryBoundedValidationStore(4),
+            nextIncidentId = { 47L },
+            nextClientIncidentId = { "123e4567-e89b-12d3-a456-426614174047" },
+            nextClientAlertRequestId = { "223e4567-e89b-12d3-a456-426614174047" },
+            nowUtc = { Instant.parse("2026-08-11T16:01:00Z") }
+        )
+
+        coordinator.requestManualSos(
+            ManualSosSubmissionOptions(
+                severity = MobileSosSeverity.High,
+                priority = MobileSosPriority.Critical
+            )
+        )
+
+        val link = links.read("123e4567-e89b-12d3-a456-426614174047")
+        assertEquals("High", link?.manualSeverity)
+        assertEquals("Critical", link?.manualPriority)
     }
 
     @Test fun offlineQueueFailureDoesNotBlockDurableRemoteIncidentFlow() = runBlocking {

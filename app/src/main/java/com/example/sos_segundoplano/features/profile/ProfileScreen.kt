@@ -78,11 +78,14 @@ import java.util.Locale
 fun ProfileRoute(
     profileRepository: ProfileRepository,
     authRepository: AuthRepository,
+    openWatchConnectionInitially: Boolean = false,
     onHomeSelected: () -> Unit,
+    onTripsSelected: () -> Unit = {},
     onSosSelected: () -> Unit = {},
+    onMapSelected: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var showWatchConnection by rememberSaveable { mutableStateOf(false) }
+    var showWatchConnection by remember(openWatchConnectionInitially) { mutableStateOf(openWatchConnectionInitially) }
     if (showWatchConnection) {
         val context = LocalContext.current
         val watchRepository: WatchConnectionRepository = remember(context) {
@@ -95,6 +98,18 @@ fun ProfileRoute(
             onHomeSelected = {
                 showWatchConnection = false
                 onHomeSelected()
+            },
+            onTripsSelected = {
+                showWatchConnection = false
+                onTripsSelected()
+            },
+            onSosSelected = {
+                showWatchConnection = false
+                onSosSelected()
+            },
+            onMapSelected = {
+                showWatchConnection = false
+                onMapSelected()
             },
             onProfileSelected = { showWatchConnection = false },
             modifier = modifier
@@ -109,7 +124,9 @@ fun ProfileRoute(
     ProfileScreen(
         state = state,
         onHomeSelected = onHomeSelected,
+        onTripsSelected = onTripsSelected,
         onSosSelected = onSosSelected,
+        onMapSelected = onMapSelected,
         onRetry = viewModel::retry,
         onLogoutSelected = viewModel::showLogoutDialog,
         onLogoutDismissed = viewModel::dismissLogoutDialog,
@@ -123,7 +140,9 @@ fun ProfileRoute(
 fun ProfileScreen(
     state: ProfileUiState,
     onHomeSelected: () -> Unit,
+    onTripsSelected: () -> Unit = {},
     onSosSelected: () -> Unit = {},
+    onMapSelected: () -> Unit = {},
     onRetry: () -> Unit,
     onLogoutSelected: () -> Unit,
     onLogoutDismissed: () -> Unit,
@@ -141,16 +160,26 @@ fun ProfileScreen(
             MotoTopBar(
                 title = stringResource(R.string.profile_title),
                 subtitle = stringResource(R.string.profile_subtitle),
-                navigationIcon = MotoTopBarIcon.Back
+                navigationIcon = MotoTopBarIcon.Back,
+                showNotificationsIcon = false,
+                onNavigationClick = onHomeSelected
             )
         },
         bottomBar = {
             MotoBottomBar(
                 selectedItem = MotoBottomBarItem.Profile,
                 onHomeSelected = onHomeSelected,
+                onTripsSelected = onTripsSelected,
                 onSosSelected = onSosSelected,
+                onMapSelected = onMapSelected,
                 onProfileSelected = {},
-                enabledItems = setOf(MotoBottomBarItem.Home, MotoBottomBarItem.Sos, MotoBottomBarItem.Profile)
+                enabledItems = setOf(
+                    MotoBottomBarItem.Home,
+                    MotoBottomBarItem.Trips,
+                    MotoBottomBarItem.Sos,
+                    MotoBottomBarItem.Map,
+                    MotoBottomBarItem.Profile
+                )
             )
         }
     ) { innerPadding ->

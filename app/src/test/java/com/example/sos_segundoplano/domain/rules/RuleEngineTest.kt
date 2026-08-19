@@ -131,6 +131,71 @@ class RuleEngineTest {
         assertEquals(RuleEvaluationStatus.NotTriggered, engine.evaluateImmobility(listOf(still1, still2, moving)).status)
     }
 
+    @Test fun stationaryImmobilityIsContextOnlyAndRiskRemainsZero() {
+        val engine = RuleEngine()
+        var latest: RiskAssessment? = null
+        listOf(
+            window(1, start = 0L, end = 1_000_000_000L, speeds = listOf(speed(0L, 0.0)), accel = listOf(vector(0L, 9.80), vector(50_000_000L, 9.82))),
+            window(2, start = 1_000_000_000L, end = 2_000_000_000L, speeds = listOf(speed(1_000_000_000L, 0.0)), accel = listOf(vector(1_000_000_000L, 9.81), vector(1_050_000_000L, 9.80))),
+            window(3, start = 2_000_000_000L, end = 4_500_000_000L, speeds = listOf(speed(2_000_000_000L, 0.0)), accel = listOf(vector(2_000_000_000L, 9.81), vector(2_050_000_000L, 9.82)))
+        ).forEach { latest = engine.evaluate(it) }
+
+        val assessment = requireNotNull(latest)
+        assertEquals(RuleEvaluationStatus.Triggered, assessment.outcomes.first { it.ruleId == RuleId.Immobility }.status)
+        assertEquals(0, assessment.score)
+        assertEquals(RiskLevel.Low, assessment.riskLevel)
+        assertEquals(0.0, assessment.contributions.first { it.ruleId == RuleId.Immobility }.effectiveContribution, 0.0001)
+    }
+
+    @Test fun orientationDoesNotComparePhoneAndWearAsIfTheyWereOneDevice() {
+        val engine = RuleEngine()
+        val mixed = window(
+            1,
+            accel = listOf(
+                vector3(0L, 0.0, 0.0, 9.8, source = SignalSourceId.Phone),
+                vector3(50_000_000L, 9.8, 0.0, 0.0, source = SignalSourceId.Wear)
+            )
+        )
+
+        assertNotEquals(RuleEvaluationStatus.Triggered, engine.evaluateOrientation(mixed).status)
+    }
+
+    @Test fun recentStrongImpactFollowedByImmobilityProducesCorrelatedValidationRisk() {
+        val engine = RuleEngine()
+        engine.evaluate(
+            window(
+                1,
+                start = 0L,
+                end = 1_000_000_000L,
+                accel = listOf(vector(0L, 9.8), vector(100_000_000L, 48.0, outlier = true)),
+                speeds = listOf(speed(0L, 8.0))
+            )
+        )
+        engine.evaluate(
+            window(
+                2,
+                start = 1_000_000_000L,
+                end = 2_000_000_000L,
+                accel = listOf(vector(1_000_000_000L, 9.8), vector(1_050_000_000L, 9.82)),
+                speeds = listOf(speed(1_000_000_000L, 0.0))
+            )
+        )
+        val assessment = engine.evaluate(
+            window(
+                3,
+                start = 2_000_000_000L,
+                end = 4_500_000_000L,
+                accel = listOf(vector(2_000_000_000L, 9.8), vector(2_050_000_000L, 9.81)),
+                speeds = listOf(speed(2_000_000_000L, 0.0))
+            )
+        )!!
+
+        assertEquals(RuleEvaluationStatus.Triggered, assessment.outcomes.first { it.ruleId == RuleId.Impact }.status)
+        assertEquals(RuleEvaluationStatus.Triggered, assessment.outcomes.first { it.ruleId == RuleId.Immobility }.status)
+        assertTrue((assessment.score ?: 0) >= 40)
+        assertTrue(assessment.riskLevel == RiskLevel.Medium || assessment.riskLevel == RiskLevel.High)
+    }
+
     @Test fun gpsAbsentDoesNotBecomeSpeedZeroAndContinuityRequiresDuration() {
         val engine = RuleEngine()
         val unknown = engine.evaluateMovementContinuity(listOf(window(1))).first
@@ -202,8 +267,13 @@ class RuleEngineTest {
         val braking = calculator.calculate(listOf(outcome(RuleId.HarshBraking, 1.0, 20.0)))
         val fallStill = calculator.calculate(listOf(outcome(RuleId.Fall, 1.0, 55.0), outcome(RuleId.Immobility, 1.0, 20.0)))
 
+        val stillOnly = calculator.calculate(listOf(outcome(RuleId.Immobility, 1.0, 20.0)))
+        val orientationOnly = calculator.calculate(listOf(outcome(RuleId.OrientationChange, 1.0, 10.0)))
+
         assertEquals(RiskLevel.Low, braking.level)
         assertEquals(RiskLevel.High, fallStill.level)
+        assertEquals(0, stillOnly.value)
+        assertEquals(0, orientationOnly.value)
     }
 
     @Test fun missingDataReducesConfidenceWithoutInventingRiskAndIsDeterministic() {
@@ -318,8 +388,16 @@ class RuleEngineTest {
     )
 
     private fun vector(time: Long, magnitude: Double, outlier: Boolean = false) = vector3(time, magnitude, 0.0, 0.0, SignalKind.Accelerometer, outlier)
-    private fun vector3(time: Long, x: Double, y: Double, z: Double, kind: SignalKind = SignalKind.Accelerometer, outlier: Boolean = false) = WindowedSample(
-        FilteredSignalSample(RawSignalEvent(SignalSourceId.Phone, kind, SignalAvailability.Available, RawSignalValue.Vector(x, y, z), ProcessingTimestamp(time)), RawSignalValue.Vector(x, y, z), x.isFinite() && y.isFinite() && z.isFinite()),
+    private fun vector3(
+        time: Long,
+        x: Double,
+        y: Double,
+        z: Double,
+        kind: SignalKind = SignalKind.Accelerometer,
+        outlier: Boolean = false,
+        source: SignalSourceId = SignalSourceId.Phone
+    ) = WindowedSample(
+        FilteredSignalSample(RawSignalEvent(source, kind, SignalAvailability.Available, RawSignalValue.Vector(x, y, z), ProcessingTimestamp(time)), RawSignalValue.Vector(x, y, z), x.isFinite() && y.isFinite() && z.isFinite()),
         OutlierFlag(outlier)
     )
     private fun speed(time: Long, value: Double) = WindowedSample(

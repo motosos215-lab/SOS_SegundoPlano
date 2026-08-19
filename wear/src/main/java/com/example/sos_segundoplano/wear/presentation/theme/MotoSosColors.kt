@@ -1,0 +1,26 @@
+package com.example.sos_segundoplano.wear.presentation.theme
+
+import androidx.compose.ui.graphics.Color
+
+internal val MotoNavy = Color(0xFF06152F)
+internal val MotoNavyDeep = Color(0xFF020915)
+internal val MotoTripBlue = Color(0xFF173F76)
+internal val MotoTripBlueLight = Color(0xFF2E64A2)
+internal val MotoCardBlue = Color(0xFF0A2A55)
+internal val MotoCardBlueLight = Color(0xFF123A70)
+internal val MotoCardBorder = Color(0xFF2D5788)
+internal val MotoBlueGlow = Color(0xFF3E8BFF)
+internal val MotoGreen = Color(0xFF3CCB4A)
+internal val MotoGreenDark = Color(0xFF208C31)
+internal val MotoProgressGreen = Color(0xFF7BF3B2)
+internal val MotoMint = Color(0xFFA4FFD0)
+internal val MotoRed = Color(0xFFFF4653)
+internal val MotoRedDark = Color(0xFFB80F26)
+internal val MotoSosDarkRed = Color(0xFF3A0209)
+internal val MotoSosSurface = Color(0xFF680713)
+internal val MotoAmber = Color(0xFFFFC34D)
+internal val MotoWhite = Color(0xFFFFFFFF)
+internal val MotoBlueGray = Color(0xFFA8B9D2)
+internal val MotoMuted = Color(0xFF7589A8)
+internal val MotoDivider = Color(0xFF21456F)
+internal val MotoBlack = Color(0xFF03070D)

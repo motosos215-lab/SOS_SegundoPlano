@@ -1,56 +1,41 @@
-# DevSecOps
+# DevSecOps MotoSOS
 
-## Objetivo
+## Controles implementados
 
-Mantener una base automatizada para construir, probar y revisar seguridad antes de integrar cambios.
+- Android CI ejecuta `testDebugUnitTest`, `lintDebug` y `assembleDebug`.
+- Gitleaks analiza el historial completo (`fetch-depth: 0`) en `push` y `pull_request`.
+- CodeQL analiza Java/Kotlin en `push` y `pull_request`. Usa `build-mode: none` para no requerir la configuración Firebase durante el análisis estático.
+- Dependency Review se ejecuta en pull requests.
+- Dependabot abre revisiones semanales para Gradle y GitHub Actions.
+- Las Actions se fijan a SHA completos verificados y los workflows aplican permisos mínimos. CodeQL requiere además `security-events: write` para publicar resultados.
 
-## Pipeline inicial
+## Android y datos locales
 
-El workflow `.github/workflows/android-ci.yml` ejecuta:
+- Producción exige HTTPS mediante `usesCleartextTraffic="false"`.
+- Backups se desactivan y existen reglas explícitas de backup/data extraction.
+- Sesiones y tokens push se almacenan con Android Keystore y AES-GCM.
+- La cola offline usa cifrado AES-GCM; la base de rutas conserva coordenadas locales para sincronización, por lo que debe tratarse como dato sensible del dispositivo.
+- Los logs de sincronización de rutas no incluyen `tripId` y solo se emiten en builds debug.
+- No se detectaron bypasses TLS ni trust managers permisivos en el código auditado.
 
-- `testDebugUnitTest`
-- `lintDebug`
-- `assembleDebug`
-- publicacion del reporte de Android Lint como artifact
+## ML y SOS
 
-El workflow `.github/workflows/security-scan.yml` ejecuta:
+- El artefacto local es `motosos_accident_model_v1_1_pilot_ready.json`, versión `1.1.0-pilot-ready`, con umbral `0.71` y ocho features exactas.
+- La política se conserva: `possibleAccident = hardRuleDetected || probability >= threshold`.
+- El modelo es señal de apoyo local: no crea ni envía SOS. La confirmación del Rider y el countdown permanecen en `FalsePositiveValidationCoordinator`; el SOS manual es independiente.
+- El modelo está marcado pilot-ready y requiere validación real antes de cualquier afirmación de seguridad o rendimiento en producción.
 
-- escaneo de secretos con Gitleaks
+## Wear
 
-## Testing estatico
+- Los servicios Wear expuestos por requisito de Google Play Services conservan validación de protocolo, versiones, `requestId`/`commandId` y semántica idempotente.
+- Las acciones Wear no deben aceptar payloads sin versión, campos requeridos o rutas válidas. Las pruebas de codec y RPC cubren esa frontera.
 
-Controles iniciales:
+## Secretos y archivos locales
 
-- Android Lint para errores Android, permisos, manifest y recursos
-- revision de secretos en CI
-- validacion del Gradle Wrapper
+No se deben versionar `google-services.json`, `local.properties`, `.env*`, certificados, llaves, keystores, APK/AAB ni directorios de build/IDE. Los secretos de CI se recuperan exclusivamente desde GitHub Actions Secrets.
 
-Controles recomendados para siguientes iteraciones:
+## Limitaciones conocidas
 
-- Detekt para analisis estatico Kotlin
-- Ktlint o Spotless para formato
-- Dependency Check, Snyk o Dependabot para dependencias
-- Semgrep o CodeQL para reglas de seguridad adicionales
-
-## Testing dinamico
-
-Controles iniciales:
-
-- pruebas unitarias JVM
-- pruebas instrumentadas Android existentes como base
-
-Controles recomendados para siguientes iteraciones:
-
-- pruebas de permisos moviles
-- pruebas de servicio en segundo plano
-- pruebas de cola offline
-- pruebas de sensores y simulacion de incidentes
-- pruebas de vinculacion con smartwatch
-
-## Criterio minimo para merge
-
-Todo cambio debe compilar y pasar:
-
-```bash
-./gradlew testDebugUnitTest lintDebug assembleDebug
-```
+- La generación de SBOM CycloneDX no se añade todavía: requiere evaluar un plugin compatible con el Android Gradle Plugin actual y su cadena de publicación. No se debe declarar una SBOM como generada hasta que exista un artefacto CI verificable.
+- R8/minificación de release sigue desactivada. Activarla exige validar reglas de Retrofit, Room, Firebase, Wear y serialización en un build release separado.
+- Los controles CI no sustituyen revisión humana, pruebas en dispositivos físicos ni rotación de credenciales comprometidas.

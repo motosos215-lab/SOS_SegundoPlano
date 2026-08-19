@@ -1,5 +1,6 @@
 package com.example.sos_segundoplano.data.signals
 
+import com.example.sos_segundoplano.data.ml.AccidentMlEvaluator
 import android.content.Context
 import android.hardware.Sensor
 import com.example.sos_segundoplano.data.preprocessing.SignalPreprocessingCoordinator
@@ -29,7 +30,7 @@ class TripSignalCaptureCoordinator(
         MobileWearableSignalSource(context, store)
         ),
         SignalPreprocessingCoordinator(store.rawEvents),
-        RuleEngineCoordinator(),
+        RuleEngineCoordinator(mlEvaluator = AccidentMlEvaluator.fromAssets(context.applicationContext)),
         FalsePositiveValidationCoordinatorProvider.coordinator
     )
 

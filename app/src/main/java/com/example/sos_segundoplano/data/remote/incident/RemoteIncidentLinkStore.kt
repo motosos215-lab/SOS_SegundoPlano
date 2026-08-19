@@ -13,7 +13,9 @@ data class RemoteIncidentLink(
     val updatedAtEpochMillis: Long,
     val clientAlertRequestId: String? = null,
     val detectedAtUtc: String? = null,
-    val remoteAlertDispatchId: String? = null
+    val remoteAlertDispatchId: String? = null,
+    val manualSeverity: String? = null,
+    val manualPriority: String? = null
 )
 
 interface RemoteIncidentLinkStore {
@@ -70,7 +72,9 @@ class SharedPreferencesRemoteIncidentLinkStore(
             updatedAtEpochMillis = updatedAt,
             clientAlertRequestId = preferences.getString("$keyPrefix.$KEY_CLIENT_ALERT_REQUEST_ID", null).normalized(),
             detectedAtUtc = preferences.getString("$keyPrefix.$KEY_DETECTED_AT_UTC", null).normalized(),
-            remoteAlertDispatchId = preferences.getString("$keyPrefix.$KEY_REMOTE_ALERT_DISPATCH_ID", null).normalized()
+            remoteAlertDispatchId = preferences.getString("$keyPrefix.$KEY_REMOTE_ALERT_DISPATCH_ID", null).normalized(),
+            manualSeverity = preferences.getString("$keyPrefix.$KEY_MANUAL_SEVERITY", null).normalized(),
+            manualPriority = preferences.getString("$keyPrefix.$KEY_MANUAL_PRIORITY", null).normalized()
         )
     }
 
@@ -91,6 +95,8 @@ class SharedPreferencesRemoteIncidentLinkStore(
         val clientAlertRequestId = link.clientAlertRequestId.normalized()
         val detectedAtUtc = link.detectedAtUtc.normalized()
         val remoteAlertDispatchId = link.remoteAlertDispatchId.normalized()
+        val manualSeverity = link.manualSeverity.normalized()
+        val manualPriority = link.manualPriority.normalized()
         if (link.localIncidentId < 0L || link.updatedAtEpochMillis < 0L) return@synchronized false
         if (link.syncState == RemoteIncidentSyncState.Created && (remoteTripId == null || remoteIncidentId == null)) {
             return@synchronized false
@@ -107,6 +113,8 @@ class SharedPreferencesRemoteIncidentLinkStore(
             .putNullableString("$keyPrefix.$KEY_CLIENT_ALERT_REQUEST_ID", clientAlertRequestId)
             .putNullableString("$keyPrefix.$KEY_DETECTED_AT_UTC", detectedAtUtc)
             .putNullableString("$keyPrefix.$KEY_REMOTE_ALERT_DISPATCH_ID", remoteAlertDispatchId)
+            .putNullableString("$keyPrefix.$KEY_MANUAL_SEVERITY", manualSeverity)
+            .putNullableString("$keyPrefix.$KEY_MANUAL_PRIORITY", manualPriority)
             .putString("$keyPrefix.$KEY_SYNC_STATE", link.syncState.name)
             .putLong("$keyPrefix.$KEY_UPDATED_AT", link.updatedAtEpochMillis)
         if (clientAlertRequestId != null && link.syncState == RemoteIncidentSyncState.Pending) {
@@ -134,6 +142,8 @@ class SharedPreferencesRemoteIncidentLinkStore(
         const val KEY_CLIENT_ALERT_REQUEST_ID = "client_alert_request_id"
         const val KEY_DETECTED_AT_UTC = "detected_at_utc"
         const val KEY_REMOTE_ALERT_DISPATCH_ID = "remote_alert_dispatch_id"
+        const val KEY_MANUAL_SEVERITY = "manual_severity"
+        const val KEY_MANUAL_PRIORITY = "manual_priority"
         const val KEY_PENDING_MANUAL_SOS_CLIENT_INCIDENT_ID = "pending_manual_sos_client_incident_id"
         const val KEY_SYNC_STATE = "sync_state"
         const val KEY_UPDATED_AT = "updated_at_epoch_millis"

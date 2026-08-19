@@ -2,6 +2,9 @@ package com.example.sos_segundoplano.data.validation
 
 import com.example.sos_segundoplano.data.rules.InMemoryRiskAssessmentStore
 import com.example.sos_segundoplano.data.remote.incident.IncidentRemoteCreator
+import com.example.sos_segundoplano.data.remote.incident.AutomaticSosAlertCreator
+import com.example.sos_segundoplano.data.trip.InMemoryTripSessionStore
+import com.example.sos_segundoplano.data.trip.TripSessionStore
 import com.example.sos_segundoplano.domain.offline.OfflineEventSink
 import com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult
 import com.example.sos_segundoplano.domain.offline.OfflineSyncErrorCategory
@@ -32,6 +35,8 @@ import com.example.sos_segundoplano.domain.validation.MinorEvent
 import com.example.sos_segundoplano.domain.validation.MinorEventType
 import com.example.sos_segundoplano.domain.validation.MonotonicClock
 import com.example.sos_segundoplano.domain.validation.UserResponseSource
+import com.example.sos_segundoplano.domain.signals.LocationSample
+import com.example.sos_segundoplano.domain.model.TripSessionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -47,6 +52,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.UUID
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class FalsePositiveValidationCoordinatorTest {
@@ -55,17 +61,30 @@ class FalsePositiveValidationCoordinatorTest {
         assertEquals(20_000_000_000L, config.countdownDurationNanos)
         assertEquals(1_000_000_000L, config.visualUpdateIntervalNanos)
         assertEquals(40, config.minimumValidationScore)
+        assertEquals(30, config.correlatedCandidateMinimumScore)
         assertEquals(90, config.criticalScore)
         assertEquals(0.60, config.minimumConfidence, 0.0)
+        assertEquals(0.50, config.correlatedCandidateMinimumConfidence, 0.0)
         assertEquals(0.80, config.criticalConfidence, 0.0)
         assertEquals(0.90, config.criticalFallSeverity, 0.0)
         assertEquals(0.90, config.criticalImpactSeverity, 0.0)
         assertEquals(39, config.bumpMaximumScore)
+        assertEquals(0.50, config.immobilityCountdownMinimumSeverity, 0.0)
+        assertEquals(0.55, config.impactImmobilityMinimumImpactSeverity, 0.0)
+        assertEquals(0.85, config.impactImmobilityDirectImpactSeverity, 0.0)
+        assertEquals(0.30, config.secondarySupportMinimumSeverity, 0.0)
+        assertEquals(10_000_000_000L, config.postSafeSuppressionNanos)
         assertEquals("false-positive-validation-v1", config.policyVersion)
         rejects { FalsePositiveValidationConfig(countdownDurationNanos = 0L) }
         rejects { FalsePositiveValidationConfig(maxMinorEvents = 0) }
         rejects { FalsePositiveValidationConfig(minimumConfidence = -0.1) }
         rejects { FalsePositiveValidationConfig(minimumValidationScore = -1) }
+        rejects { FalsePositiveValidationConfig(correlatedCandidateMinimumScore = 41) }
+        rejects { FalsePositiveValidationConfig(correlatedCandidateMinimumConfidence = 0.61) }
+        rejects { FalsePositiveValidationConfig(impactImmobilityMinimumImpactSeverity = -0.1) }
+        rejects { FalsePositiveValidationConfig(impactImmobilityDirectImpactSeverity = 0.4) }
+        rejects { FalsePositiveValidationConfig(secondarySupportMinimumSeverity = 1.1) }
+        rejects { FalsePositiveValidationConfig(postSafeSuppressionNanos = -1L) }
         rejects { FalsePositiveValidationConfig(policyVersion = "") }
     }
 
@@ -146,6 +165,181 @@ class FalsePositiveValidationCoordinatorTest {
         }
     }
 
+    @Test fun mlDetectionStartsCountdownWithoutBypassingUserConfirmation() = runTest {
+        val fixture = fixture()
+        try {
+            start(fixture)
+            fixture.risk.publish(
+                assessment(
+                    score = 0,
+                    riskLevel = RiskLevel.Low,
+                    confidence = 0.40,
+                    continuity = MovementContinuityState.Continuing,
+                    outcomes = listOf(
+                        notTriggered(RuleId.Impact),
+                        notTriggered(RuleId.Fall),
+                        notTriggered(RuleId.Immobility),
+                        notTriggered(RuleId.OrientationChange),
+                        notTriggered(RuleId.HarshBraking)
+                    )
+                ).copy(
+                    mlProbability = 0.91,
+                    mlDetected = true,
+                    mlModelVersion = "1.1.0-pilot-ready"
+                )
+            )
+            runCurrent()
+
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.CountdownActive)
+            assertTrue(fixture.incidents.items.value.isEmpty())
+            assertTrue(fixture.requests.items.value.isEmpty())
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun correlatedCrashPatternStartsCountdownBelowGenericFortyPointGate() = runTest {
+        val fixture = fixture()
+        try {
+            start(fixture)
+            fixture.risk.publish(
+                assessment(
+                    score = 34,
+                    riskLevel = RiskLevel.Low,
+                    confidence = 0.55,
+                    continuity = MovementContinuityState.Stopped,
+                    outcomes = listOf(
+                        triggered(RuleId.Impact, 0.70),
+                        triggered(RuleId.Immobility, 0.70),
+                        triggered(RuleId.OrientationChange, 0.40),
+                        notTriggered(RuleId.Fall),
+                        notTriggered(RuleId.HarshBraking)
+                    )
+                )
+            )
+            runCurrent()
+
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.CountdownActive)
+            assertTrue(fixture.minor.items.value.isEmpty())
+            assertTrue(fixture.incidents.items.value.isEmpty())
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun moderateImpactAndImmobilityStartsFalsePositiveCountdown() = runTest {
+        val fixture = fixture()
+        try {
+            start(fixture)
+            fixture.risk.publish(
+                assessment(
+                    score = 45,
+                    riskLevel = RiskLevel.Medium,
+                    outcomes = listOf(
+                        triggered(RuleId.Impact, 0.70),
+                        triggered(RuleId.Immobility, 0.70),
+                        notTriggered(RuleId.Fall),
+                        notTriggered(RuleId.OrientationChange),
+                        notTriggered(RuleId.HarshBraking)
+                    )
+                )
+            )
+            runCurrent()
+
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.CountdownActive)
+            assertTrue(fixture.incidents.items.value.isEmpty())
+            assertTrue(fixture.requests.items.value.isEmpty())
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun impactAndOrientationCanStartCountdownBeforeImmobilityWindowCompletes() = runTest {
+        val fixture = fixture()
+        try {
+            start(fixture)
+            fixture.risk.publish(
+                assessment(
+                    score = 33,
+                    riskLevel = RiskLevel.Low,
+                    confidence = 0.55,
+                    continuity = MovementContinuityState.Intermittent,
+                    outcomes = listOf(
+                        triggered(RuleId.Impact, 0.65),
+                        triggered(RuleId.OrientationChange, 0.45),
+                        notTriggered(RuleId.Immobility),
+                        notTriggered(RuleId.Fall),
+                        notTriggered(RuleId.HarshBraking)
+                    )
+                )
+            )
+            runCurrent()
+
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.CountdownActive)
+            assertTrue(fixture.incidents.items.value.isEmpty())
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun moderateImpactImmobilityAndOrientationSupportStartsCountdown() = runTest {
+        val fixture = fixture()
+        try {
+            start(fixture)
+            fixture.risk.publish(
+                assessment(
+                    score = 45,
+                    riskLevel = RiskLevel.Medium,
+                    outcomes = listOf(
+                        triggered(RuleId.Impact, 0.70),
+                        triggered(RuleId.Immobility, 0.70),
+                        triggered(RuleId.OrientationChange, 0.45),
+                        notTriggered(RuleId.Fall),
+                        notTriggered(RuleId.HarshBraking)
+                    )
+                )
+            )
+            runCurrent()
+
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.CountdownActive)
+            assertTrue(fixture.incidents.items.value.isEmpty())
+            assertTrue(fixture.requests.items.value.isEmpty())
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun strongImpactFollowedByImmobilityStartsCountdownWithoutExtraSignal() = runTest {
+        val fixture = fixture()
+        try {
+            start(fixture)
+            fixture.risk.publish(
+                assessment(
+                    score = 45,
+                    riskLevel = RiskLevel.Medium,
+                    outcomes = listOf(
+                        triggered(RuleId.Impact, 0.90),
+                        triggered(RuleId.Immobility, 0.70),
+                        notTriggered(RuleId.Fall),
+                        notTriggered(RuleId.OrientationChange),
+                        notTriggered(RuleId.HarshBraking)
+                    )
+                )
+            )
+            runCurrent()
+
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.CountdownActive)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
     @Test fun fallWithImmobilityStartsTwentySecondMonotonicCountdownAndDuplicateDoesNotReset() = runTest {
         val fixture = fixture()
         try {
@@ -207,6 +401,49 @@ class FalsePositiveValidationCoordinatorTest {
             fixture.coordinator.confirmSafe(1L, 1L, UserResponseSource.Mobile, "safe-1")
             runCurrent()
             assertEquals(1L, fixture.coordinator.validationCounters.ignoredResponses + fixture.coordinator.validationCounters.duplicateResponses)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun confirmSafeSuppressesImmediateReEscalationFromSamePhysicalEventWindow() = runTest {
+        val fixture = fixture()
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.confirmSafe(1L, 1L, UserResponseSource.Mobile, "safe-suppression")
+            runCurrent()
+            advanceTimeBy(1_000L)
+            runCurrent()
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Monitoring)
+
+            fixture.risk.publish(
+                assessment(
+                    assessmentId = 2L,
+                    windowId = 2L,
+                    start = 4_000_000_000L,
+                    end = 5_000_000_000L,
+                    score = 75,
+                    riskLevel = RiskLevel.High,
+                    outcomes = listOf(triggered(RuleId.Fall, 0.8), triggered(RuleId.Immobility, 0.7))
+                )
+            )
+            runCurrent()
+            assertFalse(fixture.validation.states.value is FalsePositiveValidationState.CountdownActive)
+
+            fixture.risk.publish(
+                assessment(
+                    assessmentId = 3L,
+                    windowId = 3L,
+                    start = 11_000_000_000L,
+                    end = 12_000_000_000L,
+                    score = 75,
+                    riskLevel = RiskLevel.High,
+                    outcomes = listOf(triggered(RuleId.Fall, 0.8), triggered(RuleId.Immobility, 0.7))
+                )
+            )
+            runCurrent()
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.CountdownActive)
         } finally {
             fixture.close()
             runCurrent()
@@ -277,6 +514,65 @@ class FalsePositiveValidationCoordinatorTest {
         }
     }
 
+    @Test fun requestHelpRemoteHttpFailurePreservesEvidenceWithoutPublishingTerminalIncident() = runTest {
+        val failure = IncidentRemoteCreationStatus.HttpError(500, "server_error")
+        val fixture = fixture(incidentRemoteCreator = FakeIncidentRemoteCreator(failure))
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-http-failure")
+            runCurrent()
+
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+            assertEquals(1, fixture.incidents.items.value.size)
+            assertEquals(1, fixture.requests.items.value.size)
+            assertEquals(IncidentCause.UserRequestedHelp, fixture.incidents.items.value.single().cause)
+            assertEquals(failure, fixture.incidents.items.value.single().remoteCreationStatus)
+            assertEquals(1, fixture.remoteCreator.calls)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun requestHelpRemoteNetworkFailurePreservesEvidenceWithoutPublishingTerminalIncident() = runTest {
+        val failure = IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable")
+        val fixture = fixture(incidentRemoteCreator = FakeIncidentRemoteCreator(failure))
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-network-failure")
+            runCurrent()
+
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+            assertEquals(1, fixture.incidents.items.value.size)
+            assertEquals(1, fixture.requests.items.value.size)
+            assertEquals(IncidentCause.UserRequestedHelp, fixture.incidents.items.value.single().cause)
+            assertEquals(failure, fixture.incidents.items.value.single().remoteCreationStatus)
+            assertEquals(1, fixture.remoteCreator.calls)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun requestHelpRemoteTimeoutPreservesEvidenceWithoutPublishingTerminalIncident() = runTest {
+        val failure = IncidentRemoteCreationStatus.Timeout("network_timeout")
+        val fixture = fixture(incidentRemoteCreator = FakeIncidentRemoteCreator(failure))
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-timeout-failure")
+            runCurrent()
+
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+            assertEquals(1, fixture.incidents.items.value.size)
+            assertEquals(IncidentCause.UserRequestedHelp, fixture.incidents.items.value.single().cause)
+            assertEquals(failure, fixture.incidents.items.value.single().remoteCreationStatus)
+            assertEquals(1, fixture.remoteCreator.calls)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
     @Test fun timeoutCreatesSinglePendingIncidentAndAlert() = runTest {
         val fixture = fixture()
         try {
@@ -301,8 +597,9 @@ class FalsePositiveValidationCoordinatorTest {
         }
     }
 
-    @Test fun timeoutRemoteNetworkFailureKeepsLocalIncidentWithoutCrash() = runTest {
-        val fixture = fixture(incidentRemoteCreator = FakeIncidentRemoteCreator(IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable")))
+    @Test fun countdownTimeoutCreatesStableDurableIdentifiersAndUsesInjectedDetectionTime() = runTest {
+        val expectedDetectedAtEpochMillis = 1_725_000_123_456L
+        val fixture = fixture(nowEpochMillis = { expectedDetectedAtEpochMillis })
         try {
             startCountdown(fixture)
             fixture.clock.now = 20_000_000_000L
@@ -310,9 +607,307 @@ class FalsePositiveValidationCoordinatorTest {
             runCurrent()
 
             val state = fixture.validation.states.value as FalsePositiveValidationState.IncidentGenerated
+            val incidentId = requireNotNull(state.incident.clientIncidentId)
+            val requestId = requireNotNull(state.dispatchRequest.clientAlertRequestId)
+            UUID.fromString(incidentId)
+            UUID.fromString(requestId)
+            assertTrue(incidentId != requestId)
+            assertEquals(expectedDetectedAtEpochMillis, state.incident.detectedAtEpochMillis)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun persistenceRetryReusesDurableIncidentAndAlertIdentifiers() = runTest {
+        val sink = FailingThenRecordingIncidentBundleSink()
+        val expectedDetectedAtEpochMillis = 1_725_000_654_321L
+        val fixture = fixture(offlineEventSink = sink, nowEpochMillis = { expectedDetectedAtEpochMillis })
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-retry-identities")
+            runCurrent()
+            assertEquals(1, sink.bundles.size)
+
+            advanceTimeBy(1_000L)
+            runCurrent()
+            assertEquals(2, sink.bundles.size)
+
+            val initial = sink.bundles[0]
+            val retry = sink.bundles[1]
+            assertEquals(initial.first.clientIncidentId, retry.first.clientIncidentId)
+            assertEquals(initial.second.clientAlertRequestId, retry.second.clientAlertRequestId)
+            assertEquals(initial.first.detectedAtEpochMillis, retry.first.detectedAtEpochMillis)
+            assertEquals(expectedDetectedAtEpochMillis, retry.first.detectedAtEpochMillis)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun automaticBundleResolvesRemoteTripBeforeDurableEnqueue() = runTest {
+        val sink = RecordingAutomaticBundleSink()
+        val automatic = RecordingAutomaticSosCreator(location = location(), resolvedRemoteTripId = "trip-A")
+        val fixture = fixture(offlineEventSink = sink, automaticSosAlertCreator = automatic)
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-remote-trip-before-enqueue")
+            runCurrent()
+
+            val enqueued = sink.enqueuedBundles.single()
+            assertEquals(TRIP_SESSION_KEY, enqueued.first.tripSessionKey)
+            assertEquals("trip-A", enqueued.first.remoteTripId)
+            UUID.fromString(requireNotNull(enqueued.first.clientIncidentId))
+            assertNotNull(enqueued.second.clientAlertRequestId)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun automaticBundlePersistenceRetryPreservesResolvedRemoteTripAndIdentity() = runTest {
+        val sink = RecordingAutomaticBundleSink(failInitialBundleAttempts = 1)
+        val automatic = RecordingAutomaticSosCreator(
+            location = location(),
+            retryLocation = location(latitude = 20.6736, longitude = -103.3440),
+            resolvedRemoteTripId = "trip-A"
+        )
+        val fixture = fixture(offlineEventSink = sink, automaticSosAlertCreator = automatic)
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-remote-trip-retry")
+            runCurrent()
+            val retryState = fixture.validation.states.value as FalsePositiveValidationState.IncidentDeliveryRetrying
+            assertEquals(1, retryState.attempt)
+            assertEquals(3, retryState.maxAttempts)
+            advanceTimeBy(1_000L)
+            runCurrent()
+
+            assertEquals(2, sink.enqueuedBundles.size)
+            val initial = sink.enqueuedBundles[0]
+            val retry = sink.enqueuedBundles[1]
+            assertEquals(initial.first.clientIncidentId, retry.first.clientIncidentId)
+            assertEquals(initial.second.clientAlertRequestId, retry.second.clientAlertRequestId)
+            assertEquals(initial.first.tripSessionKey, retry.first.tripSessionKey)
+            assertEquals(initial.first.remoteTripId, retry.first.remoteTripId)
+            assertEquals(initial.first.latitude, retry.first.latitude)
+            assertEquals(initial.first.longitude, retry.first.longitude)
+            assertEquals("trip-A", retry.first.remoteTripId)
+            assertEquals(1, automatic.remoteTripResolutionCalls)
+            assertEquals(1, automatic.locationCalls)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun automaticBundleWithoutRemoteTripDoesNotEnqueueOrInventIdentity() = runTest {
+        val sink = RecordingAutomaticBundleSink()
+        val automatic = RecordingAutomaticSosCreator(location = location(), resolvedRemoteTripId = null)
+        val fixture = fixture(offlineEventSink = sink, automaticSosAlertCreator = automatic)
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-remote-trip-missing")
+            runCurrent()
+
+            assertTrue(sink.enqueuedBundles.isEmpty())
+            assertTrue(automatic.submitted.isEmpty())
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.IncidentDeliveryRetrying)
+            assertEquals(1, automatic.remoteTripResolutionCalls)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun userRequestedHelpCreatesValidDurableIdentifiersAndInjectedDetectionTime() = runTest {
+        val expectedDetectedAtEpochMillis = 1_725_000_999_999L
+        val fixture = fixture(nowEpochMillis = { expectedDetectedAtEpochMillis })
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-durable-identities")
+            runCurrent()
+
+            val state = fixture.validation.states.value as FalsePositiveValidationState.IncidentGenerated
+            val incidentId = requireNotNull(state.incident.clientIncidentId)
+            val requestId = requireNotNull(state.dispatchRequest.clientAlertRequestId)
+            UUID.fromString(incidentId)
+            UUID.fromString(requestId)
+            assertTrue(incidentId != requestId)
+            assertEquals(expectedDetectedAtEpochMillis, state.incident.detectedAtEpochMillis)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun countdownTimeoutPersistsCapturedLocationBeforeAutomaticSosWithoutUsingLegacyCreator() = runTest {
+        val sink = RecordingAutomaticBundleSink()
+        val automatic = RecordingAutomaticSosCreator(location = location())
+        val legacy = FakeIncidentRemoteCreator()
+        val detectedAt = 1_725_000_123_456L
+        val fixture = fixture(sink, legacy, { detectedAt }, automatic)
+        try {
+            startCountdown(fixture)
+            fixture.clock.now = 20_000_000_000L
+            advanceTimeBy(1_000L)
+            runCurrent()
+
+            val persisted = sink.enqueuedBundles.single()
+            val submitted = automatic.submitted.single()
+            assertEquals(1, automatic.locationCalls)
+            assertEquals(0, legacy.calls)
+            assertEquals(0, sink.updatedBundles.size)
+            assertEquals(persisted.first.clientIncidentId, submitted.first.clientIncidentId)
+            assertEquals(persisted.second.clientAlertRequestId, submitted.second.clientAlertRequestId)
+            assertEquals(detectedAt, persisted.first.detectedAtEpochMillis)
+            assertEquals(1L, persisted.first.incidentId)
+            assertEquals(1L, persisted.second.requestId)
+            assertEquals(19.4326, persisted.first.latitude)
+            assertEquals(-99.1332, persisted.first.longitude)
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.IncidentGenerated)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun userRequestedHelpWithUnavailableLocationDoesNotSubmitOrGenerateIncident() = runTest {
+        val sink = RecordingAutomaticBundleSink()
+        val automatic = RecordingAutomaticSosCreator(location = null)
+        val fixture = fixture(offlineEventSink = sink, automaticSosAlertCreator = automatic)
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-location-unavailable")
+            runCurrent()
+
+            assertEquals(1, automatic.locationCalls)
+            assertTrue(automatic.submitted.isEmpty())
+            assertTrue(fixture.incidents.items.value.isEmpty())
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.IncidentDeliveryRetrying)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun automaticSosPersistsCompleteBundleWithoutSecondLocationMutation() = runTest {
+        val sink = RecordingAutomaticBundleSink(failUpdate = true)
+        val automatic = RecordingAutomaticSosCreator(location = location())
+        val fixture = fixture(offlineEventSink = sink, automaticSosAlertCreator = automatic)
+        try {
+            startCountdown(fixture)
+            fixture.clock.now = 20_000_000_000L
+            advanceTimeBy(1_000L)
+            runCurrent()
+
+            assertEquals(0, sink.updatedBundles.size)
+            assertEquals(1, sink.enqueuedBundles.size)
+            assertEquals(19.4326, sink.enqueuedBundles.single().first.latitude)
+            assertEquals(-99.1332, sink.enqueuedBundles.single().first.longitude)
+            assertEquals(1, automatic.submitted.size)
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.IncidentGenerated)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun automaticSosFailuresDoNotGenerateTerminalIncident() = runTest {
+        val statuses = listOf(
+            IncidentRemoteCreationStatus.HttpError(400, "request_rejected"),
+            IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable"),
+            IncidentRemoteCreationStatus.Timeout("network_timeout"),
+            IncidentRemoteCreationStatus.InvalidResponse("response_invalid"),
+            IncidentRemoteCreationStatus.MissingRequiredData("active_remote_trip_missing")
+        )
+        statuses.forEach { status ->
+            val fixture = fixture(
+                offlineEventSink = RecordingAutomaticBundleSink(),
+                automaticSosAlertCreator = RecordingAutomaticSosCreator(location = location(), status = status)
+            )
+            try {
+                startCountdown(fixture)
+                fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-${status::class.simpleName}")
+                runCurrent()
+
+                assertTrue(fixture.incidents.items.value.isEmpty())
+                if (status is IncidentRemoteCreationStatus.HttpError && status.statusCode == 400) {
+                    assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+                } else {
+                    assertTrue(fixture.validation.states.value is FalsePositiveValidationState.IncidentDeliveryRetrying)
+                }
+            } finally {
+                fixture.close()
+                runCurrent()
+            }
+        }
+    }
+
+    @Test fun automaticPermanentHttpFailureDoesNotScheduleAnotherCoordinatorSubmission() = runTest {
+        val sink = RecordingAutomaticBundleSink()
+        val automatic = RecordingAutomaticSosCreator(
+            location = location(),
+            status = IncidentRemoteCreationStatus.HttpError(400, "request_rejected")
+        )
+        val fixture = fixture(offlineEventSink = sink, automaticSosAlertCreator = automatic)
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-permanent-http")
+            runCurrent()
+
+            assertEquals(1, sink.releaseCalls)
+            assertEquals(true, sink.lastReleasePermanent)
+            assertEquals(1, automatic.submitted.size)
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+
+            advanceTimeBy(10_000L)
+            runCurrent()
+            assertEquals(1, automatic.submitted.size)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun automaticNetworkFailureReleasesClaimForDurableRetry() = runTest {
+        val sink = RecordingAutomaticBundleSink()
+        val fixture = fixture(
+            offlineEventSink = sink,
+            automaticSosAlertCreator = RecordingAutomaticSosCreator(
+                location = location(),
+                status = IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable")
+            )
+        )
+        try {
+            startCountdown(fixture)
+            fixture.coordinator.requestHelp(1L, 1L, UserResponseSource.Mobile, "help-network")
+            runCurrent()
+
+            assertEquals(1, sink.releaseCalls)
+            assertEquals(false, sink.lastReleasePermanent)
+            assertTrue(fixture.incidents.items.value.isEmpty())
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.IncidentDeliveryRetrying)
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
+    @Test fun timeoutRemoteNetworkFailureKeepsLocalIncidentWithoutPublishingTerminalIncident() = runTest {
+        val fixture = fixture(incidentRemoteCreator = FakeIncidentRemoteCreator(IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable")))
+        try {
+            startCountdown(fixture)
+            fixture.clock.now = 20_000_000_000L
+            advanceTimeBy(1_000L)
+            runCurrent()
+
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
             assertEquals(1, fixture.incidents.items.value.size)
-            assertEquals(null, state.incident.remoteIncidentId)
-            assertEquals(IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable"), state.incident.remoteCreationStatus)
+            assertEquals(1, fixture.requests.items.value.size)
+            assertEquals(IncidentCause.Timeout, fixture.incidents.items.value.single().cause)
+            assertEquals(null, fixture.incidents.items.value.single().remoteIncidentId)
+            assertEquals(IncidentRemoteCreationStatus.NetworkUnavailable("network_unavailable"), fixture.incidents.items.value.single().remoteCreationStatus)
             assertEquals(1, fixture.remoteCreator.calls)
         } finally {
             fixture.close()
@@ -386,6 +981,7 @@ class FalsePositiveValidationCoordinatorTest {
             val request = fixture.requests.items.value.single()
             assertEquals(1L, incident.sessionId)
             assertEquals(1L, incident.assessmentId)
+            assertEquals(TRIP_SESSION_KEY, incident.tripSessionKey)
             assertNotNull(incident.relevantOutcomes)
             assertEquals(AlertDeliveryStatus.Pending, incident.deliveryStatus)
             assertEquals(AlertDeliveryStatus.Pending, request.deliveryStatus)
@@ -448,7 +1044,7 @@ class FalsePositiveValidationCoordinatorTest {
 
     @Test fun bundlePersistenceFailureDoesNotUpdateStores() = runTest {
         val sink = FakeOfflineEventSink(failBundle = true)
-        val fixture = fixture(sink)
+        val fixture = fixture(sink, tripSessionState = TripSessionState.Active(TRIP_SESSION_KEY))
         try {
             start(fixture)
             fixture.risk.publish(assessment(score = 95, riskLevel = RiskLevel.High, confidence = 0.95, outcomes = listOf(triggered(RuleId.Impact, 0.95), triggered(RuleId.Fall, 0.95))))
@@ -456,7 +1052,7 @@ class FalsePositiveValidationCoordinatorTest {
 
             assertTrue(fixture.incidents.items.value.isEmpty())
             assertTrue(fixture.requests.items.value.isEmpty())
-            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.IncidentDeliveryRetrying)
             assertFalse(fixture.validation.states.value is FalsePositiveValidationState.IncidentGenerated)
             assertFalse(fixture.validation.states.value is FalsePositiveValidationState.ImmediateAlertRequested)
         } finally {
@@ -465,9 +1061,36 @@ class FalsePositiveValidationCoordinatorTest {
         }
     }
 
+    @Test fun bundlePersistenceFailureBecomesTerminalOnlyAfterBoundedRetriesAreExhausted() = runTest {
+        val sink = FakeOfflineEventSink(failBundle = true)
+        val fixture = fixture(sink, tripSessionState = TripSessionState.Active(TRIP_SESSION_KEY))
+        try {
+            start(fixture)
+            fixture.risk.publish(assessment(score = 95, riskLevel = RiskLevel.High, confidence = 0.95, outcomes = listOf(triggered(RuleId.Impact, 0.95), triggered(RuleId.Fall, 0.95))))
+            runCurrent()
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.IncidentDeliveryRetrying)
+
+            advanceTimeBy(1_000L)
+            runCurrent()
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.IncidentDeliveryRetrying)
+            advanceTimeBy(2_000L)
+            runCurrent()
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.IncidentDeliveryRetrying)
+            advanceTimeBy(3_000L)
+            runCurrent()
+
+            assertTrue(fixture.validation.states.value is FalsePositiveValidationState.Error)
+            assertTrue(fixture.incidents.items.value.isEmpty())
+            assertTrue(fixture.requests.items.value.isEmpty())
+        } finally {
+            fixture.close()
+            runCurrent()
+        }
+    }
+
     @Test fun bundleSuccessUpdatesBothStoresAfterSinkCall() = runTest {
         val sink = FakeOfflineEventSink()
-        val fixture = fixture(sink)
+        val fixture = fixture(sink, tripSessionState = TripSessionState.Active(TRIP_SESSION_KEY))
         sink.onBeforeBundleReturn = {
             assertTrue(fixture.incidents.items.value.isEmpty())
             assertTrue(fixture.requests.items.value.isEmpty())
@@ -544,7 +1167,10 @@ class FalsePositiveValidationCoordinatorTest {
 
     private fun TestScope.fixture(
         offlineEventSink: OfflineEventSink? = null,
-        incidentRemoteCreator: FakeIncidentRemoteCreator = FakeIncidentRemoteCreator()
+        incidentRemoteCreator: FakeIncidentRemoteCreator = FakeIncidentRemoteCreator(),
+        nowEpochMillis: () -> Long = { 1_700_000_000_000L },
+        automaticSosAlertCreator: AutomaticSosAlertCreator? = null,
+        tripSessionState: TripSessionState = TripSessionState.Idle,
     ): Fixture {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val fixtureJob = SupervisorJob()
@@ -555,6 +1181,7 @@ class FalsePositiveValidationCoordinatorTest {
         val minor = InMemoryBoundedValidationStore<com.example.sos_segundoplano.domain.validation.MinorEvent>(4)
         val incidents = InMemoryBoundedValidationStore<com.example.sos_segundoplano.domain.validation.LocalIncident>(4)
         val requests = InMemoryBoundedValidationStore<com.example.sos_segundoplano.domain.validation.AlertDispatchRequest>(4)
+        val tripSessionStore = InMemoryTripSessionStore(tripSessionState)
         val coordinator = FalsePositiveValidationCoordinator(
             risk,
             validation,
@@ -567,11 +1194,14 @@ class FalsePositiveValidationCoordinatorTest {
             { 1L },
             { 1L },
             { 1L },
-            externalScope = fixtureScope
+            nowEpochMillis,
+            externalScope = fixtureScope,
+            tripSessionStore = tripSessionStore,
         )
         coordinator.setOfflineEventSink(offlineEventSink ?: FakeOfflineEventSink())
         coordinator.setIncidentRemoteCreator(incidentRemoteCreator)
-        return Fixture(clock, risk, validation, minor, incidents, requests, coordinator, incidentRemoteCreator, fixtureJob)
+        automaticSosAlertCreator?.let(coordinator::setAutomaticSosAlertCreator)
+        return Fixture(clock, risk, validation, minor, incidents, requests, coordinator, incidentRemoteCreator, fixtureJob, tripSessionStore)
     }
 
     private suspend fun Fixture.close() {
@@ -585,6 +1215,7 @@ class FalsePositiveValidationCoordinatorTest {
     }
 
     private fun TestScope.startCountdown(fixture: Fixture) {
+        fixture.tripSessionStore.setState(TripSessionState.Active(TRIP_SESSION_KEY))
         start(fixture)
         fixture.risk.publish(assessment(score = 75, riskLevel = RiskLevel.High, outcomes = listOf(triggered(RuleId.Fall, 0.8), triggered(RuleId.Immobility, 0.7))))
         runCurrent()
@@ -599,7 +1230,8 @@ class FalsePositiveValidationCoordinatorTest {
         val requests: InMemoryBoundedValidationStore<com.example.sos_segundoplano.domain.validation.AlertDispatchRequest>,
         val coordinator: FalsePositiveValidationCoordinator,
         val remoteCreator: FakeIncidentRemoteCreator,
-        val fixtureJob: Job
+        val fixtureJob: Job,
+        val tripSessionStore: TripSessionStore,
     )
 
     private class FakeIncidentRemoteCreator(
@@ -662,6 +1294,154 @@ class FalsePositiveValidationCoordinatorTest {
             keys.add(key)
             return OfflineQueueEnqueueResult.PersistedAndScheduled(keys.size.toLong(), key)
         }
+    }
+
+    private class FailingThenRecordingIncidentBundleSink : OfflineEventSink {
+        val bundles = mutableListOf<Pair<LocalIncident, AlertDispatchRequest>>()
+
+        override suspend fun enqueueMinorEvent(event: MinorEvent): OfflineQueueEnqueueResult = error("unused")
+
+        override suspend fun enqueueIncident(incident: LocalIncident): OfflineQueueEnqueueResult = error("unused")
+
+        override suspend fun enqueueAlertRequest(request: AlertDispatchRequest): OfflineQueueEnqueueResult = error("unused")
+
+        override suspend fun enqueueIncidentBundle(
+            incident: LocalIncident,
+            request: AlertDispatchRequest
+        ): OfflineQueueEnqueueResult {
+            bundles += incident to request
+            return if (bundles.size == 1) {
+                OfflineQueueEnqueueResult.PersistenceFailed(
+                    OfflineSyncErrorCategory.Serialization,
+                    "offline_queue_storage_failed"
+                )
+            } else {
+                OfflineQueueEnqueueResult.PersistedAndScheduled(
+                    queueItemId = 1L,
+                    idempotencyKey = "incident-bundle"
+                )
+            }
+        }
+    }
+
+    private class RecordingAutomaticBundleSink(
+        private val failUpdate: Boolean = false,
+        private val failInitialBundleAttempts: Int = 0
+    ) : OfflineEventSink {
+        val enqueuedBundles = mutableListOf<Pair<LocalIncident, AlertDispatchRequest>>()
+        val updatedBundles = mutableListOf<Pair<LocalIncident, AlertDispatchRequest>>()
+        var releaseCalls = 0
+        var lastReleasePermanent: Boolean? = null
+
+        override suspend fun enqueueMinorEvent(event: MinorEvent): OfflineQueueEnqueueResult = error("unused")
+        override suspend fun enqueueIncident(incident: LocalIncident): OfflineQueueEnqueueResult = error("unused")
+        override suspend fun enqueueAlertRequest(request: AlertDispatchRequest): OfflineQueueEnqueueResult = error("unused")
+        override suspend fun enqueueIncidentBundle(incident: LocalIncident, request: AlertDispatchRequest): OfflineQueueEnqueueResult {
+            enqueuedBundles += incident to request
+            return if (enqueuedBundles.size <= failInitialBundleAttempts) {
+                OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.Serialization, "offline_queue_storage_failed")
+            } else {
+                OfflineQueueEnqueueResult.PersistedAndScheduled(1L, "bundle")
+            }
+        }
+
+        override suspend fun updateIncidentBundle(incident: LocalIncident, request: AlertDispatchRequest): OfflineQueueEnqueueResult {
+            updatedBundles += incident to request
+            return if (failUpdate) {
+                OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.Serialization, "offline_location_persistence_failed")
+            } else {
+                OfflineQueueEnqueueResult.PersistedAndScheduled(1L, "bundle")
+            }
+        }
+
+        override suspend fun claimAutomaticSosBundle(
+            bundleKey: String,
+            workerId: String,
+            nowMillis: Long
+        ): com.example.sos_segundoplano.domain.offline.AutomaticSosBundleClaimResult {
+            val claim = com.example.sos_segundoplano.domain.offline.OfflineQueueClaim(1L, workerId, 1, nowMillis, "test-claim")
+            fun item(id: Long, type: com.example.sos_segundoplano.domain.offline.OfflineEventType) =
+                com.example.sos_segundoplano.domain.offline.ClaimedOfflineQueueItem(
+                    com.example.sos_segundoplano.domain.offline.OfflineQueueItem(
+                        id, "test-$id", type, 1, null, null, id.toString(), nowMillis, nowMillis, nowMillis,
+                        null, nowMillis, null, 1, com.example.sos_segundoplano.domain.offline.OfflineQueueStatus.InFlight,
+                        null, null, null, null, "rider", bundleKey
+                    ), byteArrayOf(1), byteArrayOf(2), 1, claim.copy(queueItemId = id)
+                )
+            return com.example.sos_segundoplano.domain.offline.AutomaticSosBundleClaimResult.Acquired(
+                com.example.sos_segundoplano.domain.offline.ClaimedAutomaticSosBundle("rider", bundleKey, item(1L, com.example.sos_segundoplano.domain.offline.OfflineEventType.LocalIncident), item(2L, com.example.sos_segundoplano.domain.offline.OfflineEventType.AlertDispatchRequest))
+            )
+        }
+
+        override suspend fun acknowledgeAutomaticSosBundle(
+            bundle: com.example.sos_segundoplano.domain.offline.ClaimedAutomaticSosBundle,
+            receipt: com.example.sos_segundoplano.domain.offline.AutomaticSosRemoteReceipt,
+            nowMillis: Long
+        ) = com.example.sos_segundoplano.domain.offline.OfflineQueueTransitionResult.Applied
+
+        override suspend fun releaseAutomaticSosBundle(
+            bundle: com.example.sos_segundoplano.domain.offline.ClaimedAutomaticSosBundle,
+            permanent: Boolean,
+            code: String,
+            nowMillis: Long
+        ): com.example.sos_segundoplano.domain.offline.OfflineQueueTransitionResult {
+            releaseCalls++
+            lastReleasePermanent = permanent
+            return com.example.sos_segundoplano.domain.offline.OfflineQueueTransitionResult.Applied
+        }
+    }
+
+    private class RecordingAutomaticSosCreator(
+        private val location: LocationSample?,
+        private val status: IncidentRemoteCreationStatus = IncidentRemoteCreationStatus.Success("remote-incident-automatic"),
+        private val resolvedRemoteTripId: String? = "trip-automatic",
+        private val retryLocation: LocationSample? = location
+    ) : AutomaticSosAlertCreator {
+        var locationCalls = 0
+        var remoteTripResolutionCalls = 0
+        val submitted = mutableListOf<Pair<LocalIncident, AlertDispatchRequest>>()
+
+        override suspend fun captureLocation(incident: LocalIncident): LocalIncident {
+            locationCalls++
+            val capturedLocation = if (locationCalls == 1) location else retryLocation
+            return capturedLocation?.let {
+                incident.copy(latitude = it.latitude, longitude = it.longitude, remoteCreationStatus = IncidentRemoteCreationStatus.Pending)
+            } ?: incident.copy(remoteCreationStatus = IncidentRemoteCreationStatus.MissingRequiredData("location_unavailable"))
+        }
+
+        override suspend fun resolveRemoteTrip(incident: LocalIncident): LocalIncident {
+            remoteTripResolutionCalls++
+            val remoteTripId = incident.remoteTripId ?: resolvedRemoteTripId
+            return remoteTripId?.let {
+                incident.copy(remoteTripId = it, remoteCreationStatus = IncidentRemoteCreationStatus.Pending)
+            } ?: incident.copy(
+                remoteCreationStatus = IncidentRemoteCreationStatus.MissingRequiredData("active_remote_trip_missing")
+            )
+        }
+
+        override suspend fun createAutomaticSosAlert(incident: LocalIncident, request: AlertDispatchRequest): LocalIncident {
+            submitted += incident to request
+            return when (status) {
+                is IncidentRemoteCreationStatus.Success -> incident.copy(remoteIncidentId = status.incidentId, remoteAlertDispatchId = "remote-dispatch-automatic", remoteCreationStatus = status)
+                else -> incident.copy(remoteCreationStatus = status)
+            }
+        }
+    }
+
+    private fun location(
+        latitude: Double = 19.4326,
+        longitude: Double = -99.1332
+    ) = LocationSample(
+        latitude = latitude,
+        longitude = longitude,
+        accuracyMeters = 5f,
+        timestampMillis = 1_700_000_000_000L,
+        provider = "gps",
+        isMock = false
+    )
+
+    private companion object {
+        const val TRIP_SESSION_KEY = "trip-session-A"
     }
 
     private fun rejects(block: () -> Unit) {

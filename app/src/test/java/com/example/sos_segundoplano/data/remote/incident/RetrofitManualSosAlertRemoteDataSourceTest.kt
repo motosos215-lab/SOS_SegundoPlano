@@ -43,7 +43,9 @@ class RetrofitManualSosAlertRemoteDataSourceTest {
         assertTrue(body.contains("\"detectedAtUtc\":\"2026-08-11T15:55:00Z\""))
         assertTrue(body.contains("\"latitude\":19.4326"))
         assertTrue(body.contains("\"longitude\":-99.1332"))
-        assertFalse(body.contains("riskLevel"))
+        listOf("score", "confidence", "gpsQuality", "ruleSetVersion", "validationPolicyVersion", "source", "evidenceSummary", "riskLevel").forEach { field ->
+            assertFalse(body.contains("\"$field\""))
+        }
     }
 
     @Test fun parsesEmptyPushAndMixedNotificationAttemptsWithoutAssumingOrder() = runBlocking {

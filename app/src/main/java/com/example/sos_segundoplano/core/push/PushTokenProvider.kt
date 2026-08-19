@@ -5,6 +5,7 @@ import com.example.sos_segundoplano.core.auth.AuthProvider
 import com.example.sos_segundoplano.data.local.push.KeystoreEncryptedPushTokenStore
 import com.example.sos_segundoplano.domain.push.PushTokenCoordinator
 import com.example.sos_segundoplano.domain.push.PushTokenStoreResult
+import com.example.sos_segundoplano.push.PushDiagnostics
 import com.google.firebase.messaging.FirebaseMessaging
 
 fun interface InitialPushTokenFetcher {
@@ -13,8 +14,12 @@ fun interface InitialPushTokenFetcher {
 
 class FirebaseInitialPushTokenFetcher : InitialPushTokenFetcher {
     override fun fetch(onToken: (String) -> Unit) {
+        PushDiagnostics.debug(PushDiagnostics.initialFetchStarted())
         FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+            PushDiagnostics.debug(PushDiagnostics.initialFetchResult(success = token.isNotBlank()))
             if (token.isNotBlank()) onToken(token)
+        }.addOnFailureListener { error ->
+            PushDiagnostics.debug(PushDiagnostics.initialFetchResult(false, error))
         }
     }
 }

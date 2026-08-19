@@ -20,7 +20,7 @@ interface MonitorAlertsApi {
     suspend fun status(@Header("Authorization") authorization: String, @Path("notificationDeliveryAttemptId") id: String): Response<ApiEnvelopeDto<MonitorAlertStatusDataDto>>
 
     @GET("api/v1/monitor/alerts/{notificationDeliveryAttemptId}/location")
-    suspend fun location(@Header("Authorization") authorization: String, @Path("notificationDeliveryAttemptId") id: String): Response<ApiEnvelopeDto<Any>>
+    suspend fun location(@Header("Authorization") authorization: String, @Path("notificationDeliveryAttemptId") id: String): Response<ApiEnvelopeDto<MonitorAlertLocationDataDto>>
 
     @POST("api/v1/monitor/alerts/{notificationDeliveryAttemptId}/view")
     suspend fun view(@Header("Authorization") authorization: String, @Path("notificationDeliveryAttemptId") id: String, @Body request: EmptyBodyDto = EmptyBodyDto()): Response<ApiEnvelopeDto<Any>>
@@ -33,10 +33,7 @@ interface MonitorAlertsApi {
 }
 
 data class AcknowledgeMonitorAlertRequestDto(val responseType: String, val message: String)
-data class DeclineMonitorAlertRequestDto(
-    val responseType: String = "CannotAssist",
-    val message: String? = null
-)
+data class DeclineMonitorAlertRequestDto(val reason: String)
 data class MonitorAlertHistoryDataDto(
     val alerts: List<MonitorAlertAcknowledgementDto>,
     val pageNumber: Int,
@@ -61,6 +58,44 @@ data class MonitorAlertDispatchStatusDto(val id: String? = null, val status: Str
 data class MonitorAlertNotificationsStatusDto(val total: Int? = null, val prepared: Int? = null, val simulatedSent: Int? = null, val failed: Int? = null, val cancelled: Int? = null)
 data class MonitorAlertAcknowledgementsStatusDto(val total: Int? = null, val pending: Int? = null, val viewed: Int? = null, val acknowledged: Int? = null, val declined: Int? = null)
 data class MonitorAlertStatusLocationDto(val available: Boolean? = null, val incidentId: String? = null, val tripId: String? = null, val latitude: Double? = null, val longitude: Double? = null, val accuracyMeters: Double? = null, val source: String? = null, val recordedAtUtc: String? = null, val receivedAtUtc: String? = null, val isActive: Boolean? = null, val isStale: Boolean? = null)
+
+/**
+ * The dedicated Monitor location endpoint can return the location directly or nested as `location`.
+ * Keeping both shapes here lets the Android app consume the endpoint independently from the
+ * aggregated /status response without fabricating coordinates.
+ */
+data class MonitorAlertLocationDataDto(
+    val available: Boolean? = null,
+    val incidentId: String? = null,
+    val tripId: String? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val accuracyMeters: Double? = null,
+    val source: String? = null,
+    val recordedAtUtc: String? = null,
+    val receivedAtUtc: String? = null,
+    val isActive: Boolean? = null,
+    val isStale: Boolean? = null,
+    val location: MonitorAlertStatusLocationDto? = null
+) {
+    fun resolvedLocation(): MonitorAlertStatusLocationDto? = location ?: if (
+        available != null || latitude != null || longitude != null || incidentId != null || tripId != null
+    ) {
+        MonitorAlertStatusLocationDto(
+            available = available,
+            incidentId = incidentId,
+            tripId = tripId,
+            latitude = latitude,
+            longitude = longitude,
+            accuracyMeters = accuracyMeters,
+            source = source,
+            recordedAtUtc = recordedAtUtc,
+            receivedAtUtc = receivedAtUtc,
+            isActive = isActive,
+            isStale = isStale
+        )
+    } else null
+}
 data class MonitorAlertAcknowledgementDto(
     val id: String? = null,
     val alertDispatchId: String? = null,

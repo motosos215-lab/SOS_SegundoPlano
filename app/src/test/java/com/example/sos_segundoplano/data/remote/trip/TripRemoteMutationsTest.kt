@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class TripRemoteMutationsTest {
@@ -21,7 +22,7 @@ class TripRemoteMutationsTest {
         val remote = FakeTripRemoteDataSource(
             startResult = TripMutationResult.Success("remote-trip-1", "Active")
         )
-        val starter = AuthenticatedRemoteTripStarter(FakeAuthRepository(), remote, store)
+        val starter = AuthenticatedRemoteTripStarter(FakeAuthRepository(), remote, store) { "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" }
         val request = StartTripRequestDto(
             vehicleId = "vehicle-fixture-1",
             mobileDeviceId = "mobile-device-fixture-1",
@@ -34,6 +35,74 @@ class TripRemoteMutationsTest {
         assertEquals("remote-trip-1", store.remoteTripId.value)
         assertEquals(request, remote.startRequest)
         assertEquals("Bearer access-token", remote.authorization)
+    }
+
+    @Test fun successfulStartPersistsTheExactPhoneClientStartedAt() = runBlocking {
+        val store = InMemoryRemoteTripSessionStore()
+        val starter = AuthenticatedRemoteTripStarter(
+            FakeAuthRepository(),
+            FakeTripRemoteDataSource(startResult = TripMutationResult.Success("remote-trip-1", "Active")),
+            store,
+            { "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" }
+        )
+
+        starter.startTrip(
+            StartTripRequestDto(
+                vehicleId = "vehicle-fixture-1",
+                mobileDeviceId = "mobile-device-fixture-1",
+                clientStartedAtUtc = "2024-08-20T12:00:00Z"
+            )
+        )
+
+        assertEquals(1_724_155_200_000L, store.startedAtEpochMs.value)
+    }
+
+    @Test fun retryForTheSameRemoteTripKeepsTheFirstCanonicalStartedAt() = runBlocking {
+        val store = InMemoryRemoteTripSessionStore()
+        val starter = AuthenticatedRemoteTripStarter(
+            FakeAuthRepository(),
+            FakeTripRemoteDataSource(startResult = TripMutationResult.Success("remote-trip-1", "Active")),
+            store,
+            { "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" }
+        )
+
+        starter.startTrip(
+            StartTripRequestDto(
+                vehicleId = "vehicle-fixture-1",
+                mobileDeviceId = "mobile-device-fixture-1",
+                clientStartedAtUtc = "2024-08-20T12:00:00Z"
+            )
+        )
+        starter.startTrip(
+            StartTripRequestDto(
+                vehicleId = "vehicle-fixture-1",
+                mobileDeviceId = "mobile-device-fixture-1",
+                clientStartedAtUtc = "2024-08-20T12:05:00Z"
+            )
+        )
+
+        assertEquals("remote-trip-1", store.remoteTripId.value)
+        assertEquals(1_724_155_200_000L, store.startedAtEpochMs.value)
+    }
+
+    @Test fun failedStartDoesNotPersistAStartedAtOrPartialSession() = runBlocking {
+        val store = InMemoryRemoteTripSessionStore()
+        val starter = AuthenticatedRemoteTripStarter(
+            FakeAuthRepository(),
+            FakeTripRemoteDataSource(startResult = TripMutationResult.NetworkUnavailable("network_unavailable")),
+            store
+        )
+
+        starter.startTrip(
+            StartTripRequestDto(
+                vehicleId = "vehicle-fixture-1",
+                mobileDeviceId = "mobile-device-fixture-1",
+                clientStartedAtUtc = "2024-08-20T12:00:00Z"
+            )
+        )
+
+        assertNull(store.remoteTripId.value)
+        assertNull(store.startedAtEpochMs.value)
     }
 
     @Test fun missingRequiredIdsNeverCallRemoteAndConflictIsNotRetried() = runBlocking {
@@ -68,6 +137,7 @@ class TripRemoteMutationsTest {
 
         assertEquals(TripMutationResult.Success("remote-trip-1", "Finished"), result)
         assertEquals(null, store.remoteTripId.value)
+        assertNull(store.startedAtEpochMs.value)
         assertEquals(FinishTripRequestDto(), remote.finishRequest)
     }
 

@@ -19,11 +19,12 @@ import org.junit.Test
 
 class TripProcessRecoveryCoordinatorTest {
     private val identity = AuthSessionIdentity("rider-1", 7L)
+    private val tripSessionKey = "trip-session-A"
 
     @Test fun riderWithoutRemoteActiveTripRestoresIdleAndClearsStaleMetadata() = runBlocking {
         val remoteStore = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("stale-trip") }
         val timing = FakeTimingStore(TripTimingState.Active(100L))
-        val sessions = InMemoryTripSessionStore(TripSessionState.Active)
+        val sessions = InMemoryTripSessionStore(TripSessionState.Active("trip-session-stale"))
         val coordinator = coordinator(
             resolver = FakeResolver(ActiveTripLookupResult.NoActiveTrip, remoteStore),
             remoteStore = remoteStore,
@@ -42,8 +43,8 @@ class TripProcessRecoveryCoordinatorTest {
     @Test fun riderWithRemoteActiveTripRestoresActiveWithoutCallingRemoteStart() = runBlocking {
         val remoteStore = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("remote-trip-1") }
         val resolver = FakeResolver(ActiveTripLookupResult.Found("remote-trip-1"), remoteStore)
-        val sessions = InMemoryTripSessionStore()
-        val timing = FakeTimingStore(TripTimingState.Active(500L))
+        val sessions = InMemoryTripSessionStore(TripSessionState.Active(tripSessionKey))
+        val timing = FakeTimingStore(TripTimingState.Active(500L, tripSessionKey))
         val service = FakeServiceStarter()
         val coordinator = coordinator(resolver, remoteStore, sessions, timing, service = service)
 
@@ -51,7 +52,7 @@ class TripProcessRecoveryCoordinatorTest {
 
         assertEquals("remote-trip-1", state.remoteTripId)
         assertEquals("remote-trip-1", remoteStore.remoteTripId.value)
-        assertEquals(TripSessionState.Active, sessions.states.value)
+        assertEquals(TripSessionState.Active(tripSessionKey), sessions.states.value)
         assertEquals(RecoveredTripTimingStatus.Continued, state.timingStatus)
         assertEquals(1, resolver.calls)
         assertEquals(1, service.calls)
@@ -61,13 +62,15 @@ class TripProcessRecoveryCoordinatorTest {
         val remoteStore = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("remote-trip-1") }
         val resolver = FakeResolver(ActiveTripLookupResult.Found("remote-trip-1"), remoteStore)
         val service = FakeServiceStarter()
-        val coordinator = coordinator(resolver, remoteStore, service = service)
+        val sessions = InMemoryTripSessionStore(TripSessionState.Active(tripSessionKey))
+        val coordinator = coordinator(resolver, remoteStore, sessions = sessions, service = service)
 
         coordinator.recover(identity, UserRole.Rider)
         coordinator.recover(identity, UserRole.Rider)
 
         assertEquals(1, resolver.calls)
         assertEquals(1, service.calls)
+        assertEquals(TripSessionState.Active(tripSessionKey), sessions.states.value)
     }
 
     @Test fun temporaryFailurePreservesRemoteTripTimingAndLocalStateForRetry() = runBlocking {
@@ -103,20 +106,43 @@ class TripProcessRecoveryCoordinatorTest {
         assertEquals(TripSessionState.Idle, sessions.states.value)
     }
 
-    @Test fun missingValidTimingStartsSafeDurationAtRecoveryWithoutInventingHistory() = runBlocking {
+    @Test fun remoteTripWithoutDurableLocalIdentityDoesNotInventTimingOrStartMonitoring() = runBlocking {
         val remoteStore = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("remote-trip-1") }
         val timing = FakeTimingStore(TripTimingState.Unknown, recoveredStartMillis = 2_000L)
+        val service = FakeServiceStarter()
         val coordinator = coordinator(
             FakeResolver(ActiveTripLookupResult.Found("remote-trip-1"), remoteStore),
             remoteStore,
+            sessions = InMemoryTripSessionStore(TripSessionState.Idle),
+            timing = timing,
+            service = service
+        )
+
+        val state = coordinator.recover(identity, UserRole.Rider)
+
+        assertTrue(state is TripProcessRecoveryState.Idle)
+        assertEquals(TripTimingState.Unknown, timing.states.value)
+        assertEquals(0, timing.beginCalls)
+        assertEquals(0, service.calls)
+    }
+
+    @Test fun missingValidTimingStartsSafeDurationAtRecoveryWithoutInventingHistory() = runBlocking {
+        val remoteStore = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("remote-trip-1") }
+        val timing = FakeTimingStore(TripTimingState.Unknown, recoveredStartMillis = 2_000L)
+        val sessions = InMemoryTripSessionStore(TripSessionState.Active(tripSessionKey))
+        val coordinator = coordinator(
+            FakeResolver(ActiveTripLookupResult.Found("remote-trip-1"), remoteStore),
+            remoteStore,
+            sessions = sessions,
             timing = timing
         )
 
         val state = coordinator.recover(identity, UserRole.Rider) as TripProcessRecoveryState.Active
 
         assertEquals(RecoveredTripTimingStatus.RestartedAtRecovery, state.timingStatus)
-        assertEquals(TripTimingState.Active(2_000L), timing.states.value)
+        assertEquals(TripTimingState.Active(2_000L, tripSessionKey), timing.states.value)
         assertEquals(1, timing.beginCalls)
+        assertEquals(TripSessionState.Active(tripSessionKey), sessions.states.value)
     }
 
     @Test fun differentBootTimingIsDiscardedAndRecoveryStartsFromCurrentBoot() = runBlocking {
@@ -127,10 +153,11 @@ class TripProcessRecoveryCoordinatorTest {
             bootSessionProvider = BootSessionProvider { 4L }
         )
         val remoteStore = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("remote-trip-1") }
+        val sessions = InMemoryTripSessionStore(TripSessionState.Active(tripSessionKey))
         val coordinator = TripProcessRecoveryCoordinator(
             FakeResolver(ActiveTripLookupResult.Found("remote-trip-1"), remoteStore),
             remoteStore,
-            InMemoryTripSessionStore(),
+            sessions,
             timing,
             MutableReadiness(MonitoringRecoveryReadiness.Ready),
             FakeServiceStarter()
@@ -139,16 +166,22 @@ class TripProcessRecoveryCoordinatorTest {
         val state = coordinator.recover(identity, UserRole.Rider) as TripProcessRecoveryState.Active
 
         assertEquals(RecoveredTripTimingStatus.RestartedAtRecovery, state.timingStatus)
-        assertEquals(TripTimingState.Active(8_000L), timing.states.value)
-        assertEquals(PersistedTripTiming(8_000L, 4L), persistence.value)
+        assertEquals(TripTimingState.Active(8_000L, tripSessionKey), timing.states.value)
+        assertEquals(PersistedTripTiming(8_000L, 4L, tripSessionKey), persistence.value)
+        assertEquals(TripSessionState.Active(tripSessionKey), sessions.states.value)
     }
 
     @Test fun differentRemoteTripDoesNotReuseTimingFromStaleTrip() = runBlocking {
         val remoteStore = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("stale-trip") }
-        val timing = FakeTimingStore(TripTimingState.Active(100L), recoveredStartMillis = 2_000L)
+        val sessions = InMemoryTripSessionStore(TripSessionState.Active(tripSessionKey))
+        val timing = FakeTimingStore(
+            TripTimingState.Active(100L, tripSessionKey = "trip-session-B"),
+            recoveredStartMillis = 2_000L
+        )
         val coordinator = coordinator(
             FakeResolver(ActiveTripLookupResult.Found("current-trip"), remoteStore),
             remoteStore,
+            sessions = sessions,
             timing = timing
         )
 
@@ -156,16 +189,19 @@ class TripProcessRecoveryCoordinatorTest {
 
         assertEquals("current-trip", state.remoteTripId)
         assertEquals(RecoveredTripTimingStatus.RestartedAtRecovery, state.timingStatus)
-        assertEquals(TripTimingState.Active(2_000L), timing.states.value)
+        assertEquals(TripTimingState.Active(2_000L, tripSessionKey), timing.states.value)
+        assertEquals(TripSessionState.Active(tripSessionKey), sessions.states.value)
     }
 
     @Test fun blockedReadinessKeepsTripActiveAndStartsServiceOnlyAfterRetry() = runBlocking {
         val remoteStore = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("remote-trip-1") }
         val readiness = MutableReadiness(MonitoringRecoveryReadiness.NotificationsMissing)
         val service = FakeServiceStarter()
+        val sessions = InMemoryTripSessionStore(TripSessionState.Active(tripSessionKey))
         val coordinator = coordinator(
             FakeResolver(ActiveTripLookupResult.Found("remote-trip-1"), remoteStore),
             remoteStore,
+            sessions = sessions,
             readiness = readiness,
             service = service
         )
@@ -176,6 +212,7 @@ class TripProcessRecoveryCoordinatorTest {
             first.monitoringStatus
         )
         assertEquals(0, service.calls)
+        assertEquals(TripSessionState.Active(tripSessionKey), sessions.states.value)
 
         readiness.value = MonitoringRecoveryReadiness.Ready
         val retried = coordinator.retryMonitoring(identity) as TripProcessRecoveryState.Active
@@ -219,9 +256,9 @@ class TripProcessRecoveryCoordinatorTest {
         private val mutableStates = MutableStateFlow(initial)
         override val states: StateFlow<TripTimingState> = mutableStates
         var beginCalls = 0
-        override fun beginConfirmedTrip() {
+        override fun beginConfirmedTrip(tripSessionKey: String?) {
             beginCalls++
-            mutableStates.value = TripTimingState.Active(recoveredStartMillis)
+            mutableStates.value = TripTimingState.Active(recoveredStartMillis, tripSessionKey)
         }
         override fun clear() {
             mutableStates.value = TripTimingState.Unknown

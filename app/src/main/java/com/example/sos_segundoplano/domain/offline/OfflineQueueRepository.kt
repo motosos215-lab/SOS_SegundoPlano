@@ -19,4 +19,7 @@ interface OfflineQueueRepository : OfflineEventSink {
     fun observeSummary(): Flow<OfflineQueueSummary>
     suspend fun getErrors(limit: Int): List<SyncErrorRecord>
     suspend fun cleanSentBefore(cutoffEpochMillis: Long): Int
+    /** Owner-scoped recovery seam. Legacy and other-owner rows are intentionally excluded. */
+    suspend fun recoverableBundleKeysForCurrentRider(): List<String>
+    suspend fun recoverableIncidentBundleForCurrentRider(bundleKey: String): RecoverableOfflineIncidentBundle?
 }

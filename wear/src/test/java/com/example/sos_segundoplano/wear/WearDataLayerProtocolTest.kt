@@ -21,6 +21,8 @@ class WearDataLayerProtocolTest {
             WearSignalSnapshot(
                 accelerometerStatus = WearSignalAvailability.Available,
                 accelerometer = WearVectorSample(1f, 2f, 3f, 4L, 5),
+                linearAccelerationStatus = WearSignalAvailability.Available,
+                linearAcceleration = WearVectorSample(0.1f, 0.2f, 0.3f, 6L, 3),
                 gyroscopeStatus = WearSignalAvailability.Unsupported,
                 heartRateStatus = WearSignalAvailability.PermissionRequired,
                 captureActive = true,
@@ -31,6 +33,8 @@ class WearDataLayerProtocolTest {
 
         assertEquals("available", map.getString("accelerometerStatus"))
         assertEquals(1f, map.getFloat("accelerometerX"), 0.001f)
+        assertEquals("available", map.getString("linearAccelerationStatus"))
+        assertEquals(0.1f, map.getFloat("linearAccelerationX"), 0.001f)
         assertEquals("unsupported", map.getString("gyroscopeStatus"))
         assertEquals("permission_required", map.getString("heartRateStatus"))
         assertEquals("permission_required", map.getString("status"))

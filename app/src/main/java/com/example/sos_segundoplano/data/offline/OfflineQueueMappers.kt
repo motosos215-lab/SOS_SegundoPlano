@@ -47,7 +47,13 @@ fun LocalIncident.toSyncPayload(clock: WallClock): OfflineSyncPayload.LocalIncid
             validationPolicyVersion = validationPolicyVersion,
             gpsQuality = gpsQuality.name,
             occurredAtEpochMillis = clock.currentTimeMillis(),
-            createdAtElapsedRealtimeNanos = createdAtElapsedRealtimeNanos
+            createdAtElapsedRealtimeNanos = createdAtElapsedRealtimeNanos,
+            clientIncidentId = clientIncidentId,
+            detectedAtEpochMillis = detectedAtEpochMillis,
+            latitude = latitude,
+            longitude = longitude,
+            remoteTripId = remoteTripId,
+            tripSessionKey = tripSessionKey
         )
     )
 
@@ -65,7 +71,8 @@ fun AlertDispatchRequest.toSyncPayload(clock: WallClock): OfflineSyncPayload.Ale
             deliveryStatus = deliveryStatus.name,
             retryState = retryState.name,
             occurredAtEpochMillis = clock.currentTimeMillis(),
-            createdAtElapsedRealtimeNanos = createdAtElapsedRealtimeNanos
+            createdAtElapsedRealtimeNanos = createdAtElapsedRealtimeNanos,
+            clientAlertRequestId = clientAlertRequestId
         )
     )
 
@@ -95,7 +102,9 @@ fun OfflineQueueEntity.toDomainResult(): OfflineQueueEntityMappingResult {
             lastErrorCategory = mappedErrorCategory,
             lastErrorCode = lastErrorCode,
             lastErrorMessageSanitized = lastErrorMessageSanitized,
-            ackSanitized = ackSanitized
+            ackSanitized = ackSanitized,
+            ownerUserId = ownerUserId,
+            bundleKey = bundleKey
         )
     )
 }
@@ -147,7 +156,8 @@ fun SyncErrorEntity.toDomain(): SyncErrorRecord? {
 fun OfflineSyncPayload.toNewEntity(
     encrypted: EncryptedPayload,
     idempotencyKey: String,
-    nowMillis: Long
+    nowMillis: Long,
+    bundleMetadata: OfflineBundleMetadata? = null
 ): OfflineQueueEntity = OfflineQueueEntity(
     idempotencyKey = idempotencyKey,
     eventType = eventType.wireName,
@@ -156,6 +166,12 @@ fun OfflineSyncPayload.toNewEntity(
     encryptedPayload = encrypted.ciphertext,
     encryptionNonce = encrypted.nonce,
     encryptionKeyVersion = encrypted.keyVersion,
+    ownerUserId = bundleMetadata?.ownerUserId,
+    bundleKey = bundleMetadata?.bundleKey,
+    remoteTripId = bundleMetadata?.remoteTripId,
+    remoteIncidentId = null,
+    remoteAlertDispatchId = null,
+    remoteSuccessAtEpochMillis = null,
     sourceSessionId = sourceSessionId,
     sourceAssessmentId = sourceAssessmentId,
     sourceEventId = sourceEventId,

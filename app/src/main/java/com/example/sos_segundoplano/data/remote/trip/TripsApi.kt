@@ -7,6 +7,7 @@ import retrofit2.http.Body
 import retrofit2.http.Header
 import retrofit2.http.POST
 import retrofit2.http.Path
+import retrofit2.http.Query
 
 interface TripsApi {
     @GET("api/v1/trips")
@@ -36,4 +37,18 @@ interface TripsApi {
         @Path("id") tripId: String,
         @Body request: FinishTripRequestDto
     ): Response<ApiEnvelopeDto<TripMutationDataDto>>
+
+    @POST("api/v1/trips/{id}/route-points/batch")
+    suspend fun uploadRoutePoints(
+        @Header("Authorization") authorization: String,
+        @Path("id") tripId: String,
+        @Body request: TripRoutePointsBatchRequestDto
+    ): Response<ApiEnvelopeDto<TripRoutePointsBatchDataDto>>
+
+    @GET("api/v1/trips/{id}/route")
+    suspend fun route(
+        @Header("Authorization") authorization: String,
+        @Path("id") tripId: String,
+        @Query("mode") mode: String? = null
+    ): Response<ApiEnvelopeDto<TripRouteDataDto>>
 }

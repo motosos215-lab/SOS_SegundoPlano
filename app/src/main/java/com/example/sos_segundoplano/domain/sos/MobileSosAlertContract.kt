@@ -1,6 +1,6 @@
 package com.example.sos_segundoplano.domain.sos
 
-/** Canonical backend values. Automatic severity/priority mapping pending backend contract. */
+/** Canonical backend SOS values shared by automatic and manual alerts. */
 enum class MobileSosIncidentType(val apiValue: String) {
     CountdownTimeout("CountdownTimeout"),
     UserRequestedHelp("UserRequestedHelp"),

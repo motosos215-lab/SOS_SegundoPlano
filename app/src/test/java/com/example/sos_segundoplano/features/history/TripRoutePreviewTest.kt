@@ -1,35 +1,70 @@
 package com.example.sos_segundoplano.features.history
 
-import com.example.sos_segundoplano.domain.history.RiderTripHistoryLocation
+import com.example.sos_segundoplano.domain.history.RiderTripRoutePoint
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TripRoutePreviewTest {
-    @Test fun normalizesDistinctEndpointsWithinLogicalPadding() {
-        val points = normalizeTripRoutePoints(location(19.0, -100.0), location(20.0, -99.0))
+    @Test fun normalizesOnlyRealPointsAndPreservesOrder() {
+        val route = listOf(
+            point(1, 19.4300, -99.1400),
+            point(2, 19.4350, -99.1350),
+            point(3, 19.4400, -99.1300)
+        )
 
-        assertEquals(0.16f, points.startX, 0.001f)
-        assertEquals(0.84f, points.endX, 0.001f)
-        assertTrue(points.endY < points.startY)
-        assertFalse(points.locationsPracticallyCoincide)
+        val normalized = normalizeRealTripRoute(route)
+
+        assertEquals(route.size, normalized.size)
+        assertTrue(normalized[0].x < normalized[1].x)
+        assertTrue(normalized[1].x < normalized[2].x)
+        assertTrue(normalized[0].y > normalized[1].y)
+        assertTrue(normalized[1].y > normalized[2].y)
     }
 
-    @Test fun preservesGeographicOrientationForNegativeCoordinates() {
-        val points = normalizeTripRoutePoints(location(-20.0, -101.0), location(-19.0, -100.0))
+    @Test fun singleRealPointIsCenteredWithoutInventingEndpoint() {
+        val normalized = normalizeRealTripRoute(listOf(point(1, 19.4326, -99.1332)))
 
-        assertTrue(points.endX > points.startX)
-        assertTrue(points.endY < points.startY)
+        assertEquals(1, normalized.size)
+        assertEquals(0.5f, normalized.single().x, 0.001f)
+        assertEquals(0.5f, normalized.single().y, 0.001f)
     }
 
-    @Test fun nearlyEqualEndpointsReceiveOnlyVisualSeparation() {
-        val points = normalizeTripRoutePoints(location(19.4326, -99.1332), location(19.4326, -99.1332))
+    @Test fun invalidCoordinatesAreDiscardedInsteadOfFabricatingGeometry() {
+        val normalized = normalizeRealTripRoute(
+            listOf(
+                point(1, 95.0, -99.0),
+                point(2, 19.4326, -99.1332)
+            )
+        )
 
-        assertTrue(points.locationsPracticallyCoincide)
-        assertTrue(points.startX < points.endX)
-        assertEquals(points.startY, points.endY, 0.001f)
+        assertEquals(1, normalized.size)
     }
 
-    private fun location(latitude: Double, longitude: Double) = RiderTripHistoryLocation(latitude, longitude)
+    @Test fun computesDistanceAlongEveryRecordedSegment() {
+        val direct = routeDistanceMeters(
+            listOf(point(1, 19.4326, -99.1332), point(2, 19.4426, -99.1332))
+        )
+        val withDetour = routeDistanceMeters(
+            listOf(
+                point(1, 19.4326, -99.1332),
+                point(2, 19.4376, -99.1232),
+                point(3, 19.4426, -99.1332)
+            )
+        )
+
+        assertTrue(direct > 1_000.0)
+        assertTrue(withDetour > direct)
+    }
+
+    private fun point(sequence: Long, latitude: Double, longitude: Double) = RiderTripRoutePoint(
+        clientRoutePointId = "point-$sequence",
+        sequence = sequence,
+        recordedAtUtc = "2026-08-17T18:00:00Z",
+        latitude = latitude,
+        longitude = longitude,
+        accuracyMeters = 8.0,
+        speedMetersPerSecond = null,
+        bearingDegrees = null
+    )
 }

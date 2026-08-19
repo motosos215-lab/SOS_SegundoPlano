@@ -116,20 +116,27 @@ class TripProcessRecoveryCoordinator(
         identity: AuthSessionIdentity,
         remoteTripId: String,
         previousRemoteTripId: String?
-    ): TripProcessRecoveryState.Active {
+    ): TripProcessRecoveryState {
+        // A remote lookup must never invent a new local identity.  Resolve the durable local
+        // session first, then correlate any timing state with that exact session key.
+        val current = tripSessionStore.states.value as? TripSessionState.Active
+            ?: return TripProcessRecoveryState.Idle(identity)
+        val currentTiming = tripTimingStore.states.value
         val timingStatus = when {
-            previousRemoteTripId == remoteTripId && tripTimingStore.states.value is TripTimingState.Active ->
+            previousRemoteTripId == remoteTripId &&
+                currentTiming is TripTimingState.Active &&
+                currentTiming.tripSessionKey == current.tripSessionKey ->
                 RecoveredTripTimingStatus.Continued
             else -> {
-                tripTimingStore.beginConfirmedTrip()
-                if (tripTimingStore.states.value is TripTimingState.Active) {
+                tripTimingStore.beginConfirmedTrip(current.tripSessionKey)
+                val recoveredTiming = tripTimingStore.states.value as? TripTimingState.Active
+                if (recoveredTiming?.tripSessionKey == current.tripSessionKey) {
                     RecoveredTripTimingStatus.RestartedAtRecovery
                 } else {
                     RecoveredTripTimingStatus.Unknown
                 }
             }
         }
-        tripSessionStore.setState(TripSessionState.Active)
         return TripProcessRecoveryState.Active(
             identity = identity,
             remoteTripId = remoteTripId,

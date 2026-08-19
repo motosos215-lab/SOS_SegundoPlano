@@ -3,6 +3,7 @@ package com.example.sos_segundoplano.debug
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import com.example.sos_segundoplano.data.preprocessing.ProcessedSignalStoreProvider
 import com.example.sos_segundoplano.data.rules.RiskAssessmentStoreProvider
 import com.example.sos_segundoplano.data.trip.TripSessionStoreProvider
@@ -36,15 +37,32 @@ class DebugAccidentAlertReceiver : BroadcastReceiver() {
     }
 
     private fun triggerAccident() {
-        val session = activeSession()
+        Log.d(TAG, "event=debug_accident_trigger_received")
+        if (TripSessionStoreProvider.store.states.value !is TripSessionState.Active) {
+            Log.w(TAG, "event=debug_accident_trigger_skipped reason=no_active_trip")
+            return
+        }
+        val session = validationSessionOrNull() ?: activeSessionOrNull()
+        if (session == null) {
+            Log.w(TAG, "event=debug_accident_trigger_skipped reason=signal_pipeline_not_ready")
+            return
+        }
         val now = session.endNanos.coerceAtLeast(System.nanoTime())
         val assessment = debugRiskAssessment(session.sessionId, now)
-        TripSessionStoreProvider.store.setState(TripSessionState.Active)
+        // Submit directly first so the debug trigger remains deterministic even if it is fired
+        // immediately after monitoring starts and the SharedFlow collector is still subscribing.
+        FalsePositiveValidationCoordinatorProvider.coordinator.submitAssessmentForDebug(assessment)
+        // Keep the synthetic assessment visible in the risk store as well. If the collector also
+        // observes it, the coordinator's assessment identity guard safely ignores the duplicate.
         RiskAssessmentStoreProvider.store.publish(assessment)
+        Log.d(TAG, "event=debug_accident_trigger_submitted risk=high score=75 expected=countdown")
     }
 
     private fun resetAccident() {
-        val countdown = FalsePositiveValidationStoreProvider.store.states.value.activeCountdown ?: return
+        val countdown = FalsePositiveValidationStoreProvider.store.states.value.activeCountdown ?: run {
+            Log.w(TAG, "event=debug_accident_reset_skipped reason=no_active_countdown")
+            return
+        }
         FalsePositiveValidationCoordinatorProvider.coordinator.confirmSafe(
             sessionId = countdown.metadata.sessionId,
             assessmentId = countdown.metadata.assessmentId,
@@ -53,7 +71,15 @@ class DebugAccidentAlertReceiver : BroadcastReceiver() {
         )
     }
 
-    private fun activeSession(): DebugSession {
+    private fun validationSessionOrNull(): DebugSession? = when (val state = FalsePositiveValidationStoreProvider.store.states.value) {
+        is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.Monitoring ->
+            state.sessionId?.let { DebugSession(it, System.nanoTime()) }
+        is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.CountdownActive ->
+            DebugSession(state.assessment.sessionId, state.assessment.endNanos + ONE_SECOND_NANOS)
+        else -> null
+    }
+
+    private fun activeSessionOrNull(): DebugSession? {
         when (val riskState = RiskAssessmentStoreProvider.store.states.value) {
             is RiskAssessmentState.AssessmentReady -> return DebugSession(riskState.assessment.sessionId, riskState.assessment.endNanos + ONE_SECOND_NANOS)
             is RiskAssessmentState.Collecting -> return DebugSession(riskState.sessionId, System.nanoTime())
@@ -68,7 +94,7 @@ class DebugAccidentAlertReceiver : BroadcastReceiver() {
             is ProcessedSignalState.InsufficientData -> DebugSession(processedState.sessionId, System.nanoTime())
             ProcessedSignalState.Idle,
             ProcessedSignalState.Stopped,
-            is ProcessedSignalState.Error -> DebugSession(1L, System.nanoTime())
+            is ProcessedSignalState.Error -> null
         }
     }
 
@@ -127,6 +153,7 @@ class DebugAccidentAlertReceiver : BroadcastReceiver() {
     )
 
     private companion object {
+        const val TAG = "MotoSOS.DebugAccident"
         const val ACTION_TRIGGER_ACCIDENT = "com.example.sos_segundoplano.DEBUG_TRIGGER_ACCIDENT"
         const val ACTION_RESET_ACCIDENT = "com.example.sos_segundoplano.DEBUG_RESET_ACCIDENT"
         const val ONE_SECOND_NANOS = 1_000_000_000L

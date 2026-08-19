@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.sos_segundoplano.domain.auth.AccessDenied
+import com.example.sos_segundoplano.domain.auth.ActiveSessionExists
 import com.example.sos_segundoplano.domain.auth.AuthFailure
 import com.example.sos_segundoplano.domain.auth.AuthResult
 import com.example.sos_segundoplano.domain.auth.InactiveAccount
@@ -14,6 +15,9 @@ import com.example.sos_segundoplano.domain.auth.RateLimited
 import com.example.sos_segundoplano.domain.auth.RemoteLogoutFailed
 import com.example.sos_segundoplano.domain.auth.ServerFailure
 import com.example.sos_segundoplano.domain.auth.SessionExpired
+import com.example.sos_segundoplano.domain.auth.SessionRevoked
+import com.example.sos_segundoplano.domain.auth.SessionTakeoverChallenge
+import com.example.sos_segundoplano.domain.auth.SessionTakeoverFailure
 import com.example.sos_segundoplano.domain.auth.SessionState
 import com.example.sos_segundoplano.domain.auth.StorageFailure
 import com.example.sos_segundoplano.domain.auth.Timeout
@@ -58,7 +62,14 @@ enum class AuthUiMessage {
     StorageFailure,
     SessionExpired,
     StorageUnavailable,
-    WebComingSoon
+    WebComingSoon,
+    SessionRevoked,
+    TakeoverInvalid,
+    TakeoverExpired,
+    TakeoverAlreadyUsed,
+    ActiveTripTransferRequired,
+    DeviceNotAvailable,
+    ActiveTripNotAvailable
 }
 
 data class LoginUiState(
@@ -71,13 +82,15 @@ data class LoginUiState(
     val passwordError: PasswordValidationError? = null,
     val authMessage: AuthUiMessage? = null,
     val startupState: AuthEntryStatus = AuthEntryStatus.Restoring,
-    val authenticatedRole: UserRole? = null
+    val authenticatedRole: UserRole? = null,
+    val takeoverChallenge: SessionTakeoverChallenge? = null
 ) {
     override fun toString(): String =
         "LoginUiState(email=[REDACTED], password=[REDACTED], rememberMe=$rememberMe, " +
             "isPasswordVisible=$isPasswordVisible, isSubmitting=$isSubmitting, " +
             "emailError=$emailError, passwordError=$passwordError, authMessage=$authMessage, " +
-            "startupState=$startupState, authenticatedRole=$authenticatedRole)"
+            "startupState=$startupState, authenticatedRole=$authenticatedRole, " +
+            "takeoverChallenge=${takeoverChallenge?.toString()})"
 }
 
 class LoginViewModel(
@@ -162,7 +175,20 @@ class LoginViewModel(
             }
             when (result) {
                 is AuthResult.Success -> mutableUiState.update {
-                    it.copy(password = "", isPasswordVisible = false, isSubmitting = false, authMessage = null)
+                    it.copy(
+                        password = "",
+                        isPasswordVisible = false,
+                        isSubmitting = false,
+                        authMessage = null,
+                        takeoverChallenge = null
+                    )
+                }
+                is ActiveSessionExists -> mutableUiState.update {
+                    it.copy(
+                        isSubmitting = false,
+                        authMessage = null,
+                        takeoverChallenge = result.challenge
+                    )
                 }
                 is AuthFailure -> mutableUiState.update {
                     val clearPassword = result is AccessDenied || result === InactiveAccount
@@ -170,11 +196,57 @@ class LoginViewModel(
                         password = if (clearPassword) "" else it.password,
                         isPasswordVisible = if (clearPassword) false else it.isPasswordVisible,
                         isSubmitting = false,
-                        authMessage = result.toUiMessage()
+                        authMessage = result.toUiMessage(),
+                        takeoverChallenge = null
                     )
                 }
             }
         }
+    }
+
+    fun confirmTakeover() {
+        val challenge = mutableUiState.value.takeoverChallenge ?: return
+        if (mutableUiState.value.isSubmitting) return
+        mutableUiState.update { it.copy(isSubmitting = true, authMessage = null) }
+        viewModelScope.launch {
+            val result = try {
+                authRepository.takeover(challenge)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                mutableUiState.update {
+                    it.copy(isSubmitting = false, authMessage = AuthUiMessage.InvalidResponse)
+                }
+                return@launch
+            }
+            when (result) {
+                is AuthResult.Success -> mutableUiState.update {
+                    it.copy(
+                        password = "",
+                        isPasswordVisible = false,
+                        isSubmitting = false,
+                        authMessage = null,
+                        takeoverChallenge = null
+                    )
+                }
+                is AuthFailure -> {
+                    val keepChallenge = result is SessionTakeoverFailure &&
+                        result.errorCode.equals("active_trip_transfer_required", ignoreCase = true)
+                    mutableUiState.update {
+                        it.copy(
+                            isSubmitting = false,
+                            authMessage = result.toUiMessage(),
+                            takeoverChallenge = if (keepChallenge) challenge else null
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun cancelTakeover() {
+        if (mutableUiState.value.isSubmitting) return
+        mutableUiState.update { it.copy(takeoverChallenge = null, authMessage = null) }
     }
 
     fun dismissMessage() {
@@ -212,7 +284,8 @@ class LoginViewModel(
                 isSubmitting = if (terminalLoginState) false else current.isSubmitting,
                 authMessage = sessionState.entryMessage() ?: current.authMessage,
                 startupState = status,
-                authenticatedRole = sessionState.authenticatedRole()
+                authenticatedRole = sessionState.authenticatedRole(),
+                takeoverChallenge = if (terminalLoginState) null else current.takeoverChallenge
             )
         }
     }
@@ -279,5 +352,17 @@ private fun AuthFailure.toUiMessage(): AuthUiMessage = when (this) {
     is InvalidResponse -> AuthUiMessage.InvalidResponse
     is StorageFailure -> AuthUiMessage.StorageFailure
     SessionExpired -> AuthUiMessage.SessionExpired
+    SessionRevoked -> AuthUiMessage.SessionRevoked
+    is ActiveSessionExists -> AuthUiMessage.InvalidResponse
+    is SessionTakeoverFailure -> when (errorCode?.lowercase()) {
+        "takeover_token_invalid" -> AuthUiMessage.TakeoverInvalid
+        "takeover_token_expired" -> AuthUiMessage.TakeoverExpired
+        "takeover_token_already_used" -> AuthUiMessage.TakeoverAlreadyUsed
+        "active_trip_transfer_required" -> AuthUiMessage.ActiveTripTransferRequired
+        "device_not_available" -> AuthUiMessage.DeviceNotAvailable
+        "active_trip_not_available" -> AuthUiMessage.ActiveTripNotAvailable
+        "session_revoked" -> AuthUiMessage.SessionRevoked
+        else -> AuthUiMessage.InvalidResponse
+    }
     is RemoteLogoutFailed -> AuthUiMessage.InvalidResponse
 }

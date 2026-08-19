@@ -23,6 +23,7 @@ okhttp = "4.12.0"
 moshi = "1.15.2"
 googleServices = "4.5.0"
 firebaseBom = "34.16.0"
+maplibreAndroid = "13.5.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -63,6 +64,7 @@ okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver",
 moshi-kotlin = { group = "com.squareup.moshi", name = "moshi-kotlin", version.ref = "moshi" }
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
+maplibre-android = { module = "org.maplibre.gl:android-sdk", version.ref = "maplibreAndroid" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

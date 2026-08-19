@@ -9,6 +9,27 @@ interface OfflineEventSink {
     suspend fun enqueueIncident(incident: LocalIncident): OfflineQueueEnqueueResult
     suspend fun enqueueAlertRequest(request: AlertDispatchRequest): OfflineQueueEnqueueResult
     suspend fun enqueueIncidentBundle(incident: LocalIncident, request: AlertDispatchRequest): OfflineQueueEnqueueResult
+
+    /** Replaces the durable bundle payload after a real location is captured. */
+    suspend fun updateIncidentBundle(incident: LocalIncident, request: AlertDispatchRequest): OfflineQueueEnqueueResult =
+        OfflineQueueEnqueueResult.PersistenceFailed(OfflineSyncErrorCategory.NotConfigured, "offline_bundle_update_not_configured")
+
+    /** Durable bundle-level exclusion used by the online coordinator and the worker. */
+    suspend fun claimAutomaticSosBundle(bundleKey: String, workerId: String, nowMillis: Long): AutomaticSosBundleClaimResult =
+        AutomaticSosBundleClaimResult.NotRecoverable
+
+    suspend fun acknowledgeAutomaticSosBundle(
+        bundle: ClaimedAutomaticSosBundle,
+        receipt: AutomaticSosRemoteReceipt,
+        nowMillis: Long
+    ): OfflineQueueTransitionResult = OfflineQueueTransitionResult.StaleClaim
+
+    suspend fun releaseAutomaticSosBundle(
+        bundle: ClaimedAutomaticSosBundle,
+        permanent: Boolean,
+        code: String,
+        nowMillis: Long
+    ): OfflineQueueTransitionResult = OfflineQueueTransitionResult.StaleClaim
 }
 
 object NoOpOfflineEventSink : OfflineEventSink {

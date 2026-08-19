@@ -42,8 +42,8 @@ class TripStartFlowTest {
                     startTripUseCase = { currentState ->
                         startTripCallCount++
                         when (currentState) {
-                            TripSessionState.Idle -> TripSessionState.Active
-                            TripSessionState.Active -> TripSessionState.Active
+                            TripSessionState.Idle -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
+                            is TripSessionState.Active -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
                         }
                     },
                     locationPermissionStatusProvider = BackgroundLocationPermissionStatusProvider {

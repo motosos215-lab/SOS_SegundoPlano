@@ -31,7 +31,7 @@ class OfflineQueueWorkManagerInstrumentedTest {
         assertEquals(1, fake.count)
     }
 
-    @Test fun schedulerUsesAppendOrReplaceForDeferredSync() {
+    @Test fun schedulerReplacesLaterDeferredSyncWithEarlierRetry() {
         val fake = FakeEnqueuer()
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val scheduler = OfflineQueueWorkScheduler(context, fake)
@@ -39,7 +39,7 @@ class OfflineQueueWorkManagerInstrumentedTest {
         scheduler.scheduleDeferredSync(60_000L)
 
         assertEquals(OfflineQueueWorkScheduler.UNIQUE_WORK_NAME, fake.name)
-        assertEquals(ExistingWorkPolicy.APPEND_OR_REPLACE, fake.policy)
+        assertEquals(ExistingWorkPolicy.REPLACE, fake.policy)
         assertEquals(60_000L, fake.request?.workSpec?.initialDelay)
         assertEquals(NetworkType.CONNECTED, fake.request?.workSpec?.constraints?.requiredNetworkType)
         assertEquals(BackoffPolicy.EXPONENTIAL, fake.request?.workSpec?.backoffPolicy)

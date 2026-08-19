@@ -5,6 +5,7 @@ import com.example.sos_segundoplano.domain.auth.AuthResult
 import com.example.sos_segundoplano.domain.auth.AuthSessionIdentity
 import com.example.sos_segundoplano.domain.auth.AuthUser
 import com.example.sos_segundoplano.domain.auth.SessionState
+import com.example.sos_segundoplano.domain.auth.SessionTakeoverChallenge
 import com.example.sos_segundoplano.domain.auth.UserRole
 import com.example.sos_segundoplano.domain.repository.AuthRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,7 +27,16 @@ class PushAwareAuthRepositoryTest {
         assertEquals(2, syncCalls)
     }
 
-    @Test fun riderNeverSchedulesMonitorRegistration() = runBlocking {
+    @Test fun monitorTakeoverSchedulesNewFcmRegistration() = runBlocking {
+        val delegate = HookAuthRepository(UserRole.Monitor)
+        var syncCalls = 0
+        val repository = PushAwareAuthRepository(delegate, { syncCalls++ }, { _ -> })
+
+        assertTrue(repository.takeover(testChallenge()) is AuthResult.Success)
+        assertEquals(1, syncCalls)
+    }
+
+    @Test fun riderSchedulesFcmRegistrationForMonitorFeedback() = runBlocking {
         val delegate = HookAuthRepository(UserRole.Rider)
         var syncCalls = 0
         val repository = PushAwareAuthRepository(delegate, { syncCalls++ }, { _ -> })
@@ -34,7 +44,7 @@ class PushAwareAuthRepositoryTest {
         repository.login("rider@example.com", "password", true)
         repository.restoreSession()
 
-        assertEquals(0, syncCalls)
+        assertEquals(2, syncCalls)
         assertTrue(repository.observeSession().value is SessionState.Authenticated)
     }
 
@@ -105,6 +115,7 @@ private class HookAuthRepository(
 
     override suspend fun login(email: String, password: String, rememberMe: Boolean): AuthResult<AuthUser> =
         AuthResult.Success(user)
+    override suspend fun takeover(challenge: SessionTakeoverChallenge): AuthResult<AuthUser> = AuthResult.Success(user)
     override suspend fun restoreSession(): AuthResult<AuthUser?> = AuthResult.Success(user)
     override suspend fun ensureValidAccessToken() = AuthResult.Success(AccessToken("access-token"))
     override suspend fun refreshSession(): AuthResult<AuthUser> = AuthResult.Success(user)
@@ -115,3 +126,13 @@ private class HookAuthRepository(
     }
     override fun observeSession(): StateFlow<SessionState> = state
 }
+
+private fun testChallenge() = SessionTakeoverChallenge(
+    activeSession = null,
+    takeoverToken = "token",
+    takeoverExpiresAtUtc = null,
+    hasActiveTrip = false,
+    activeTrip = null,
+    accountEmail = "monitor@example.com",
+    rememberMe = true
+)

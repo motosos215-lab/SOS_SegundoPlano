@@ -83,6 +83,69 @@ object WearProtocolCodec {
     fun encodeWatchSnapshotRequest(request: WatchSnapshotRequest): ByteArray =
         encodeWatchSnapshotRequestMap(request).toByteArray()
 
+    /** Wear-side counterpart of the phone requests.  Keeping it here makes the wire
+     * contract single-sourced; neither application serializes ad-hoc DataMaps. */
+    fun decodeHandshakeRequest(bytes: ByteArray): WearDecodeResult<HandshakeRequest> =
+        decodeRequest(bytes, WearProtocol.PATH_HANDSHAKE) { requestId, timestamp ->
+            HandshakeRequest(requestId = requestId, timestampEpochMs = timestamp)
+        }
+
+    fun decodeWatchStatusRequest(bytes: ByteArray): WearDecodeResult<WatchStatusRequest> =
+        decodeRequest(bytes, WearProtocol.PATH_STATUS) { requestId, timestamp ->
+            WatchStatusRequest(requestId = requestId, timestampEpochMs = timestamp)
+        }
+
+    fun decodeWatchSnapshotRequest(bytes: ByteArray): WearDecodeResult<WatchSnapshotRequest> =
+        decodeRequest(bytes, WearProtocol.PATH_SNAPSHOT) { requestId, timestamp ->
+            WatchSnapshotRequest(requestId = requestId, timestampEpochMs = timestamp)
+        }
+
+    fun encodeHandshakeResponse(response: HandshakeResponse): ByteArray = DataMap().apply {
+        putEnvelope(WearProtocol.PATH_HANDSHAKE, response.protocolVersion, response.schemaVersion, response.requestId)
+        putString(Keys.RESULT, response.result.wireValue)
+        putString(Keys.APP_VERSION_NAME, response.appVersionName)
+        putLong(Keys.APP_VERSION_CODE, response.appVersionCode)
+        putString(Keys.MANUFACTURER, response.manufacturer)
+        putString(Keys.MODEL, response.model)
+        putInt(Keys.WEAR_OS_API_LEVEL, response.wearOsApiLevel)
+        putString(Keys.CAPABILITY, response.capability)
+        putLong(Keys.RESPONDED_AT_EPOCH_MS, response.respondedAtEpochMs)
+    }.toByteArray()
+
+    fun encodeWatchStatusResponse(response: WatchStatusResponse): ByteArray = DataMap().apply {
+        putEnvelope(WearProtocol.PATH_STATUS, response.protocolVersion, response.schemaVersion, response.requestId)
+        putString(Keys.RESULT, response.result.wireValue)
+        putLong(Keys.SEQUENCE, response.sequence)
+        putBoolean(Keys.BATTERY_AVAILABLE, response.batteryAvailable)
+        response.batteryPercent?.let { putInt(Keys.BATTERY_PERCENT, it) }
+        putBoolean(Keys.CHARGING_KNOWN, response.chargingKnown)
+        response.charging?.let { putBoolean(Keys.CHARGING, it) }
+        putBoolean(Keys.ACCELEROMETER_AVAILABLE, response.accelerometerAvailable)
+        putBoolean(Keys.GYROSCOPE_AVAILABLE, response.gyroscopeAvailable)
+        putBoolean(Keys.HEART_RATE_AVAILABLE, response.heartRateAvailable)
+        putString(Keys.HEART_RATE_PERMISSION, response.heartRatePermission.wireValue)
+        putLong(Keys.RESPONDED_AT_EPOCH_MS, response.respondedAtEpochMs)
+    }.toByteArray()
+
+    fun encodeWatchSnapshotResponse(response: WatchSnapshotResponse): ByteArray = DataMap().apply {
+        putEnvelope(WearProtocol.PATH_SNAPSHOT, response.protocolVersion, response.schemaVersion, response.requestId)
+        putString(Keys.RESULT, response.result.wireValue)
+        putLong(Keys.SEQUENCE, response.sequence)
+        putLong(Keys.CAPTURED_AT_EPOCH_MS, response.capturedAtEpochMs)
+        putBoolean(Keys.ACCELEROMETER_AVAILABLE, response.accelerometerAvailable)
+        response.accelerometerX?.let { putFloat(Keys.ACCELEROMETER_X, it) }
+        response.accelerometerY?.let { putFloat(Keys.ACCELEROMETER_Y, it) }
+        response.accelerometerZ?.let { putFloat(Keys.ACCELEROMETER_Z, it) }
+        putBoolean(Keys.GYROSCOPE_AVAILABLE, response.gyroscopeAvailable)
+        response.gyroscopeX?.let { putFloat(Keys.GYROSCOPE_X, it) }
+        response.gyroscopeY?.let { putFloat(Keys.GYROSCOPE_Y, it) }
+        response.gyroscopeZ?.let { putFloat(Keys.GYROSCOPE_Z, it) }
+        putBoolean(Keys.HEART_RATE_AVAILABLE, response.heartRateAvailable)
+        putString(Keys.HEART_RATE_PERMISSION, response.heartRatePermission.wireValue)
+        putBoolean(Keys.HEART_RATE_BPM_PRESENT, response.heartRateBpmPresent)
+        response.heartRateBpm?.let { putFloat(Keys.HEART_RATE_BPM, it) }
+    }.toByteArray()
+
     internal fun encodeHandshakeRequestMap(request: HandshakeRequest): DataMap =
         encodeRequest(WearProtocol.PATH_HANDSHAKE, request.requestId, request.timestampEpochMs)
 
@@ -98,6 +161,28 @@ object WearProtocolCodec {
         putInt(Keys.SCHEMA_VERSION, WearProtocol.SCHEMA_VERSION)
         putString(Keys.REQUEST_ID, requestId)
         putLong(Keys.TIMESTAMP_EPOCH_MS, timestampEpochMs)
+    }
+
+    private fun DataMap.putEnvelope(route: String, protocolVersion: Int, schemaVersion: Int, requestId: String) {
+        putString(Keys.ROUTE, route)
+        putInt(Keys.PROTOCOL_VERSION, protocolVersion)
+        putInt(Keys.SCHEMA_VERSION, schemaVersion)
+        putString(Keys.REQUEST_ID, requestId)
+    }
+
+    private fun <T> decodeRequest(
+        bytes: ByteArray,
+        expectedRoute: String,
+        create: (requestId: String, timestamp: Long) -> T
+    ): WearDecodeResult<T> {
+        val map = fromBytes(bytes) ?: return WearDecodeResult.Failure(fromBytesError(bytes))
+        val envelope = when (val frame = checkFrame(map, expectedRoute)) {
+            is Frame.Ready -> frame.envelope
+            is Frame.Failure -> return WearDecodeResult.Failure(frame.error)
+        }
+        val timestamp = map.getLong(Keys.TIMESTAMP_EPOCH_MS)
+        if (timestamp <= 0L) return WearDecodeResult.Failure(WearProtocolError.InvalidTimestamp(Keys.TIMESTAMP_EPOCH_MS, timestamp))
+        return WearDecodeResult.Success(create(envelope.requestId, timestamp))
     }
 
     // -------------------------------------------------------------- decoding (bytes)
