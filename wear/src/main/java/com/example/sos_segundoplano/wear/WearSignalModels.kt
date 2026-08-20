@@ -36,6 +36,8 @@ data class WearVectorSample(
 data class WearSignalSnapshot(
     val accelerometer: WearVectorSample? = null,
     val accelerometerStatus: WearSignalAvailability = WearSignalAvailability.Waiting,
+    val linearAcceleration: WearVectorSample? = null,
+    val linearAccelerationStatus: WearSignalAvailability = WearSignalAvailability.Waiting,
     val gyroscope: WearVectorSample? = null,
     val gyroscopeStatus: WearSignalAvailability = WearSignalAvailability.Waiting,
     val heartRateBpm: Double? = null,

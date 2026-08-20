@@ -2,10 +2,18 @@ package com.example.sos_segundoplano.data.validation
 
 import com.example.sos_segundoplano.data.rules.RiskAssessmentStore
 import com.example.sos_segundoplano.data.rules.RiskAssessmentStoreProvider
+import com.example.sos_segundoplano.data.trip.TripSessionStore
+import com.example.sos_segundoplano.data.trip.TripSessionStoreProvider
+import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.data.remote.incident.IncidentRemoteCreator
 import com.example.sos_segundoplano.data.remote.incident.NoOpIncidentRemoteCreator
+import com.example.sos_segundoplano.data.remote.incident.AutomaticSosAlertCreator
+import com.example.sos_segundoplano.data.remote.incident.NoOpAutomaticSosAlertCreator
 import com.example.sos_segundoplano.domain.offline.NoOpOfflineEventSink
 import com.example.sos_segundoplano.domain.offline.OfflineEventSink
+import com.example.sos_segundoplano.domain.offline.AutomaticSosBundleClaimResult
+import com.example.sos_segundoplano.domain.offline.AutomaticSosRemoteReceipt
+import com.example.sos_segundoplano.domain.offline.OfflineQueueTransitionResult
 import com.example.sos_segundoplano.domain.offline.isPersisted
 import com.example.sos_segundoplano.domain.rules.MovementContinuityState
 import com.example.sos_segundoplano.domain.rules.RiskAssessment
@@ -51,6 +59,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.UUID
 
 interface FalsePositiveValidationNotifier {
     fun onValidationStateChanged(state: FalsePositiveValidationState)
@@ -82,10 +91,13 @@ class FalsePositiveValidationCoordinator(
     private val nextMinorEventId: () -> Long = { IncidentStoreProvider.minorEventIds.incrementAndGet() },
     private val nextIncidentId: () -> Long = { IncidentStoreProvider.incidentIds.incrementAndGet() },
     private val nextDispatchRequestId: () -> Long = { IncidentStoreProvider.dispatchRequestIds.incrementAndGet() },
+    private val nowEpochMillis: () -> Long = System::currentTimeMillis,
     private var notifier: FalsePositiveValidationNotifier = NoOpFalsePositiveValidationNotifier,
     private var offlineEventSink: OfflineEventSink = NoOpOfflineEventSink,
     private var incidentRemoteCreator: IncidentRemoteCreator = NoOpIncidentRemoteCreator,
+    private var automaticSosAlertCreator: AutomaticSosAlertCreator = NoOpAutomaticSosAlertCreator,
     private var logger: FalsePositiveValidationLogger = NoOpFalsePositiveValidationLogger,
+    private val tripSessionStore: TripSessionStore = TripSessionStoreProvider.store,
     private val externalScope: CoroutineScope? = null
 ) {
     private var scope: CoroutineScope? = null
@@ -95,6 +107,7 @@ class FalsePositiveValidationCoordinator(
     private var started = false
     private var activeSessionId: Long? = null
     private var lastEndNanos: Long? = null
+    private var suppressEscalationUntilEndNanos: Long? = null
     private var ownsScope = false
     private var counters = ValidationCounters()
     private val mutex = Mutex()
@@ -120,6 +133,10 @@ class FalsePositiveValidationCoordinator(
 
     fun setIncidentRemoteCreator(nextCreator: IncidentRemoteCreator) {
         incidentRemoteCreator = nextCreator
+    }
+
+    fun setAutomaticSosAlertCreator(nextCreator: AutomaticSosAlertCreator) {
+        automaticSosAlertCreator = nextCreator
     }
 
     fun setLogger(nextLogger: FalsePositiveValidationLogger) {
@@ -157,6 +174,16 @@ class FalsePositiveValidationCoordinator(
 
     fun submitResponse(response: UserValidationResponse) {
         scope?.launch { handleResponse(response) }
+    }
+
+    /**
+     * Debug-only entry point used by the debug accident broadcast. It submits the synthetic
+     * assessment directly to the running validation coordinator so the test trigger cannot be
+     * lost during the small SharedFlow subscription race at monitoring startup.
+     * Production sensor assessments continue to arrive through RiskAssessmentStore.
+     */
+    fun submitAssessmentForDebug(assessment: RiskAssessment) {
+        scope?.launch { handleAssessment(assessment, ignoreSuppression = true) }
     }
 
     fun stop() {
@@ -233,7 +260,11 @@ class FalsePositiveValidationCoordinator(
         ownsScope = false
     }
 
-    private suspend fun handleAssessment(assessment: RiskAssessment, allowEscalation: Boolean = true) {
+    private suspend fun handleAssessment(
+        assessment: RiskAssessment,
+        allowEscalation: Boolean = true,
+        ignoreSuppression: Boolean = false
+    ) {
         val offlineEvents: List<PendingOfflineEvent> = mutex.withLock {
             if (!started) return@withLock emptyList()
             if (activeSessionId == null) activeSessionId = assessment.sessionId
@@ -256,10 +287,30 @@ class FalsePositiveValidationCoordinator(
             if (terminalAssessments.contains(key)) return@withLock emptyList()
             val currentCountdown = validationStore.states.value.activeCountdown
             if (currentCountdown != null) return@withLock emptyList()
+            if (!ignoreSuppression) {
+                suppressEscalationUntilEndNanos?.let { suppressionEnd ->
+                    if (assessment.endNanos <= suppressionEnd) {
+                        processedAssessments.add(key)
+                        return@withLock emptyList()
+                    }
+                    suppressEscalationUntilEndNanos = null
+                }
+            }
 
             val evidence = assessment.validationEvidence()
             if (allowEscalation && isCritical(assessment, explicitHelp = false)) {
+                AutoIncidentDiagnostics.validationCandidate("critical_immediate")
                 return@withLock createIncidentLocked(assessment, IncidentCause.CriticalPhysicalEvent, ValidationDecisionReason.CriticalPhysicalEvent, ValidationOrigin.System, immediate = true).toOfflineEvents(key)
+            }
+            // The pilot ML contract is an OR with the hard-rule path. When ML crosses its model
+            // threshold it must reach user confirmation before bump/braking suppressors can discard
+            // the same window. It still only opens the countdown; it never sends immediately.
+            if (allowEscalation && assessment.mlDetected) {
+                AutoIncidentDiagnostics.validationCandidate("ml_countdown")
+                processedAssessments.add(key)
+                publish(FalsePositiveValidationState.CandidateDetected(assessment, metadata(assessment, ValidationDecisionReason.CandidatePhysicalRisk, ValidationOrigin.System), evidence))
+                startCountdownLocked(assessment, evidence)
+                return@withLock emptyList()
             }
             if (isIsolatedBump(assessment, evidence)) {
                 return@withLock listOf(recordMinorEventLocked(assessment, evidence, key))
@@ -269,7 +320,8 @@ class FalsePositiveValidationCoordinator(
                 publish(FalsePositiveValidationState.SuppressedFalsePositive(assessment, metadata(assessment, ValidationDecisionReason.HarshBrakingWithContinuedMovement, ValidationOrigin.System), evidence))
                 return@withLock emptyList()
             }
-            if (allowEscalation && requiresCountdown(assessment, evidence)) {
+            if (allowEscalation && requiresCountdown(assessment)) {
+                AutoIncidentDiagnostics.validationCandidate("countdown")
                 processedAssessments.add(key)
                 publish(FalsePositiveValidationState.CandidateDetected(assessment, metadata(assessment, ValidationDecisionReason.CandidatePhysicalRisk, ValidationOrigin.System), evidence))
                 startCountdownLocked(assessment, evidence)
@@ -300,6 +352,7 @@ class FalsePositiveValidationCoordinator(
                 UserValidationAction.ConfirmSafe -> {
                     terminalAssessments.add(assessment.identifier())
                     processedAssessments.add(assessment.identifier())
+                    suppressEscalationUntilEndNanos = assessment.endNanos + config.postSafeSuppressionNanos
                     cancelCountdownLocked()
                     val safe = FalsePositiveValidationState.SafeConfirmed(metadata(assessment, ValidationDecisionReason.UserConfirmedSafe, response.source.toOrigin()), response.responseId)
                     publish(safe)
@@ -381,6 +434,7 @@ class FalsePositiveValidationCoordinator(
         val key = assessment.identifier()
         if (terminalAssessments.contains(key) || pendingPersistenceAssessments.contains(key)) return null
         cancelCountdownLocked()
+        AutoIncidentDiagnostics.incidentStarted(cause)
         val createdAt = now()
         val incident = LocalIncident(
             incidentId = nextIncidentId(),
@@ -395,7 +449,10 @@ class FalsePositiveValidationCoordinator(
             relevantOutcomes = assessment.relevantOutcomeSummaries(),
             ruleSetVersion = assessment.ruleSetVersion,
             validationPolicyVersion = config.policyVersion,
-            gpsQuality = assessment.gpsQuality.status
+            gpsQuality = assessment.gpsQuality.status,
+            clientIncidentId = UUID.randomUUID().toString(),
+            detectedAtEpochMillis = nowEpochMillis(),
+            tripSessionKey = (tripSessionStore.states.value as? TripSessionState.Active)?.tripSessionKey
         )
         val request = AlertDispatchRequest(
             requestId = nextDispatchRequestId(),
@@ -407,7 +464,8 @@ class FalsePositiveValidationCoordinator(
             createdAtElapsedRealtimeNanos = createdAt,
             score = assessment.score,
             confidence = assessment.confidence,
-            payload = AlertPayloadSummary(assessment.sessionId, assessment.assessmentId, incident.incidentId, assessment.score, assessment.riskLevel, cause, config.policyVersion)
+            payload = AlertPayloadSummary(assessment.sessionId, assessment.assessmentId, incident.incidentId, assessment.score, assessment.riskLevel, cause, config.policyVersion),
+            clientAlertRequestId = UUID.randomUUID().toString()
         )
         return IncidentBundle(key, incident, request, metadata(assessment, reason, origin, createdAt), immediate)
     }
@@ -418,7 +476,8 @@ class FalsePositiveValidationCoordinator(
                 is PendingOfflineEvent.Minor -> {
                     val result = try {
                         offlineEventSink.enqueueMinorEvent(event.event)
-                    } catch (_: IllegalStateException) {
+                    } catch (failure: IllegalStateException) {
+                        AutoIncidentDiagnostics.storageException("coordinator_minor_enqueue", failure)
                         com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult.PersistenceFailed(com.example.sos_segundoplano.domain.offline.OfflineSyncErrorCategory.Serialization, "offline_queue_storage_unavailable")
                     }
                     if (result.isPersisted) mutex.withLock {
@@ -433,33 +492,268 @@ class FalsePositiveValidationCoordinator(
                     }
                 }
                 is PendingOfflineEvent.IncidentBundleEvent -> {
+                    // Emergency intent is made durable BEFORE GPS/remote-trip resolution. If the
+                    // process dies or connectivity changes while context is being completed, the
+                    // dedicated automatic SOS worker can recover the same client IDs from Room.
+                    val eventPreparedForPersistence = event
+                    AutoIncidentDiagnostics.localPersistenceStarted()
                     val result = try {
-                        offlineEventSink.enqueueIncidentBundle(event.incident, event.request)
-                    } catch (_: IllegalStateException) {
+                        offlineEventSink.enqueueIncidentBundle(eventPreparedForPersistence.incident, eventPreparedForPersistence.request)
+                    } catch (failure: IllegalStateException) {
+                        AutoIncidentDiagnostics.storageException("coordinator_incident_bundle_enqueue", failure)
                         com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult.PersistenceFailed(com.example.sos_segundoplano.domain.offline.OfflineSyncErrorCategory.Serialization, "offline_queue_storage_unavailable")
                     }
+                    AutoIncidentDiagnostics.localPersistenceResult(result)
                     if (result.isPersisted) {
-                        val incident = createRemoteIncidentOnce(event)
-                        mutex.withLock {
-                            incidentStore.add(incident)
-                            dispatchRequestStore.add(event.request)
-                            pendingPersistenceAssessments.remove(event.key)
-                            persistenceDecisions.remove(event.key)
-                            cancelPersistenceRetry(event.key)
-                            processedAssessments.add(event.key)
-                            terminalAssessments.add(event.key)
-                            if (event.immediate) {
-                                publish(FalsePositiveValidationState.ImmediateAlertRequested(incident, event.request, event.metadata))
-                            } else {
-                                publish(FalsePositiveValidationState.IncidentGenerated(incident, event.request, event.metadata))
-                            }
-                        }
+                        processPersistedIncidentBundle(eventPreparedForPersistence)
                     } else if (result is com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult.PersistenceFailed) {
-                        publishPersistenceError(event.key, event.metadata)
+                        publishIncidentPersistenceFailure(eventPreparedForPersistence.key, eventPreparedForPersistence.metadata)
                     }
                 }
             }
         }
+    }
+
+    private suspend fun processPersistedIncidentBundle(event: PendingOfflineEvent.IncidentBundleEvent) {
+        val automatic = event.incident.isAutomaticSosCause() && automaticSosAlertCreator !== NoOpAutomaticSosAlertCreator
+        AutoIncidentDiagnostics.remoteCreateStarted()
+
+        val tripPreparedEvent: PendingOfflineEvent.IncidentBundleEvent
+        val incident: LocalIncident
+
+        if (automatic) {
+            // Claim the durable bundle BEFORE resolving trip/GPS context. enqueueIncidentBundle()
+            // schedules a WorkManager safety fallback, so claiming first prevents the foreground
+            // coordinator and the recovery worker from racing each other for the same SOS.
+            val bundleKey = event.incident.clientIncidentId
+            val claim = bundleKey?.let {
+                offlineEventSink.claimAutomaticSosBundle(it, "coordinator-${event.key.assessmentId}", nowEpochMillis())
+            } ?: AutomaticSosBundleClaimResult.NotRecoverable
+            val acquired = (claim as? AutomaticSosBundleClaimResult.Acquired)?.bundle
+
+            if (acquired == null) {
+                when (claim) {
+                    AutomaticSosBundleClaimResult.BusyOrUnavailable -> {
+                        // Another durable owner (normally AutomaticSosSyncWorker) already has the
+                        // exact same bundle. Do not start the old in-memory retry loop: that loop
+                        // could end in a false "Registro local no completado" while the worker was
+                        // actually sending the SOS.
+                        AutoIncidentDiagnostics.bundleClaim("busy_worker_owns_bundle")
+                        mutex.withLock {
+                            pendingPersistenceAssessments.remove(event.key)
+                            persistenceDecisions.remove(event.key)
+                            cancelPersistenceRetry(event.key)
+                            processedAssessments.add(event.key)
+                            publish(FalsePositiveValidationState.IncidentDeliveryRetrying(event.metadata, 1, MAX_PERSISTENCE_RETRY_ATTEMPTS))
+                        }
+                        return
+                    }
+
+                    else -> {
+                        AutoIncidentDiagnostics.bundleClaim("invalid")
+                        publishRemoteFailureForRetry(
+                            event,
+                            event.incident.copy(
+                                remoteCreationStatus = IncidentRemoteCreationStatus.InvalidResponse("offline_bundle_claim_unavailable")
+                            )
+                        )
+                        return
+                    }
+                }
+            }
+
+            AutoIncidentDiagnostics.bundleClaim("acquired")
+            tripPreparedEvent = prepareDurableAutomaticSosContext(event, acquired) ?: return
+
+            val submitted = automaticSosAlertCreator.createAutomaticSosAlert(
+                tripPreparedEvent.incident.copy(remoteCreationStatus = IncidentRemoteCreationStatus.Pending),
+                tripPreparedEvent.request
+            )
+            val status = submitted.remoteCreationStatus
+            val receipt = if (status is IncidentRemoteCreationStatus.Success) {
+                submitted.remoteIncidentId?.takeIf { it.isNotBlank() }?.let { remoteIncidentId ->
+                    submitted.remoteAlertDispatchId?.takeIf { it.isNotBlank() }?.let { remoteAlertDispatchId ->
+                        AutomaticSosRemoteReceipt(remoteIncidentId, remoteAlertDispatchId)
+                    }
+                }
+            } else null
+
+            if (status !is IncidentRemoteCreationStatus.Success) {
+                AutoIncidentDiagnostics.remoteCreateResult(status)
+                val permanent = status.isPermanentAutomaticSosFailure()
+                val released = offlineEventSink.releaseAutomaticSosBundle(
+                    acquired,
+                    permanent = permanent,
+                    code = "remote_submission_failed",
+                    nowMillis = nowEpochMillis()
+                )
+                AutoIncidentDiagnostics.bundleRelease(
+                    if (released == OfflineQueueTransitionResult.Applied) {
+                        if (permanent) "permanent" else "retry"
+                    } else {
+                        "failure"
+                    }
+                )
+                publishRemoteFailureForRetry(tripPreparedEvent, submitted)
+                return
+            }
+
+            if (receipt == null || offlineEventSink.acknowledgeAutomaticSosBundle(acquired, receipt, nowEpochMillis()) != OfflineQueueTransitionResult.Applied) {
+                if (receipt == null) {
+                    val released = offlineEventSink.releaseAutomaticSosBundle(
+                        acquired,
+                        permanent = false,
+                        code = "receipt_missing",
+                        nowMillis = nowEpochMillis()
+                    )
+                    AutoIncidentDiagnostics.bundleRelease(if (released == OfflineQueueTransitionResult.Applied) "retry" else "failure")
+                }
+                publishRemoteFailureForRetry(
+                    tripPreparedEvent,
+                    submitted.copy(
+                        remoteCreationStatus = IncidentRemoteCreationStatus.InvalidResponse("offline_receipt_persistence_failed")
+                    )
+                )
+                return
+            }
+            incident = submitted
+        } else {
+            tripPreparedEvent = event
+            incident = createRemoteIncidentOnce(tripPreparedEvent)
+        }
+
+        AutoIncidentDiagnostics.remoteCreateResult(incident.remoteCreationStatus)
+        if (incident.remoteCreationStatus !is IncidentRemoteCreationStatus.Success && automatic) {
+            publishRemoteFailureForRetry(tripPreparedEvent.copy(incident = incident), incident)
+            return
+        }
+        mutex.withLock {
+            incidentStore.add(incident)
+            dispatchRequestStore.add(tripPreparedEvent.request)
+            pendingPersistenceAssessments.remove(tripPreparedEvent.key)
+            persistenceDecisions.remove(tripPreparedEvent.key)
+            cancelPersistenceRetry(tripPreparedEvent.key)
+            processedAssessments.add(tripPreparedEvent.key)
+            terminalAssessments.add(tripPreparedEvent.key)
+            if (incident.remoteCreationStatus is IncidentRemoteCreationStatus.Success) {
+                if (tripPreparedEvent.immediate) {
+                    publish(FalsePositiveValidationState.ImmediateAlertRequested(incident, tripPreparedEvent.request, tripPreparedEvent.metadata))
+                } else {
+                    publish(FalsePositiveValidationState.IncidentGenerated(incident, tripPreparedEvent.request, tripPreparedEvent.metadata))
+                }
+                AutoIncidentDiagnostics.terminalState("incident_generated")
+            } else {
+                publish(FalsePositiveValidationState.Error(tripPreparedEvent.metadata, "RemoteIncidentCreationFailed"))
+                AutoIncidentDiagnostics.terminalState("error", "remote_incident_creation_failed")
+            }
+        }
+    }
+
+    private suspend fun publishRemoteFailureForRetry(
+        event: PendingOfflineEvent.IncidentBundleEvent,
+        incident: LocalIncident
+    ) {
+        val permanent = incident.remoteCreationStatus.isPermanentAutomaticSosFailure()
+        mutex.withLock {
+            pendingPersistenceAssessments.remove(event.key)
+            if (permanent) {
+                persistenceDecisions.remove(event.key)
+                processedAssessments.add(event.key)
+                terminalAssessments.add(event.key)
+            } else {
+                persistenceDecisions.put(event.key, event.copy(incident = incident))
+            }
+        }
+        if (permanent) {
+            publish(FalsePositiveValidationState.Error(event.metadata, "RemoteIncidentCreationFailed"))
+            AutoIncidentDiagnostics.terminalState("error", "remote_incident_creation_permanent")
+            return
+        }
+
+        val attempt = schedulePersistenceRetry(event.key)
+        mutex.withLock {
+            if (attempt != null) {
+                publish(FalsePositiveValidationState.IncidentDeliveryRetrying(event.metadata, attempt, MAX_PERSISTENCE_RETRY_ATTEMPTS))
+                AutoIncidentDiagnostics.retryScheduled("remote_delivery_attempt_$attempt")
+            } else {
+                // The exact SOS bundle is already durable in Room and the dedicated WorkManager
+                // recovery path owns further retries. Do not turn a transient remote problem into
+                // the misleading terminal UI state "Registro local no completado".
+                pendingPersistenceAssessments.remove(event.key)
+                persistenceDecisions.remove(event.key)
+                processedAssessments.add(event.key)
+                publish(FalsePositiveValidationState.IncidentDeliveryRetrying(event.metadata, MAX_PERSISTENCE_RETRY_ATTEMPTS, MAX_PERSISTENCE_RETRY_ATTEMPTS))
+                AutoIncidentDiagnostics.retryScheduled("durable_worker_takeover")
+            }
+        }
+    }
+
+    private suspend fun prepareDurableAutomaticSosContext(
+        event: PendingOfflineEvent.IncidentBundleEvent,
+        acquired: com.example.sos_segundoplano.domain.offline.ClaimedAutomaticSosBundle
+    ): PendingOfflineEvent.IncidentBundleEvent? {
+        var incident = event.incident.copy(remoteCreationStatus = IncidentRemoteCreationStatus.Pending)
+
+        if (incident.remoteTripId.isNullOrBlank()) {
+            incident = automaticSosAlertCreator.resolveRemoteTrip(incident)
+            if (incident.remoteCreationStatus !is IncidentRemoteCreationStatus.Pending) {
+                releaseClaimAndPublishRetry(event.copy(incident = incident), incident, acquired, "remote_trip_context_unavailable")
+                return null
+            }
+        }
+
+        if (!incident.hasValidAutomaticSosLocation()) {
+            incident = automaticSosAlertCreator.captureLocation(incident)
+            if (incident.remoteCreationStatus !is IncidentRemoteCreationStatus.Pending) {
+                releaseClaimAndPublishRetry(event.copy(incident = incident), incident, acquired, "location_context_unavailable")
+                return null
+            }
+        }
+
+        val prepared = event.copy(incident = incident)
+        val updateResult = try {
+            offlineEventSink.updateIncidentBundle(prepared.incident, prepared.request)
+        } catch (failure: IllegalStateException) {
+            AutoIncidentDiagnostics.storageException("coordinator_incident_bundle_context_update", failure)
+            com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult.PersistenceFailed(
+                com.example.sos_segundoplano.domain.offline.OfflineSyncErrorCategory.Serialization,
+                "offline_queue_storage_unavailable"
+            )
+        }
+        if (!updateResult.isPersisted) {
+            val failed = prepared.incident.copy(
+                remoteCreationStatus = IncidentRemoteCreationStatus.InvalidResponse("durable_context_update_failed")
+            )
+            releaseClaimAndPublishRetry(prepared.copy(incident = failed), failed, acquired, "durable_context_update_failed")
+            return null
+        }
+
+        mutex.withLock { persistenceDecisions.put(event.key, prepared) }
+        return prepared
+    }
+
+    private suspend fun releaseClaimAndPublishRetry(
+        event: PendingOfflineEvent.IncidentBundleEvent,
+        incident: LocalIncident,
+        acquired: com.example.sos_segundoplano.domain.offline.ClaimedAutomaticSosBundle,
+        code: String
+    ) {
+        AutoIncidentDiagnostics.remoteCreateResult(incident.remoteCreationStatus)
+        val permanent = incident.remoteCreationStatus.isPermanentAutomaticSosFailure()
+        val released = offlineEventSink.releaseAutomaticSosBundle(
+            acquired,
+            permanent = permanent,
+            code = code,
+            nowMillis = nowEpochMillis()
+        )
+        AutoIncidentDiagnostics.bundleRelease(
+            if (released == OfflineQueueTransitionResult.Applied) {
+                if (permanent) "permanent" else "retry"
+            } else {
+                "failure"
+            }
+        )
+        publishRemoteFailureForRetry(event, incident)
     }
 
     private suspend fun createRemoteIncidentOnce(event: PendingOfflineEvent.IncidentBundleEvent): LocalIncident {
@@ -491,21 +785,59 @@ class FalsePositiveValidationCoordinator(
         listOf(pending)
     }.orEmpty()
 
+    private fun LocalIncident.hasValidAutomaticSosLocation(): Boolean =
+        latitude != null && longitude != null && latitude.isFinite() && longitude.isFinite() &&
+            latitude in -90.0..90.0 && longitude in -180.0..180.0 && !(latitude == 0.0 && longitude == 0.0)
+
+    private fun LocalIncident.isAutomaticSosCause(): Boolean = when (cause) {
+        IncidentCause.Timeout,
+        IncidentCause.UserRequestedHelp,
+        IncidentCause.CriticalPhysicalEvent -> true
+        IncidentCause.ManualSos -> false
+    }
+
+    private fun IncidentRemoteCreationStatus.isPermanentAutomaticSosFailure(): Boolean = when (this) {
+        // During an active local trip, remote-trip reconciliation or GPS may become available a
+        // moment later. Treat missing runtime context as bounded-retryable, not terminal.
+        is IncidentRemoteCreationStatus.MissingRequiredData -> false
+        is IncidentRemoteCreationStatus.HttpError -> statusCode in 400..499 && statusCode !in setOf(401, 408, 429)
+        else -> false
+    }
+
     private suspend fun publishPersistenceError(key: AssessmentIdentifier, metadata: ValidationMetadata) {
         mutex.withLock {
             pendingPersistenceAssessments.remove(key)
             publish(FalsePositiveValidationState.Error(metadata, "OfflinePersistenceFailed"))
+            AutoIncidentDiagnostics.terminalState("error", "offline_persistence_failed")
         }
         schedulePersistenceRetry(key)
     }
 
-    private fun schedulePersistenceRetry(key: AssessmentIdentifier) {
-        val currentScope = scope ?: return
-        if (persistenceRetryJobs.containsKey(key)) return
+    /**
+     * Automatic incidents remain in an emergency/retry state while the bounded local persistence
+     * retry is active. The UI must not present a terminal failure that contradicts the durable retry.
+     */
+    private suspend fun publishIncidentPersistenceFailure(key: AssessmentIdentifier, metadata: ValidationMetadata) {
+        val attempt = schedulePersistenceRetry(key)
+        mutex.withLock {
+            pendingPersistenceAssessments.remove(key)
+            if (attempt != null) {
+                publish(FalsePositiveValidationState.IncidentDeliveryRetrying(metadata, attempt, MAX_PERSISTENCE_RETRY_ATTEMPTS))
+                AutoIncidentDiagnostics.retryScheduled("local_persistence_attempt_$attempt")
+            } else {
+                publish(FalsePositiveValidationState.Error(metadata, "OfflinePersistenceFailed"))
+                AutoIncidentDiagnostics.terminalState("error", "offline_persistence_failed")
+            }
+        }
+    }
+
+    private fun schedulePersistenceRetry(key: AssessmentIdentifier): Int? {
+        val currentScope = scope ?: return null
+        if (persistenceRetryJobs.containsKey(key)) return persistenceRetryAttempts[key]
         val attempt = (persistenceRetryAttempts[key] ?: 0) + 1
         persistenceRetryAttempts[key] = attempt
         trimPersistenceRetryJobs()
-        if (attempt > MAX_PERSISTENCE_RETRY_ATTEMPTS) return
+        if (attempt > MAX_PERSISTENCE_RETRY_ATTEMPTS) return null
         persistenceRetryJobs[key] = currentScope.launch {
             delay(PERSISTENCE_RETRY_BACKOFF_MILLIS * attempt)
             val pending = mutex.withLock {
@@ -517,6 +849,7 @@ class FalsePositiveValidationCoordinator(
             }
             enqueueOffline(listOf(pending))
         }
+        return attempt
     }
 
     private suspend fun cancelPersistenceRetries() {
@@ -557,7 +890,8 @@ class FalsePositiveValidationCoordinator(
         val immobility = assessment.outcome(RuleId.Immobility)
         val orientation = assessment.outcome(RuleId.OrientationChange)
         return impact.isTriggered() &&
-            (impact?.severity ?: 0.0) >= config.bumpMinimumImpactSeverity &&
+            impact?.endNanos == assessment.endNanos &&
+            (impact.severity ?: 0.0) >= config.bumpMinimumImpactSeverity &&
             fall.isNotTriggered() &&
             immobility.isNotTriggered() &&
             (!orientation.isTriggered() || (orientation?.severity ?: 0.0) < config.criticalOrientationSeverity) &&
@@ -580,13 +914,64 @@ class FalsePositiveValidationCoordinator(
             assessment.confidence >= config.minimumConfidence
     }
 
-    private fun requiresCountdown(assessment: RiskAssessment, evidence: ValidationEvidence): Boolean {
+    private fun requiresCountdown(assessment: RiskAssessment): Boolean {
+        // Pilot ML is an additional support signal only. It can open the same user-confirmation
+        // countdown, but it never bypasses confirmation and never creates an immediate critical SOS.
+        // If the model is unavailable, mlDetected remains false and the existing explainable rules
+        // continue unchanged.
+        if (assessment.mlDetected) return true
+
         val score = assessment.score ?: return false
-        if (score < config.minimumValidationScore || assessment.confidence < config.minimumConfidence) return false
+        if (score < config.correlatedCandidateMinimumScore ||
+            assessment.confidence < config.correlatedCandidateMinimumConfidence
+        ) return false
+
+        // A correlated fall is already a multi-stage physical pattern (free-fall/impact and,
+        // when available, orientation support). It is enough to ask the Rider for confirmation.
         val fall = assessment.outcome(RuleId.Fall)
+        if (fall.isTriggered()) return true
+
         val impact = assessment.outcome(RuleId.Impact)
+        if (!impact.isTriggered()) return false
+        val impactSeverity = impact?.severity ?: 0.0
+
+        // The previous tuning became too strict here: a real impact followed by sustained
+        // immobility could score in the low/mid 30s and never reach countdown unless a third rule
+        // also triggered. Impact + post-event immobility is already two independent pieces of
+        // evidence, so it should start the false-positive countdown. Immobility by itself still
+        // contributes zero risk in RuleEngine and can never enter this branch.
         val immobility = assessment.outcome(RuleId.Immobility)
-        return fall.isTriggered() || (impact.isTriggered() && immobility.isTriggered() && (immobility?.severity ?: 0.0) >= config.immobilityCountdownMinimumSeverity)
+        val immobilitySeverity = immobility?.severity ?: 0.0
+        if (immobility.isTriggered() &&
+            impactSeverity >= config.impactImmobilityMinimumImpactSeverity &&
+            immobilitySeverity >= config.immobilityCountdownMinimumSeverity
+        ) return true
+
+        // An impact plus a meaningful orientation change is another coherent crash/fall pattern.
+        // This lets the countdown appear before the three-second immobility window when the device
+        // actually rotates sharply during the event.
+        val orientation = assessment.outcome(RuleId.OrientationChange)
+        val orientationSeverity = orientation?.severity ?: 0.0
+        if (orientation.isTriggered() &&
+            impactSeverity >= config.impactImmobilityMinimumImpactSeverity &&
+            orientationSeverity >= config.secondarySupportMinimumSeverity
+        ) return true
+
+        // Impact plus harsh braking is relevant only when movement is no longer clearly
+        // continuing. Ordinary hard braking while the motorcycle keeps moving remains suppressed.
+        val braking = assessment.outcome(RuleId.HarshBraking)
+        val brakingSeverity = braking?.severity ?: 0.0
+        if (braking.isTriggered() &&
+            impactSeverity >= config.impactImmobilityMinimumImpactSeverity &&
+            brakingSeverity >= config.secondarySupportMinimumSeverity &&
+            assessment.movementContinuity != MovementContinuityState.Continuing
+        ) return true
+
+        // A very strong impact with stopped/intermittent movement should not be ignored merely
+        // because the immobility duration has not reached its full threshold yet. This only opens
+        // the countdown; it does not immediately send an SOS.
+        return impactSeverity >= config.impactImmobilityDirectImpactSeverity &&
+            assessment.movementContinuity != MovementContinuityState.Continuing
     }
 
     private fun isCritical(assessment: RiskAssessment, explicitHelp: Boolean): Boolean {
@@ -626,6 +1011,7 @@ class FalsePositiveValidationCoordinator(
         remoteIncidentAttempts.clear()
         counters = ValidationCounters()
         lastEndNanos = null
+        suppressEscalationUntilEndNanos = null
         if (clearStores) {
             minorEventStore.clear()
             incidentStore.clear()
@@ -752,6 +1138,10 @@ object FalsePositiveValidationCoordinatorProvider {
 
     fun setIncidentRemoteCreator(creator: IncidentRemoteCreator) {
         coordinator.setIncidentRemoteCreator(creator)
+    }
+
+    fun setAutomaticSosAlertCreator(creator: AutomaticSosAlertCreator) {
+        coordinator.setAutomaticSosAlertCreator(creator)
     }
 
     fun setLogger(logger: FalsePositiveValidationLogger) {

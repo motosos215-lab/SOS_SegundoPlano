@@ -25,6 +25,7 @@ import com.example.sos_segundoplano.domain.monitor.NotificationDeliveryAttemptId
 import com.example.sos_segundoplano.features.monitor.MonitorAlertHistoryUiState
 import com.example.sos_segundoplano.features.monitor.MonitorAlertsUiState
 import com.example.sos_segundoplano.features.monitor.MonitorHomeScreen
+import com.example.sos_segundoplano.features.monitor.MonitorProfileUiData
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
 import org.junit.Rule
 import org.junit.Test
@@ -41,7 +42,7 @@ class MonitorAlertsScreenTest {
             onLogout = {}
         ) } }
         composeRule.onNodeWithTag("monitor_home_screen").assertIsDisplayed()
-        composeRule.onNodeWithTag("monitor_ready_icon").assertIsDisplayed()
+        composeRule.onNodeWithText("Resumen de alertas").assertIsDisplayed()
     }
 
     @Test fun pendingAlertShowsLoadingWithoutFakeMap() {
@@ -104,7 +105,7 @@ class MonitorAlertsScreenTest {
             }
         }
         composeRule.onNodeWithText("Actualizar").assertIsDisplayed()
-        composeRule.onNodeWithText("Historial").performClick()
+        composeRule.onNodeWithTag("monitor_bottom_incidents").performClick()
         composeRule.onNodeWithText("Pendiente").assertIsDisplayed()
         composeRule.onAllNodesWithText("Sin respuesta").assertCountEquals(0)
         composeRule.onNodeWithText("Rechazada").assertIsDisplayed()
@@ -143,14 +144,13 @@ class MonitorAlertsScreenTest {
             }
         }
 
-        composeRule.onNodeWithTag("monitor_history_section").performClick()
+        composeRule.onNodeWithTag("monitor_bottom_incidents").performClick()
         composeRule.onNodeWithTag("monitor_history_alert_attempt-one").performClick()
         org.junit.Assert.assertEquals("attempt-one", opened)
         composeRule.onNodeWithTag("monitor_alert_detail").assertIsDisplayed()
-        composeRule.onNodeWithTag("monitor_alert_back_to_history").performClick()
+        composeRule.onNodeWithTag("monitor_alert_back_to_incidents").performClick()
         composeRule.onNodeWithText("Pendiente").assertIsDisplayed()
         composeRule.onNodeWithText("Rechazada").assertIsDisplayed()
-        composeRule.onNodeWithText("Alerta actual").assertIsDisplayed()
     }
 
     @Test fun emptyHistoryRemainsAvailableAndRefreshes() {
@@ -169,8 +169,8 @@ class MonitorAlertsScreenTest {
             }
         }
 
-        composeRule.onNodeWithTag("monitor_history_section").performClick()
-        composeRule.onNodeWithText("No hay alertas en el historial.").assertIsDisplayed()
+        composeRule.onNodeWithTag("monitor_bottom_incidents").performClick()
+        composeRule.onNodeWithText("No hay alertas registradas.").assertIsDisplayed()
         composeRule.onNodeWithText("Actualizar").performClick()
         org.junit.Assert.assertEquals(1, refreshes)
     }
@@ -191,13 +191,12 @@ class MonitorAlertsScreenTest {
             }
         }
 
-        composeRule.onNodeWithTag("monitor_history_section").performClick()
-        composeRule.onNodeWithText("No pudimos cargar el historial.").assertIsDisplayed()
+        composeRule.onNodeWithTag("monitor_bottom_incidents").performClick()
+        composeRule.onNodeWithText("No pudimos cargar los incidentes.").assertIsDisplayed()
         composeRule.onNodeWithText("Intenta nuevamente.").assertIsDisplayed()
         composeRule.onAllNodesWithText("response_json_invalid").assertCountEquals(0)
         composeRule.onNodeWithTag("monitor_alert_retry").performClick()
         org.junit.Assert.assertEquals(1, refreshes)
-        composeRule.onNodeWithText("Alerta actual").assertIsDisplayed()
     }
 
     @Test fun partialHistoryCardUsesSafeStatusAndDateFallbacks() {
@@ -233,7 +232,7 @@ class MonitorAlertsScreenTest {
             }
         }
 
-        composeRule.onNodeWithTag("monitor_history_section").performClick()
+        composeRule.onNodeWithTag("monitor_bottom_incidents").performClick()
         composeRule.onNodeWithText("Estado no disponible").assertIsDisplayed()
         composeRule.onNodeWithText("Fecha no disponible").assertIsDisplayed()
         composeRule.onNodeWithTag("monitor_history_alert_attempt-partial").assertIsDisplayed()
@@ -251,7 +250,7 @@ class MonitorAlertsScreenTest {
             }
         }
 
-        composeRule.onNodeWithTag("monitor_history_section").performClick()
+        composeRule.onNodeWithTag("monitor_bottom_incidents").performClick()
         composeRule.onNodeWithTag("monitor_history_alert_attempt-1").assertIsDisplayed()
         composeRule.onAllNodesWithText("Sin respuesta").assertCountEquals(0)
     }
@@ -321,7 +320,8 @@ class MonitorAlertsScreenTest {
         composeRule.onAllNodesWithText("Ver ubicación").assertCountEquals(0)
     }
 
-    @Test fun enrichedStatusWithValidCoordinatesShowsMapButton() {
+    @Test fun enrichedStatusWithValidCoordinatesOpensInternalIncidentMap() {
+        var requestedPoint: com.example.sos_segundoplano.ui.maps.MotoMapPoint? = null
         composeRule.setContent {
             SOS_SegundoPlanoTheme {
                 MonitorHomeScreen(
@@ -330,13 +330,20 @@ class MonitorAlertsScreenTest {
                         MonitorAlertDetail(alert("Pending", null)),
                         status = monitorStatus(location = MonitorAlertStatusLocation(true, 19.4326, -99.1332, 8.0, "gps", null, null, true, false))
                     ),
-                    onRetry = {}, onAcknowledge = {}, onDecline = {}, onLogout = {}
+                    onRetry = {},
+                    onAcknowledge = {},
+                    onDecline = {},
+                    onLoadMapRoute = { requestedPoint = it },
+                    onLogout = {}
                 )
             }
         }
 
-        composeRule.onNodeWithText("Ver ubicación").assertIsDisplayed()
-        composeRule.onNodeWithTag("monitor_open_location_button").assertIsDisplayed()
+        composeRule.onNodeWithText("Ver ubicación del incidente").assertIsDisplayed()
+        composeRule.onNodeWithTag("monitor_open_location_button").performClick()
+        composeRule.onNodeWithText("Ruta de asistencia").assertIsDisplayed()
+        org.junit.Assert.assertEquals(19.4326, requestedPoint?.latitude ?: Double.NaN, 0.0)
+        org.junit.Assert.assertEquals(-99.1332, requestedPoint?.longitude ?: Double.NaN, 0.0)
     }
 
     @Test fun criticalEventIsLocalizedInCurrentAlert() = assertAutomaticCause(
@@ -353,6 +360,90 @@ class MonitorAlertsScreenTest {
         cause = "UserRequestedHelp",
         expectedTitle = "Solicitud de ayuda"
     )
+
+    @Test fun homeShowsOnlyTheNewestPendingAlert() {
+        var opened: String? = null
+        composeRule.setContent {
+            SOS_SegundoPlanoTheme {
+                MonitorHomeScreen(
+                    state = MonitorAlertsUiState.Ready,
+                    onRetry = {},
+                    onAcknowledge = {},
+                    onDecline = {},
+                    historyState = MonitorAlertHistoryUiState.Content(
+                        listOf(
+                            alert("Pending", null, "pending-old", createdAtUtc = "2026-08-12T16:40:00Z"),
+                            alert("Pending", null, "pending-new", createdAtUtc = "2026-08-12T16:50:00Z"),
+                            alert("Acknowledged", "CanAssist", "confirmed-newer", createdAtUtc = "2026-08-12T16:55:00Z", acknowledgedAtUtc = "2026-08-12T16:56:00Z")
+                        )
+                    ),
+                    onOpenHistoryAlert = { opened = it },
+                    onLogout = {}
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Alerta pendiente más reciente").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("monitor_dashboard_open_alert").assertCountEquals(1)
+        composeRule.onNodeWithTag("monitor_dashboard_open_alert").performClick()
+        org.junit.Assert.assertEquals("pending-new", opened)
+        composeRule.onAllNodesWithTag("monitor_history_section").assertCountEquals(0)
+    }
+
+    @Test fun acknowledgedAlertDisappearsFromHome() {
+        val acknowledged = alert(
+            "Acknowledged",
+            "CanAssist",
+            "confirmed",
+            acknowledgedAtUtc = "2026-08-12T16:56:00Z"
+        )
+        composeRule.setContent {
+            SOS_SegundoPlanoTheme {
+                MonitorHomeScreen(
+                    state = MonitorAlertsUiState.Alert(
+                        NotificationDeliveryAttemptId("confirmed"),
+                        MonitorAlertDetail(acknowledged)
+                    ),
+                    onRetry = {},
+                    onAcknowledge = {},
+                    onDecline = {},
+                    historyState = MonitorAlertHistoryUiState.Content(listOf(acknowledged)),
+                    onLogout = {}
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("monitor_bottom_home").performClick()
+        composeRule.onNodeWithTag("monitor_no_pending_alerts").assertIsDisplayed()
+        composeRule.onAllNodesWithTag("monitor_dashboard_open_alert").assertCountEquals(0)
+    }
+
+    @Test fun logoutLivesOnlyInProfileAndProfileShowsMonitorSessionData() {
+        composeRule.setContent {
+            SOS_SegundoPlanoTheme {
+                MonitorHomeScreen(
+                    state = MonitorAlertsUiState.Ready,
+                    onRetry = {},
+                    onAcknowledge = {},
+                    onDecline = {},
+                    profileData = MonitorProfileUiData(
+                        fullName = "Ana Monitor",
+                        email = "ana.monitor@motosos.com",
+                        phoneNumber = "+525512345678",
+                        isActive = true
+                    ),
+                    onLogout = {}
+                )
+            }
+        }
+
+        composeRule.onAllNodesWithText("Cerrar sesión").assertCountEquals(0)
+        composeRule.onNodeWithTag("monitor_bottom_profile").performClick()
+        composeRule.onNodeWithText("Ana Monitor").assertIsDisplayed()
+        composeRule.onNodeWithText("ana.monitor@motosos.com").assertIsDisplayed()
+        composeRule.onNodeWithText("+525512345678").assertIsDisplayed()
+        composeRule.onNodeWithTag("monitor_profile_logout").assertIsDisplayed()
+    }
 
     private fun assertAutomaticCause(cause: String, expectedTitle: String) {
         composeRule.setContent {

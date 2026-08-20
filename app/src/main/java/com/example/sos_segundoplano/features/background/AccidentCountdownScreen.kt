@@ -1,6 +1,7 @@
 package com.example.sos_segundoplano.features.background
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -98,14 +99,23 @@ fun AccidentCountdownScreen(
 
                 if (countdown != null) {
                     val remainingSeconds = ((countdown.remainingNanos + NANOS_PER_SECOND - 1L) / NANOS_PER_SECOND).coerceAtLeast(0L)
-                    Text(
-                        text = remainingSeconds.toString(),
-                        modifier = Modifier.testTag("accident_countdown_seconds"),
-                        style = MaterialTheme.typography.displayLarge,
-                        color = MotoAlert,
-                        fontWeight = FontWeight.Black,
-                        textAlign = TextAlign.Center
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(124.dp)
+                            .clip(CircleShape)
+                            .background(MotoAlert.copy(alpha = 0.06f))
+                            .border(6.dp, MotoAlert.copy(alpha = 0.18f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = remainingSeconds.toString(),
+                            modifier = Modifier.testTag("accident_countdown_seconds"),
+                            style = MaterialTheme.typography.displayLarge,
+                            color = MotoAlert,
+                            fontWeight = FontWeight.Black,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                     Text(
                         text = stringResource(R.string.validation_countdown_seconds, remainingSeconds),
                         style = MaterialTheme.typography.titleMedium,
@@ -179,9 +189,13 @@ fun AccidentCountdownScreen(
 private fun accidentTitle(state: FalsePositiveValidationState): String = when (state) {
     is FalsePositiveValidationState.CountdownActive -> stringResource(R.string.validation_countdown_title)
     is FalsePositiveValidationState.HelpRequested -> stringResource(R.string.validation_request_help)
+    is FalsePositiveValidationState.IncidentDeliveryRetrying -> stringResource(R.string.validation_delivery_retry_title)
     is FalsePositiveValidationState.IncidentGenerated -> stringResource(R.string.validation_incident_generated)
     is FalsePositiveValidationState.ImmediateAlertRequested -> stringResource(R.string.validation_immediate_alert_requested_title)
-    is FalsePositiveValidationState.Error -> stringResource(R.string.validation_local_registration_failed_title)
+    is FalsePositiveValidationState.Error -> when (state.message) {
+        "RemoteIncidentCreationFailed" -> stringResource(R.string.validation_remote_delivery_failed_title)
+        else -> stringResource(R.string.validation_local_registration_failed_title)
+    }
     else -> stringResource(R.string.validation_countdown_title)
 }
 
@@ -189,6 +203,7 @@ private fun accidentTitle(state: FalsePositiveValidationState): String = when (s
 private fun accidentMessage(state: FalsePositiveValidationState): String = when (state) {
     is FalsePositiveValidationState.CountdownActive -> stringResource(R.string.validation_countdown_waiting_driver)
     is FalsePositiveValidationState.HelpRequested -> stringResource(R.string.validation_help_requested)
+    is FalsePositiveValidationState.IncidentDeliveryRetrying -> stringResource(R.string.validation_delivery_retry)
     is FalsePositiveValidationState.IncidentGenerated -> when (state.incident.cause) {
         IncidentCause.UserRequestedHelp -> stringResource(R.string.validation_help_requested)
         IncidentCause.Timeout -> stringResource(R.string.validation_timeout_escalated)
@@ -196,7 +211,10 @@ private fun accidentMessage(state: FalsePositiveValidationState): String = when 
         IncidentCause.ManualSos -> stringResource(R.string.validation_help_requested)
     }
     is FalsePositiveValidationState.ImmediateAlertRequested -> stringResource(R.string.validation_immediate_alert_requested)
-    is FalsePositiveValidationState.Error -> stringResource(R.string.validation_local_registration_failed)
+    is FalsePositiveValidationState.Error -> when (state.message) {
+        "RemoteIncidentCreationFailed" -> stringResource(R.string.validation_remote_delivery_failed)
+        else -> stringResource(R.string.validation_local_registration_failed)
+    }
     else -> stringResource(R.string.validation_countdown_waiting_driver)
 }
 

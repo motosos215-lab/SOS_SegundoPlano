@@ -35,7 +35,8 @@ enum class TripStartLocationCaptureState { Idle, Capturing, Available, Unavailab
 
 class AuthenticatedTripStartResourcesResolver(
     private val authRepository: AuthRepository,
-    private val remoteDataSource: TripRemoteDataSource
+    private val remoteDataSource: TripRemoteDataSource,
+    private val onMobileDeviceResolved: (String) -> Unit = {}
 ) : TripStartResourcesResolver {
     private val mutex = Mutex()
 
@@ -66,10 +67,12 @@ class AuthenticatedTripStartResourcesResolver(
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
 
+        val mobileDeviceId = requireNotNull(mobile.id).trim()
+        onMobileDeviceResolved(mobileDeviceId)
         TripStartResourcesResult.Success(
             TripStartResources(
                 vehicleId = requireNotNull(vehicle.id).trim(),
-                mobileDeviceId = requireNotNull(mobile.id).trim(),
+                mobileDeviceId = mobileDeviceId,
                 smartwatchDeviceId = smartwatchId
             )
         )

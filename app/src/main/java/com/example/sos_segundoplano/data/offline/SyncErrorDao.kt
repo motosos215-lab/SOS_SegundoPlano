@@ -19,6 +19,9 @@ interface SyncErrorDao {
     )
     suspend fun trimToLatest(maxRecords: Int): Int
 
+    @Query("DELETE FROM offline_sync_errors WHERE queueItemId IN (:queueItemIds)")
+    suspend fun deleteForQueueItems(queueItemIds: List<Long>): Int
+
     @Transaction
     suspend fun insertAndTrim(entity: SyncErrorEntity, maxRecords: Int): Long {
         val id = insert(entity)

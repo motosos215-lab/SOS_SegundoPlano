@@ -13,10 +13,13 @@ interface OfflineQueueRepository : OfflineEventSink {
     suspend fun claimReadyBatch(workerId: String, nowMillis: Long): List<ClaimedOfflineQueueItem>
     suspend fun markSent(claim: OfflineQueueClaim, ackSanitized: String, nowMillis: Long): OfflineQueueTransitionResult
     suspend fun markRetry(claim: OfflineQueueClaim, category: OfflineSyncErrorCategory, code: String?, sanitizedMessage: String?, nextAttemptAtMillis: Long, nowMillis: Long): OfflineQueueTransitionResult
-    suspend fun markNotConfigured(claim: OfflineQueueClaim, code: String?, sanitizedMessage: String?, nextAttemptAtMillis: Long, nowMillis: Long): OfflineQueueTransitionResult
+    suspend fun markNotConfigured(claim: OfflineQueueClaim, code: String?, sanitizedMessage: String?, nextAttemptAtMillis: Long?, nowMillis: Long): OfflineQueueTransitionResult
     suspend fun markPermanentFailure(claim: OfflineQueueClaim, category: OfflineSyncErrorCategory, code: String?, sanitizedMessage: String?, nowMillis: Long): OfflineQueueTransitionResult
     suspend fun recoverAbandonedItems(nowMillis: Long): Int
     fun observeSummary(): Flow<OfflineQueueSummary>
     suspend fun getErrors(limit: Int): List<SyncErrorRecord>
     suspend fun cleanSentBefore(cutoffEpochMillis: Long): Int
+    /** Owner-scoped recovery seam. Legacy and other-owner rows are intentionally excluded. */
+    suspend fun recoverableBundleKeysForCurrentRider(): List<String>
+    suspend fun recoverableIncidentBundleForCurrentRider(bundleKey: String): RecoverableOfflineIncidentBundle?
 }

@@ -56,6 +56,9 @@ interface MonitorAlertsRepository {
     suspend fun getAlert(id: NotificationDeliveryAttemptId): MonitorAlertsResult<MonitorAlertDetail>
     suspend fun getStatus(id: NotificationDeliveryAttemptId): MonitorAlertsResult<MonitorAlertStatus>
     suspend fun getLocation(id: NotificationDeliveryAttemptId): MonitorAlertsResult<MonitorAlertOpaquePayload>
+    /** Typed location used by the Monitor UI when aggregated status has not caught up yet. */
+    suspend fun getLocationStatus(id: NotificationDeliveryAttemptId): MonitorAlertsResult<MonitorAlertStatusLocation?> =
+        MonitorAlertsResult.Success(null)
     suspend fun markViewed(id: NotificationDeliveryAttemptId): MonitorAlertsResult<MonitorAlertOpaquePayload>
     suspend fun acknowledge(id: NotificationDeliveryAttemptId, responseType: String, message: String): MonitorAlertsResult<MonitorAlertDetail>
     suspend fun decline(id: NotificationDeliveryAttemptId, reason: String): MonitorAlertsResult<MonitorAlertDetail>

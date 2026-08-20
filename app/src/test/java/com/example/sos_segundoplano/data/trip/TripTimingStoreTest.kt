@@ -3,12 +3,35 @@ package com.example.sos_segundoplano.data.trip
 import com.example.sos_segundoplano.domain.trip.ElapsedRealtimeClock
 import com.example.sos_segundoplano.domain.trip.TripDurationFormatter
 import com.example.sos_segundoplano.domain.trip.TripTimingState
+import com.example.sos_segundoplano.domain.trip.TripTimingClearResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TripTimingStoreTest {
+    @Test fun timingIdentitySurvivesRecreationAndConditionalClearProtectsAnotherTrip() {
+        val persistence = FakeTripTimingPersistence()
+        val first = store(persistence, FakeElapsedRealtimeClock(1_000L), bootSessionId = 7L)
+        first.beginConfirmedTrip("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        val restored = store(persistence, FakeElapsedRealtimeClock(2_000L), bootSessionId = 7L)
+        assertEquals("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", (restored.states.value as TripTimingState.Active).tripSessionKey)
+        assertEquals(TripTimingClearResult.DifferentTrip, restored.clearIfMatches("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
+        assertEquals("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", (restored.states.value as TripTimingState.Active).tripSessionKey)
+    }
+
+    @Test fun legacyTimingIsNotClearedByIdentityTarget() {
+        val store = store(FakeTripTimingPersistence(PersistedTripTiming(1_000L, 7L)), FakeElapsedRealtimeClock(2_000L), 7L)
+        assertEquals(TripTimingClearResult.LegacyUncorrelated, store.clearIfMatches("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
+        assertTrue(store.states.value is TripTimingState.Active)
+    }
+
+    @Test fun matchingTimingIdentityClearsPersistedTiming() {
+        val store = store(FakeTripTimingPersistence(), FakeElapsedRealtimeClock(1_000L), 7L)
+        store.beginConfirmedTrip("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        assertEquals(TripTimingClearResult.Cleared, store.clearIfMatches("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
+        assertEquals(TripTimingState.Unknown, store.states.value)
+    }
     @Test fun confirmedNewTripStartsAtZeroAndAdvancesFromMonotonicReference() {
         val clock = FakeElapsedRealtimeClock(10_000L)
         val store = store(clock = clock)

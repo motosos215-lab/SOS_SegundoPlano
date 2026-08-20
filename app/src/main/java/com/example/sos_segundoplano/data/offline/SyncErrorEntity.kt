@@ -26,6 +26,11 @@ data class QueueStatusCount(
     val count: Int
 )
 
+data class AutomaticSosStatusCount(
+    val status: String,
+    val count: Int
+)
+
 data class QueueSyncStats(
     val lastSuccessfulSyncAt: Long?,
     val lastAttemptAt: Long?

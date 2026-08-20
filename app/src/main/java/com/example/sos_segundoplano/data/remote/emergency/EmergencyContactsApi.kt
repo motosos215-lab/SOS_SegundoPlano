@@ -9,6 +9,11 @@ import retrofit2.http.POST
 import retrofit2.http.Path
 
 interface EmergencyContactsApi {
+    @GET("api/v1/emergency-contacts")
+    suspend fun list(
+        @Header("Authorization") authorization: String
+    ): Response<ApiEnvelopeDto<EmergencyContactsDataDto>>
+
     @POST("api/v1/emergency-contacts")
     suspend fun create(
         @Header("Authorization") authorization: String,
@@ -54,6 +59,8 @@ data class EmergencyContactPermissionsDto(
     val canViewIncidentHistory: Boolean,
     val canViewVitalSigns: Boolean
 )
+
+data class EmergencyContactsDataDto(val contacts: List<EmergencyContactDto> = emptyList())
 
 data class EmergencyContactDataDto(val contact: EmergencyContactDto? = null)
 

@@ -17,6 +17,7 @@ import com.example.sos_segundoplano.domain.offline.OfflineSyncPayload
 import com.example.sos_segundoplano.domain.offline.WallClock
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -59,8 +60,7 @@ class OfflineQueueSyncProcessorTest {
     @Test fun notConfiguredNeverMarksSentOrPermanent() = runBlocking {
         val repo = FakeSyncRepository(claimed = listOf(claimed()))
         val result = processor(repo, FakeTransport(OfflineEventTransportResult.NotConfigured("remote_not_configured"))).process("worker")
-        assertTrue(result is OfflineQueueSyncResult.DeferredUntil)
-        assertTrue((result as OfflineQueueSyncResult.DeferredUntil).epochMillis > 1_000L)
+        assertEquals(OfflineQueueSyncResult.Completed, result)
         assertEquals(1, repo.notConfigured)
         assertEquals(0, repo.sent)
         assertEquals(0, repo.permanent)
@@ -127,7 +127,11 @@ class OfflineQueueSyncProcessorTest {
             return transition
         }
         override suspend fun markRetry(claim: OfflineQueueClaim, category: OfflineSyncErrorCategory, code: String?, sanitizedMessage: String?, nextAttemptAtMillis: Long, nowMillis: Long): OfflineQueueTransitionResult { retried++; assertTrue(nextAttemptAtMillis >= nowMillis); return transition }
-        override suspend fun markNotConfigured(claim: OfflineQueueClaim, code: String?, sanitizedMessage: String?, nextAttemptAtMillis: Long, nowMillis: Long): OfflineQueueTransitionResult { notConfigured++; return transition }
+        override suspend fun markNotConfigured(claim: OfflineQueueClaim, code: String?, sanitizedMessage: String?, nextAttemptAtMillis: Long?, nowMillis: Long): OfflineQueueTransitionResult {
+            notConfigured++
+            assertNull(nextAttemptAtMillis)
+            return transition
+        }
         override suspend fun markPermanentFailure(claim: OfflineQueueClaim, category: OfflineSyncErrorCategory, code: String?, sanitizedMessage: String?, nowMillis: Long): OfflineQueueTransitionResult { permanent++; return transition }
         override suspend fun hasUnfinishedWork(): Boolean = claimed.isNotEmpty()
         override suspend fun earliestPendingAttemptAt(nowMillis: Long): Long? = null

@@ -48,13 +48,12 @@ class AuthenticatedIncidentRemoteCreatorTest {
             source = "MobileDetection",
             cause = "CountdownTimeout",
             riskLevel = "High",
+            score = 75,
+            confidence = 0.8,
+            gpsQuality = "Good",
+            ruleSetVersion = "local-rules-v1",
+            validationPolicyVersion = "false-positive-validation-v1",
             occurredAtUtc = "2026-08-08T14:20:00Z",
-            evidenceSummary = IncidentEvidenceSummaryDto(
-                assessmentId = 2L,
-                windowId = 3L,
-                triggeredRules = emptyList(),
-                hasLocation = false
-            )
         ), remote.request)
     }
 
@@ -98,6 +97,11 @@ class AuthenticatedIncidentRemoteCreatorTest {
         val created = creator.createIncident(incident(score = null))
 
         assertEquals("CountdownTimeout", remote.request?.cause)
+        assertEquals(null, remote.request?.score)
+        assertEquals(0.8, remote.request?.confidence)
+        assertEquals("Good", remote.request?.gpsQuality)
+        assertEquals("local-rules-v1", remote.request?.ruleSetVersion)
+        assertEquals("false-positive-validation-v1", remote.request?.validationPolicyVersion)
         assertEquals("incident-remote-1", created.remoteIncidentId)
         assertEquals(IncidentRemoteCreationStatus.Success("incident-remote-1"), created.remoteCreationStatus)
     }

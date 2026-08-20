@@ -1,5 +1,6 @@
 package com.example.sos_segundoplano.features.wear
 
+import android.hardware.SensorManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -63,6 +64,8 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.sqrt
 
 @Composable
 fun WatchConnectionRoute(
@@ -70,6 +73,9 @@ fun WatchConnectionRoute(
     authRepository: AuthRepository,
     onBack: () -> Unit,
     onHomeSelected: () -> Unit,
+    onTripsSelected: () -> Unit = {},
+    onSosSelected: () -> Unit = {},
+    onMapSelected: () -> Unit = {},
     onProfileSelected: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -85,6 +91,9 @@ fun WatchConnectionRoute(
         state = state,
         onBack = onBack,
         onHomeSelected = onHomeSelected,
+        onTripsSelected = onTripsSelected,
+        onSosSelected = onSosSelected,
+        onMapSelected = onMapSelected,
         onProfileSelected = onProfileSelected,
         onRefresh = viewModel::refreshConnection,
         onRequestStatus = viewModel::requestStatus,
@@ -99,6 +108,9 @@ fun WatchConnectionScreen(
     state: WatchConnectionUiState,
     onBack: () -> Unit,
     onHomeSelected: () -> Unit,
+    onTripsSelected: () -> Unit = {},
+    onSosSelected: () -> Unit = {},
+    onMapSelected: () -> Unit = {},
     onProfileSelected: () -> Unit,
     onRefresh: () -> Unit,
     onRequestStatus: () -> Unit,
@@ -123,15 +135,26 @@ fun WatchConnectionScreen(
             MotoTopBar(
                 title = stringResource(R.string.watch_connection_title),
                 subtitle = stringResource(R.string.watch_connection_subtitle),
-                navigationIcon = MotoTopBarIcon.Back
+                navigationIcon = MotoTopBarIcon.Back,
+                showNotificationsIcon = false,
+                onNavigationClick = onBack
             )
         },
         bottomBar = {
             MotoBottomBar(
                 selectedItem = MotoBottomBarItem.Profile,
                 onHomeSelected = onHomeSelected,
+                onTripsSelected = onTripsSelected,
+                onSosSelected = onSosSelected,
+                onMapSelected = onMapSelected,
                 onProfileSelected = onProfileSelected,
-                enabledItems = setOf(MotoBottomBarItem.Home, MotoBottomBarItem.Profile)
+                enabledItems = setOf(
+                    MotoBottomBarItem.Home,
+                    MotoBottomBarItem.Trips,
+                    MotoBottomBarItem.Sos,
+                    MotoBottomBarItem.Map,
+                    MotoBottomBarItem.Profile
+                )
             )
         }
     ) { innerPadding ->
@@ -324,7 +347,11 @@ private fun LastReadingCard(snapshot: WatchSensorSnapshot) {
     ) {
         Field(stringResource(R.string.watch_reading_time), formatEpoch(snapshot.capturedAtEpochMs))
         Field(
-            stringResource(R.string.watch_sensor_accelerometer),
+            stringResource(R.string.watch_sensor_dynamic_acceleration),
+            dynamicAccelerationText(snapshot.accelerometer, snapshot.accelerometerAvailable)
+        )
+        Field(
+            stringResource(R.string.watch_sensor_raw_accelerometer),
             vectorText(snapshot.accelerometer, snapshot.accelerometerAvailable, "m/s²")
         )
         Field(
@@ -426,6 +453,14 @@ private fun Field(label: String, value: String) {
 }
 
 // --------------------------------------------------------------------------- mappings
+
+@Composable
+private fun dynamicAccelerationText(vector: VectorReading?, available: Boolean): String {
+    if (!available || vector == null) return stringResource(R.string.watch_not_available_short)
+    val magnitude = sqrt(vector.x * vector.x + vector.y * vector.y + vector.z * vector.z)
+    val dynamic = abs(magnitude - SensorManager.GRAVITY_EARTH)
+    return String.format(Locale.getDefault(), "%.2f m/s²", dynamic)
+}
 
 @Composable
 private fun vectorText(vector: VectorReading?, available: Boolean, unit: String): String {

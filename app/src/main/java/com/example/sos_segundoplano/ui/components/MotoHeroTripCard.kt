@@ -40,6 +40,7 @@ import com.example.sos_segundoplano.ui.theme.MotoSurface
 fun MotoHeroTripCard(
     onStartTrip: () -> Unit,
     isStarting: Boolean = false,
+    isStartEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val startTripContentDescription = stringResource(R.string.start_trip)
@@ -68,7 +69,7 @@ fun MotoHeroTripCard(
         Spacer(modifier = Modifier.height(4.dp))
         Button(
             onClick = onStartTrip,
-            enabled = !isStarting,
+            enabled = isStartEnabled && !isStarting,
             modifier = Modifier
                 .heightIn(min = 56.dp)
                 .fillMaxWidth()
@@ -93,7 +94,11 @@ fun MotoHeroTripCard(
             )
             Spacer(modifier = Modifier.size(8.dp))
             Text(
-                text = if (isStarting) "Obteniendo ubicación…" else stringResource(R.string.start_trip),
+                text = when {
+                    isStarting -> "Obteniendo ubicación…"
+                    !isStartEnabled -> stringResource(R.string.start_trip_sync_pending)
+                    else -> stringResource(R.string.start_trip)
+                },
                 style = MaterialTheme.typography.labelLarge,
                 color = MotoSurface
             )

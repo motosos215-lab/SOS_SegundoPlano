@@ -5,9 +5,11 @@ import com.example.sos_segundoplano.domain.auth.AuthSessionIdentity
 import com.example.sos_segundoplano.domain.auth.AuthUser
 import com.example.sos_segundoplano.domain.auth.SessionExpired
 import com.example.sos_segundoplano.domain.auth.SessionState
+import com.example.sos_segundoplano.domain.auth.SessionTakeoverChallenge
 import com.example.sos_segundoplano.domain.auth.UserRole
 import com.example.sos_segundoplano.domain.auth.authenticatedIdentityOrNull
 import com.example.sos_segundoplano.domain.repository.AuthRepository
+import com.example.sos_segundoplano.push.PushDiagnostics
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.StateFlow
 
@@ -17,10 +19,13 @@ class PushAwareAuthRepository(
     private val beforeMonitorLogout: suspend (ownerSession: AuthSessionIdentity) -> Unit
 ) : AuthRepository by delegate {
     override suspend fun login(email: String, password: String, rememberMe: Boolean): AuthResult<AuthUser> =
-        delegate.login(email, password, rememberMe).also(::scheduleLoginForMonitor)
+        delegate.login(email, password, rememberMe).also(::scheduleLoginForPush)
 
     override suspend fun restoreSession(): AuthResult<AuthUser?> =
-        delegate.restoreSession().also(::scheduleRestoreForMonitor)
+        delegate.restoreSession().also(::scheduleRestoreForPush)
+
+    override suspend fun takeover(challenge: SessionTakeoverChallenge): AuthResult<AuthUser> =
+        delegate.takeover(challenge).also(::scheduleLoginForPush)
 
     override suspend fun logout(): AuthResult<Unit> = logoutCurrentSession(expectedSession = null)
 
@@ -31,7 +36,7 @@ class PushAwareAuthRepository(
         val currentState = delegate.observeSession().value
         val currentIdentity = currentState.authenticatedIdentityOrNull()
         if (expectedSession != null && currentIdentity != expectedSession) return SessionExpired
-        val monitorOwner = currentState.monitorIdentityOrNull()
+        val monitorOwner = currentState.pushIdentityOrNull()
         if (monitorOwner != null) {
             try {
                 beforeMonitorLogout(monitorOwner)
@@ -50,21 +55,25 @@ class PushAwareAuthRepository(
 
     override fun observeSession(): StateFlow<SessionState> = delegate.observeSession()
 
-    private fun scheduleLoginForMonitor(result: AuthResult<AuthUser>) {
-        if ((result as? AuthResult.Success)?.value?.role == UserRole.Monitor) {
+    private fun scheduleLoginForPush(result: AuthResult<AuthUser>) {
+        val role = (result as? AuthResult.Success)?.value?.role
+        if (role == UserRole.Monitor || role == UserRole.Rider) {
+            PushDiagnostics.debug(PushDiagnostics.syncTrigger("mobile_login"))
             onMonitorSessionAvailable()
         }
     }
 
-    private fun scheduleRestoreForMonitor(result: AuthResult<AuthUser?>) {
-        if ((result as? AuthResult.Success)?.value?.role == UserRole.Monitor) {
+    private fun scheduleRestoreForPush(result: AuthResult<AuthUser?>) {
+        val role = (result as? AuthResult.Success)?.value?.role
+        if (role == UserRole.Monitor || role == UserRole.Rider) {
+            PushDiagnostics.debug(PushDiagnostics.syncTrigger("mobile_restore"))
             onMonitorSessionAvailable()
         }
     }
 
-    private fun SessionState.monitorIdentityOrNull(): AuthSessionIdentity? = when (this) {
-        is SessionState.Authenticated -> takeIf { user.role == UserRole.Monitor }?.authenticatedIdentityOrNull()
-        is SessionState.Refreshing -> takeIf { user.role == UserRole.Monitor }?.authenticatedIdentityOrNull()
+    private fun SessionState.pushIdentityOrNull(): AuthSessionIdentity? = when (this) {
+        is SessionState.Authenticated -> takeIf { user.role == UserRole.Monitor || user.role == UserRole.Rider }?.authenticatedIdentityOrNull()
+        is SessionState.Refreshing -> takeIf { user.role == UserRole.Monitor || user.role == UserRole.Rider }?.authenticatedIdentityOrNull()
         else -> null
     }?.takeIf { it.userId.isNotBlank() }
 }

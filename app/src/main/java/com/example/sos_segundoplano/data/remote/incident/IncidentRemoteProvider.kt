@@ -9,6 +9,7 @@ import com.example.sos_segundoplano.data.remote.auth.AuthNetworkFactory
 import com.example.sos_segundoplano.data.remote.trip.TripRemoteSessionProvider
 import com.example.sos_segundoplano.data.signals.TripSignalStoreProvider
 import com.example.sos_segundoplano.data.validation.FalsePositiveValidationCoordinatorProvider
+import com.example.sos_segundoplano.domain.validation.LocalIncident
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -17,37 +18,102 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 object IncidentRemoteProvider {
     @Volatile private var creator: IncidentRemoteCreator? = null
+    @Volatile private var automaticCreator: AutomaticSosAlertCreator? = null
     @Volatile private var manualCoordinator: ManualSosIncidentCoordinator? = null
     @Volatile private var linkStore: RemoteIncidentLinkStore? = null
+    @Volatile private var mobileSosDataSource: ManualSosAlertRemoteDataSource? = null
     private val manualScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutableManualSosRequestState = MutableStateFlow<ManualSosRequestState>(ManualSosRequestState.Idle)
     val manualSosRequestState: StateFlow<ManualSosRequestState> = mutableManualSosRequestState.asStateFlow()
 
+    fun clearManualSosRequestState() {
+        mutableManualSosRequestState.value = ManualSosRequestState.Idle
+    }
+
     fun initialize(context: Context): IncidentRemoteCreator = get(context).also { remoteCreator ->
         FalsePositiveValidationCoordinatorProvider.setIncidentRemoteCreator(remoteCreator)
+        FalsePositiveValidationCoordinatorProvider.setAutomaticSosAlertCreator(getAutomaticCreator(context.applicationContext))
     }
 
     fun get(context: Context): IncidentRemoteCreator = creator ?: synchronized(this) {
         creator ?: create(context.applicationContext).also { creator = it }
     }
 
-    fun requestManualSos(context: Context) {
+    fun requestManualSos(
+        context: Context,
+        options: ManualSosSubmissionOptions = ManualSosSubmissionOptions()
+    ) {
         val coordinator = getManualCoordinator(context.applicationContext)
         mutableManualSosRequestState.value = ManualSosRequestState.Preparing
         manualScope.launch {
             try {
-                coordinator.requestManualSos(ManualSosProgressReporter { state ->
-                    mutableManualSosRequestState.value = state
-                })
+                val completed = withTimeoutOrNull(MANUAL_SOS_OPERATION_TIMEOUT_MILLIS) {
+                    coordinator.requestManualSos(options, ManualSosProgressReporter { state ->
+                        mutableManualSosRequestState.value = state
+                    })
+                }
+                if (completed == null) {
+                    Log.w(TAG_MANUAL, "event=manual_sos_timeout state=${mutableManualSosRequestState.value.javaClass.simpleName}")
+                    val pending = hasPendingManualSosForCurrentRider(context.applicationContext)
+                    if (pending) {
+                        OfflineQueueProvider.get(context.applicationContext).scheduler.scheduleImmediateManualSos()
+                        mutableManualSosRequestState.value = ManualSosRequestState.SavedOffline
+                    } else {
+                        mutableManualSosRequestState.value = ManualSosRequestState.RetryableFailure
+                    }
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Throwable) {
-                mutableManualSosRequestState.value = ManualSosRequestState.RetryableFailure
+            } catch (failure: Throwable) {
+                Log.w(TAG_MANUAL, "event=manual_sos_failed type=${failure.javaClass.simpleName}")
+                val pending = hasPendingManualSosForCurrentRider(context.applicationContext)
+                if (pending) {
+                    OfflineQueueProvider.get(context.applicationContext).scheduler.scheduleImmediateManualSos()
+                    mutableManualSosRequestState.value = ManualSosRequestState.SavedOffline
+                } else {
+                    mutableManualSosRequestState.value = ManualSosRequestState.RetryableFailure
+                }
             }
         }
+    }
+
+    fun automaticSosAlertCreator(context: Context): AutomaticSosAlertCreator =
+        getAutomaticCreator(context.applicationContext)
+
+    suspend fun requestManualSosAwait(
+        context: Context,
+        options: ManualSosSubmissionOptions = ManualSosSubmissionOptions()
+    ): LocalIncident = getManualCoordinator(context.applicationContext).requestManualSos(options)
+
+    /** Background recovery only. Never creates a fresh SOS when no durable pending request exists. */
+    suspend fun retryPendingManualSosAwait(context: Context): LocalIncident? {
+        val result = getManualCoordinator(context.applicationContext).retryPendingManualSos()
+        if (result != null) {
+            mutableManualSosRequestState.value = when (val status = result.remoteCreationStatus) {
+                is com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus.Success -> ManualSosRequestState.Sent
+                is com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus.NetworkUnavailable,
+                is com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus.Timeout,
+                is com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus.MissingRequiredData,
+                com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus.Pending,
+                com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus.NotRequested,
+                com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus.DuplicateAttempt -> ManualSosRequestState.SavedOffline
+                is com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus.HttpError -> {
+                    if (status.statusCode == 401 || status.statusCode == 408 || status.statusCode == 409 || status.statusCode == 429 || status.statusCode >= 500) {
+                        ManualSosRequestState.SavedOffline
+                    } else ManualSosRequestState.RetryableFailure
+                }
+                is com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus.InvalidResponse -> {
+                    if (status.sanitizedMessage in setOf("access_token_invalid", "manual_sos_result_persistence_failed")) {
+                        ManualSosRequestState.SavedOffline
+                    } else ManualSosRequestState.RetryableFailure
+                }
+            }
+        }
+        return result
     }
 
     private fun create(context: Context): IncidentRemoteCreator {
@@ -70,6 +136,29 @@ object IncidentRemoteProvider {
         )
     }
 
+    private fun getAutomaticCreator(context: Context): AutomaticSosAlertCreator = automaticCreator ?: synchronized(this) {
+        automaticCreator ?: run {
+            val tripSession = TripRemoteSessionProvider.get(context)
+            AuthenticatedAutomaticSosAlertCreator(
+                authRepository = AuthProvider.get(context),
+                remoteDataSource = getMobileSosDataSource(context),
+                activeTripRemoteResolver = tripSession.reconciler,
+                remoteTripSessionStore = tripSession.store,
+                locationProvider = TripSignalManualSosLocationProvider(
+                    store = TripSignalStoreProvider.store,
+                    currentLocationProvider = AndroidCurrentManualSosLocationProvider(context)
+                ),
+                emergencyLocationPublisher = AuthenticatedEmergencyLocationPublisher(
+                    authRepository = AuthProvider.get(context),
+                    api = AuthNetworkFactory.createEmergencyLocationSharingApi(
+                        BuildConfig.MOTOSOS_API_BASE_URL,
+                        AuthNetworkFactory.createMoshi()
+                    )
+                )
+            ).also { automaticCreator = it }
+        }
+    }
+
     private fun getManualCoordinator(context: Context): ManualSosIncidentCoordinator =
         manualCoordinator ?: synchronized(this) {
             manualCoordinator ?: createManualCoordinator(context).also {
@@ -88,10 +177,7 @@ object IncidentRemoteProvider {
         return ManualSosIncidentCoordinator(
             remoteCreator = AuthenticatedManualSosAlertCreator(
                 authRepository = AuthProvider.get(context),
-                remoteDataSource = RetrofitManualSosAlertRemoteDataSource(
-                    AuthNetworkFactory.createMobileSosAlertsApi(BuildConfig.MOTOSOS_API_BASE_URL, moshi),
-                    moshi
-                ),
+                remoteDataSource = getMobileSosDataSource(context),
                 activeTripRemoteResolver = tripSession.reconciler,
                 remoteTripSessionStore = tripSession.store,
                 remoteIncidentLinkStore = links,
@@ -102,13 +188,47 @@ object IncidentRemoteProvider {
                 emergencyLocationPublisher = locationPublisher
             ),
             offlineEventSink = OfflineQueueProvider.get(context).repository,
-            remoteIncidentLinkStore = links
+            remoteIncidentLinkStore = links,
+            currentOwnerUserId = {
+                when (val session = AuthProvider.get(context).observeSession().value) {
+                    is com.example.sos_segundoplano.domain.auth.SessionState.Authenticated -> session.user.id
+                    is com.example.sos_segundoplano.domain.auth.SessionState.Refreshing -> session.user.id
+                    else -> null
+                }
+            },
+            scheduleRecovery = { delayMillis ->
+                val scheduler = OfflineQueueProvider.get(context).scheduler
+                if (delayMillis <= 0L) scheduler.scheduleImmediateManualSos()
+                else scheduler.scheduleDeferredManualSos(delayMillis)
+            }
         )
+    }
+
+    private fun getMobileSosDataSource(context: Context): ManualSosAlertRemoteDataSource = mobileSosDataSource ?: synchronized(this) {
+        mobileSosDataSource ?: run {
+            val moshi = AuthNetworkFactory.createMoshi()
+            RetrofitManualSosAlertRemoteDataSource(
+                AuthNetworkFactory.createMobileSosAlertsApi(BuildConfig.MOTOSOS_API_BASE_URL, moshi),
+                moshi
+            ).also { mobileSosDataSource = it }
+        }
     }
 
     private fun getLinkStore(context: Context): RemoteIncidentLinkStore = linkStore ?: synchronized(this) {
         linkStore ?: SharedPreferencesRemoteIncidentLinkStore(context).also { linkStore = it }
     }
+
+    fun hasPendingManualSosForCurrentRider(context: Context): Boolean {
+        val owner = when (val session = AuthProvider.get(context).observeSession().value) {
+            is com.example.sos_segundoplano.domain.auth.SessionState.Authenticated -> session.user.id
+            is com.example.sos_segundoplano.domain.auth.SessionState.Refreshing -> session.user.id
+            else -> return false
+        }
+        return getLinkStore(context).readPendingManualSos()?.ownerUserId == owner
+    }
+
+    private const val MANUAL_SOS_OPERATION_TIMEOUT_MILLIS = 30_000L
+    private const val TAG_MANUAL = "MotoSOS.ManualSos"
 }
 
 private object AndroidIncidentRemoteLogger : IncidentRemoteLogger {

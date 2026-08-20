@@ -98,16 +98,18 @@ class AuthenticatedManualSosAlertCreator(
                 IncidentRemoteCreationStatus.InvalidResponse("manual_sos_link_persistence_failed")
             )
         }
+        val severity = link.manualSeverity.toManualSeverity()
+        val priority = link.manualPriority.toManualPriority()
         val request = ManualSosAlertRequestDto(
             tripId = remoteTripId,
             clientIncidentId = clientIncidentId,
             clientAlertRequestId = clientAlertRequestId,
             incidentType = MobileSosIncidentType.ManualSos.apiValue,
-            severity = MobileSosSeverity.High.apiValue,
+            severity = severity.apiValue,
             detectedAtUtc = detectedAtUtc,
             latitude = location.latitude,
             longitude = location.longitude,
-            priority = MobileSosPriority.High.apiValue,
+            priority = priority.apiValue,
             reason = MobileSosReason.ManualSos.apiValue,
             notes = NOTES
         )
@@ -195,6 +197,12 @@ class AuthenticatedManualSosAlertCreator(
     private fun String?.validInstant(): String? = normalized()?.takeIf {
         runCatching { Instant.parse(it) }.isSuccess
     }
+
+    private fun String?.toManualSeverity(): MobileSosSeverity =
+        MobileSosSeverity.entries.firstOrNull { it.apiValue == this?.trim() } ?: MobileSosSeverity.Unknown
+
+    private fun String?.toManualPriority(): MobileSosPriority =
+        MobileSosPriority.entries.firstOrNull { it.apiValue == this?.trim() } ?: MobileSosPriority.High
 
     private companion object {
         const val NOTES = "Alerta SOS desde Android"

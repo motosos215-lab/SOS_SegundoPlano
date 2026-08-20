@@ -26,7 +26,7 @@ class MonitorAlertsApiTest {
         api.location("Bearer monitor", "attempt-1")
         api.view("Bearer monitor", "attempt-1")
         api.acknowledge("Bearer monitor", "attempt-1", AcknowledgeMonitorAlertRequestDto("CanAssist", "Available"))
-        api.decline("Bearer monitor", "attempt-1", DeclineMonitorAlertRequestDto(message = "Unavailable"))
+        api.decline("Bearer monitor", "attempt-1", DeclineMonitorAlertRequestDto(reason = "Unavailable"))
         assertEquals("/api/v1/monitor/alerts", server.takeRequest().path)
         assertEquals("/api/v1/monitor/alerts/attempt-1", server.takeRequest().path)
         assertEquals("/api/v1/monitor/alerts/attempt-1/status", server.takeRequest().path)
@@ -38,9 +38,9 @@ class MonitorAlertsApiTest {
         assertTrue(acknowledge.body.readUtf8().contains("\"responseType\":\"CanAssist\""))
         assertEquals("/api/v1/monitor/alerts/attempt-1/decline", decline.path)
         val declineBody = decline.body.readUtf8()
-        assertTrue(declineBody.contains("\"responseType\":\"CannotAssist\""))
-        assertTrue(declineBody.contains("\"message\":\"Unavailable\""))
-        assertFalse(declineBody.contains("\"reason\""))
+        assertTrue(declineBody.contains("\"reason\":\"Unavailable\""))
+        assertTrue(!declineBody.contains("responseType"))
+        assertTrue(!declineBody.contains("message"))
     }
 
     @Test fun parsesTheProductionHistoryPageShape() = runBlocking {
@@ -71,6 +71,17 @@ class MonitorAlertsApiTest {
         assertEquals("attempt-1", response.body()?.data?.acknowledgement?.notificationDeliveryAttemptId)
         assertEquals("CanAssist", response.body()?.data?.acknowledgement?.responseType)
         assertEquals("claro", response.body()?.data?.acknowledgement?.message)
+    }
+
+    @Test fun parsesDedicatedMonitorLocationShape() = runBlocking {
+        server.enqueue(json("""{"success":true,"data":{"available":true,"incidentId":"incident-1","latitude":19.4326,"longitude":-99.1332,"accuracyMeters":8.0,"source":"MobileApp","isActive":true,"isStale":false},"error":null}"""))
+
+        val location = api().location("Bearer monitor", "attempt-1").body()?.data?.resolvedLocation()
+
+        assertEquals(true, location?.available)
+        assertEquals(19.4326, location?.latitude ?: Double.NaN, 0.0)
+        assertEquals(-99.1332, location?.longitude ?: Double.NaN, 0.0)
+        assertEquals("MobileApp", location?.source)
     }
 
     @Test fun parsesTheProductionStatusShape() = runBlocking {

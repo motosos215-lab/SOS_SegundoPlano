@@ -85,7 +85,7 @@ class MonitoringReadinessTest {
     }
 
     @Test fun activeTripShowsMonitoringWithoutReadinessCard() {
-        setAppContent(tripSessionState = TripSessionState.Active)
+        setAppContent(tripSessionState = TripSessionState.Active("00000000-0000-0000-0000-000000000001"))
 
         composeRule.onNodeWithTag("monitoring_screen").assertIsDisplayed()
         composeRule.onAllNodesWithTag("monitoring_readiness_card").assertCountEquals(0)

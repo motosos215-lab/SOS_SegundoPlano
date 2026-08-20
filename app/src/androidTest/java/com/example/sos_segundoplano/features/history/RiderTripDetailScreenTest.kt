@@ -31,7 +31,7 @@ class RiderTripDetailScreenTest {
         composeRule.onNodeWithText("Detalle del viaje").assertIsDisplayed()
         composeRule.onNodeWithText("Finalizado").assertIsDisplayed()
         composeRule.onNodeWithText("01:30:00").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Trayecto aproximado entre inicio y fin").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Recorrido real aún no disponible").assertIsDisplayed()
         composeRule.onNodeWithTag("rider_trip_detail_list")
             .performScrollToNode(hasText("19.43260, -99.13320"))
         composeRule.onNodeWithText("19.43260, -99.13320").assertIsDisplayed()
@@ -39,11 +39,11 @@ class RiderTripDetailScreenTest {
             .performScrollToNode(hasText("19.43500, -99.13600"))
         composeRule.onNodeWithText("19.43500, -99.13600").assertIsDisplayed()
         composeRule.onNodeWithTag("rider_trip_detail_list")
-            .performScrollToNode(hasText("Abrir inicio en mapa"))
-        composeRule.onNodeWithText("Abrir inicio en mapa").assertIsDisplayed()
+            .performScrollToNode(hasText("Abrir inicio en Google Maps"))
+        composeRule.onNodeWithText("Abrir inicio en Google Maps").assertIsDisplayed()
         composeRule.onNodeWithTag("rider_trip_detail_list")
-            .performScrollToNode(hasText("Abrir destino en mapa"))
-        composeRule.onNodeWithText("Abrir destino en mapa").assertIsDisplayed()
+            .performScrollToNode(hasText("Abrir final en Google Maps"))
+        composeRule.onNodeWithText("Abrir final en Google Maps").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Volver al historial").performClick()
         assertEquals(1, backCalls)
     }
@@ -62,7 +62,7 @@ class RiderTripDetailScreenTest {
         composeRule.onNodeWithTag("rider_trip_detail_list")
             .performScrollToNode(hasText("No disponible"))
         composeRule.onNodeWithText("No disponible").assertIsDisplayed()
-        composeRule.onAllNodesWithText("Abrir destino en mapa").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Abrir final en Google Maps").assertCountEquals(0)
     }
 
     @Test fun hidesUnavailableStartActionWhenOnlyDestinationExists() {
@@ -76,10 +76,10 @@ class RiderTripDetailScreenTest {
         }
 
         composeRule.onNodeWithText("Ubicación inicial").assertIsDisplayed()
-        composeRule.onAllNodesWithText("Abrir inicio en mapa").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Abrir inicio en Google Maps").assertCountEquals(0)
         composeRule.onNodeWithTag("rider_trip_detail_list")
-            .performScrollToNode(hasText("Abrir destino en mapa"))
-        composeRule.onNodeWithText("Abrir destino en mapa").assertIsDisplayed()
+            .performScrollToNode(hasText("Abrir final en Google Maps"))
+        composeRule.onNodeWithText("Abrir final en Google Maps").assertIsDisplayed()
     }
 
     private fun finishedTrip() = RiderTripHistoryItem(

@@ -24,6 +24,10 @@
     <uses-permission
         android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
+    <queries>
+        <package android:name="com.google.android.apps.maps" />
+    </queries>
+
     <application
         android:name=".MotoSosApplication"
         android:allowBackup="false"
@@ -42,6 +46,9 @@
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@drawable/ic_motosos_notification" />
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="barcode_ui" />
 
         <service
             android:name=".features.background.MonitoringForegroundService"
@@ -67,6 +74,15 @@
                     android:host="*"
                     android:pathPrefix="/motosos/validation"
                     android:scheme="wear" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".data.wear.PhoneWearActionRpcService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.REQUEST_RECEIVED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/motosos/v1" />
             </intent-filter>
         </service>
 

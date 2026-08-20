@@ -9,6 +9,11 @@ data class CreateIncidentRequestDto(
     val source: String,
     val cause: String,
     val riskLevel: String,
+    val score: Int?,
+    val confidence: Double,
+    val gpsQuality: String,
+    val ruleSetVersion: String,
+    val validationPolicyVersion: String,
     val occurredAtUtc: String,
     val location: IncidentLocationDto? = null,
     val evidenceSummary: IncidentEvidenceSummaryDto? = null

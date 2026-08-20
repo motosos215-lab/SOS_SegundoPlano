@@ -28,7 +28,19 @@ import androidx.compose.ui.unit.dp
 
 class WearPermissionActivity : ComponentActivity() {
     private val permissionChecker by lazy { AndroidWearHealthPermissionChecker(this) }
+    private val signalCaptureLauncher by lazy { WearSignalCaptureLauncher.create(applicationContext) }
+    private val grantCoordinator by lazy {
+        WearPermissionGrantCoordinator(
+            permissionStatus = permissionChecker::status,
+            hasConfirmedActiveTrip = {
+                WearTripStateProvider.get(applicationContext).store.state.value.active == true
+            },
+            requestStartCapture = signalCaptureLauncher::requestStartCapture
+        )
+    }
     private val permissionRefresh = mutableIntStateOf(0)
+    private val captureRetryAvailable = mutableStateOf(false)
+    private var completionHandled = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,11 +49,13 @@ class WearPermissionActivity : ComponentActivity() {
                 refreshSignal = permissionRefresh.intValue,
                 currentStatus = { permissionChecker.status() },
                 missingPermissions = { permissionChecker.missingPermissions() },
+                captureRetryAvailable = captureRetryAvailable.value,
                 onPermissionsResult = { permanentlyDeniedCandidates ->
-                    permissionChecker.status(
+                    resolvePermissionResult(
                         permissionChecker.permanentlyDeniedPermissions(this, permanentlyDeniedCandidates)
                     )
                 },
+                onRetryCapture = { resolvePermissionResult() },
                 onOpenSettings = ::openAppSettings
             )
         }
@@ -50,6 +64,19 @@ class WearPermissionActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         permissionRefresh.intValue += 1
+        if (!completionHandled) resolvePermissionResult()
+    }
+
+    private fun resolvePermissionResult(
+        permanentlyDeniedPermissions: Set<String> = emptySet()
+    ): WearPermissionStatus {
+        val resolution = grantCoordinator.resolve(permanentlyDeniedPermissions)
+        captureRetryAvailable.value = resolution.retryCapture
+        if (resolution.finishPermissionActivity) {
+            completionHandled = true
+            finish()
+        }
+        return resolution.status
     }
 
     private fun openAppSettings() {
@@ -65,6 +92,8 @@ private fun PermissionContent(
     currentStatus: () -> WearPermissionStatus,
     missingPermissions: () -> List<String>,
     onPermissionsResult: (Set<String>) -> WearPermissionStatus,
+    captureRetryAvailable: Boolean,
+    onRetryCapture: () -> WearPermissionStatus,
     onOpenSettings: () -> Unit
 ) {
     var status by remember { mutableStateOf(currentStatus()) }
@@ -108,8 +137,8 @@ private fun PermissionContent(
             Button(onClick = onOpenSettings) {
                 Text(text = "Abrir Ajustes")
             }
-        } else {
-            Button(onClick = { status = currentStatus() }) {
+        } else if (captureRetryAvailable) {
+            Button(onClick = { status = onRetryCapture() }) {
                 Text(text = "Reintentar")
             }
         }

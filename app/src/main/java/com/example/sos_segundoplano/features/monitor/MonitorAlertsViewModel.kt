@@ -6,8 +6,10 @@ import com.example.sos_segundoplano.domain.monitor.MonitorAlertDetail
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertsRepository
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertsResult
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertStatus
+import com.example.sos_segundoplano.domain.monitor.MonitorAlertStatusLocation
 import com.example.sos_segundoplano.domain.monitor.NotificationDeliveryAttemptId
 import com.example.sos_segundoplano.domain.push.PendingMonitorAlertCoordinator
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -67,7 +69,10 @@ class MonitorAlertsViewModel(
         val current = mutableState.value as? MonitorAlertsUiState.Alert ?: return
         viewModelScope.launch {
             when (val result = repository.getAlert(current.attemptId)) {
-                is MonitorAlertsResult.Success -> mutableState.value = current.copy(detail = result.value)
+                is MonitorAlertsResult.Success -> {
+                    mutableState.value = current.copy(detail = result.value)
+                    loadStatus(current.attemptId)
+                }
                 is MonitorAlertsResult.Failure -> mutableState.value = current.copy(notice = MonitorAlertNotice.NonBlockingError(result.message.userMessage()))
             }
         }
@@ -128,15 +133,55 @@ class MonitorAlertsViewModel(
 
     private fun loadStatus(attemptId: NotificationDeliveryAttemptId) {
         viewModelScope.launch {
+            var aggregatedStatus: MonitorAlertStatus? = null
             when (val result = repository.getStatus(attemptId)) {
                 is MonitorAlertsResult.Success -> {
+                    aggregatedStatus = result.value
                     val current = mutableState.value as? MonitorAlertsUiState.Alert ?: return@launch
                     if (current.attemptId == attemptId) mutableState.value = current.copy(status = result.value)
                 }
                 is MonitorAlertsResult.Failure -> Unit
             }
+
+            // The push can arrive before the Rider's location snapshot finishes persisting.
+            // Poll the dedicated endpoint briefly so the Monitor does not get stuck displaying
+            // "location unavailable" just because its first read won the race.
+            repeat(LOCATION_READ_ATTEMPTS) { attempt ->
+                when (val locationResult = repository.getLocationStatus(attemptId)) {
+                    is MonitorAlertsResult.Success -> {
+                        val location = locationResult.value?.takeIf { it.hasUsableCoordinates() }
+                        if (location != null) {
+                            val current = mutableState.value as? MonitorAlertsUiState.Alert ?: return@launch
+                            if (current.attemptId != attemptId) return@launch
+                            val base = current.status ?: aggregatedStatus ?: emptyMonitorAlertStatus()
+                            mutableState.value = current.copy(status = base.copy(location = location))
+                            return@launch
+                        }
+                    }
+                    is MonitorAlertsResult.Failure -> Unit
+                }
+                if (attempt < LOCATION_READ_ATTEMPTS - 1) delay(LOCATION_READ_RETRY_MILLIS)
+            }
         }
     }
+
+    private fun MonitorAlertStatusLocation.hasUsableCoordinates(): Boolean =
+        available != false && latitude != null && longitude != null &&
+            latitude.isFinite() && longitude.isFinite() &&
+            latitude in -90.0..90.0 && longitude in -180.0..180.0 &&
+            !(latitude == 0.0 && longitude == 0.0)
+
+    private fun emptyMonitorAlertStatus() = MonitorAlertStatus(
+        incident = null,
+        trip = null,
+        alertDispatch = null,
+        notifications = null,
+        acknowledgements = null,
+        location = null,
+        overallStatus = null,
+        requiresAttention = null,
+        lastUpdatedAtUtc = null
+    )
 
     private fun consumePendingAlert(notificationDeliveryAttemptId: String?) {
         if (!isMonitorSession()) {
@@ -156,4 +201,9 @@ class MonitorAlertsViewModel(
 
     private fun String?.userMessage(): String = takeUnless { it.isNullOrBlank() } ?: "No pudimos cargar la alerta."
     private fun com.example.sos_segundoplano.domain.monitor.MonitorAlertAcknowledgement.hasFinalResponse(): Boolean = acknowledgedAtUtc != null || declinedAtUtc != null
+
+    private companion object {
+        const val LOCATION_READ_ATTEMPTS = 4
+        const val LOCATION_READ_RETRY_MILLIS = 1_250L
+    }
 }

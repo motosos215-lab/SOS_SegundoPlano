@@ -19,6 +19,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -65,6 +66,8 @@ fun LoginScreen(
     onRememberMeChanged: (Boolean) -> Unit,
     onPasswordVisibilityChanged: () -> Unit,
     onSubmit: () -> Unit,
+    onConfirmTakeover: () -> Unit,
+    onCancelTakeover: () -> Unit,
     onDismissMessage: () -> Unit,
     onRegisterWebSelected: () -> Unit,
     onPasswordRecoverySelected: () -> Unit,
@@ -83,6 +86,60 @@ fun LoginScreen(
         if (state.isPasswordVisible) R.string.login_password_visible else R.string.login_password_hidden
     )
     val submittingDescription = stringResource(R.string.login_submitting_description)
+
+    state.takeoverChallenge?.let { challenge ->
+        val title = stringResource(
+            if (challenge.hasActiveTrip) R.string.login_takeover_trip_title
+            else R.string.login_takeover_title
+        )
+        val deviceName = challenge.activeSession?.deviceName?.takeIf { it.isNotBlank() }
+            ?: stringResource(R.string.login_takeover_unknown_device)
+        val lastSeen = challenge.activeSession?.lastSeenAtUtc?.takeIf { it.isNotBlank() }
+        val message = when {
+            challenge.hasActiveTrip && !challenge.transferDeviceAvailable ->
+                stringResource(R.string.login_takeover_trip_device_missing, deviceName)
+            challenge.hasActiveTrip ->
+                stringResource(R.string.login_takeover_trip_message, deviceName)
+            else ->
+                stringResource(R.string.login_takeover_message, deviceName)
+        } + lastSeen?.let { "\n\n" + stringResource(R.string.login_takeover_last_seen, it) }.orEmpty()
+        AlertDialog(
+            onDismissRequest = { if (!state.isSubmitting) onCancelTakeover() },
+            title = { Text(title) },
+            text = { Text(message) },
+            confirmButton = {
+                Button(
+                    onClick = onConfirmTakeover,
+                    enabled = !state.isSubmitting && (!challenge.hasActiveTrip || challenge.transferDeviceAvailable),
+                    modifier = Modifier.testTag("login_takeover_confirm")
+                ) {
+                    if (state.isSubmitting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(
+                        stringResource(
+                            if (challenge.hasActiveTrip) R.string.login_takeover_transfer_trip
+                            else R.string.login_takeover_confirm
+                        )
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = onCancelTakeover,
+                    enabled = !state.isSubmitting,
+                    modifier = Modifier.testTag("login_takeover_cancel")
+                ) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
 
     Scaffold(
         modifier = modifier
@@ -364,4 +421,11 @@ private fun AuthUiMessage.stringResourceId(): Int = when (this) {
     AuthUiMessage.SessionExpired -> R.string.login_session_expired
     AuthUiMessage.StorageUnavailable -> R.string.login_storage_unavailable
     AuthUiMessage.WebComingSoon -> R.string.login_web_coming_soon
+    AuthUiMessage.SessionRevoked -> R.string.login_session_revoked
+    AuthUiMessage.TakeoverInvalid -> R.string.login_takeover_invalid
+    AuthUiMessage.TakeoverExpired -> R.string.login_takeover_expired
+    AuthUiMessage.TakeoverAlreadyUsed -> R.string.login_takeover_already_used
+    AuthUiMessage.ActiveTripTransferRequired -> R.string.login_active_trip_transfer_required
+    AuthUiMessage.DeviceNotAvailable -> R.string.login_device_not_available
+    AuthUiMessage.ActiveTripNotAvailable -> R.string.login_active_trip_not_available
 }

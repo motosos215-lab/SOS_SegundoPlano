@@ -24,13 +24,21 @@ class ManualSosIncidentCoordinator(
     private val nextClientIncidentId: () -> String = { UUID.randomUUID().toString() },
     private val nextClientAlertRequestId: () -> String = { UUID.randomUUID().toString() },
     private val nowUtc: () -> Instant = Instant::now,
-    private val nowElapsedRealtimeNanos: () -> Long = System::nanoTime
+    private val nowElapsedRealtimeNanos: () -> Long = System::nanoTime,
+    private val currentOwnerUserId: () -> String? = { null },
+    /** Schedules the dedicated manual-SOS recovery worker. Delay is expressed in milliseconds. */
+    private val scheduleRecovery: (Long) -> Unit = {}
 ) {
     private val mutex = Mutex()
     private val inFlightLock = Any()
     private var inFlight: CompletableDeferred<LocalIncident>? = null
 
     suspend fun requestManualSos(
+        progressReporter: ManualSosProgressReporter = ManualSosProgressReporter {}
+    ): LocalIncident = requestManualSos(ManualSosSubmissionOptions(), progressReporter)
+
+    suspend fun requestManualSos(
+        options: ManualSosSubmissionOptions,
         progressReporter: ManualSosProgressReporter = ManualSosProgressReporter {}
     ): LocalIncident {
         val (request, owner) = synchronized(inFlightLock) {
@@ -45,7 +53,7 @@ class ManualSosIncidentCoordinator(
         }
         if (!owner) return request.await()
         return try {
-            performRequest(progressReporter).also(request::complete)
+            performRequest(options, progressReporter).also(request::complete)
         } catch (failure: Throwable) {
             request.completeExceptionally(failure)
             throw failure
@@ -56,29 +64,53 @@ class ManualSosIncidentCoordinator(
         }
     }
 
-    private suspend fun performRequest(progressReporter: ManualSosProgressReporter): LocalIncident = mutex.withLock {
-        val pendingLink = remoteIncidentLinkStore.readPendingManualSos()
+    /**
+     * Background-only recovery seam. It NEVER creates a new manual SOS: if the durable pending
+     * identity has already been acknowledged, this returns null. Sharing [mutex] with the foreground
+     * request also prevents a recovery worker from racing a one-tap send.
+     */
+    suspend fun retryPendingManualSos(): LocalIncident? = mutex.withLock {
+        val pending = readPendingManualSosForCurrentOwner() ?: return@withLock null
+        val incident = pending.toLocalIncident()
+        val result = remoteCreator.createManualSosAlert(incident)
+        incidentStore.add(result)
+        result
+    }
+
+    private suspend fun performRequest(
+        options: ManualSosSubmissionOptions,
+        progressReporter: ManualSosProgressReporter
+    ): LocalIncident = mutex.withLock {
+        val pendingLink = readPendingManualSosForCurrentOwner()
         progressReporter.report(
             if (pendingLink == null) ManualSosRequestState.Preparing else ManualSosRequestState.Retrying
         )
         val incident = if (pendingLink != null) {
             pendingLink.toLocalIncident()
         } else {
-            createAndPersistLocalAttempt()
+            createAndPersistLocalAttempt(options)
         }
         if (incident.remoteCreationStatus is IncidentRemoteCreationStatus.InvalidResponse) {
             return@withLock incidentStore.add(incident).also {
                 progressReporter.report(ManualSosRequestState.RetryableFailure)
             }
         }
-        if (pendingLink == null) enqueueOfflineWithoutBlocking(incident)
+        if (pendingLink == null) {
+            // SharedPreferences is the authoritative durable identity for manual SOS recovery.
+            // The delayed worker is a process-death safety net; foreground remains the first sender.
+            scheduleRecovery(MANUAL_RECOVERY_SAFETY_DELAY_MILLIS)
+            enqueueOfflineWithoutBlocking(incident)
+        }
         val result = remoteCreator.createManualSosAlert(incident, progressReporter)
         incidentStore.add(result)
+        if (result.remoteCreationStatus !is IncidentRemoteCreationStatus.Success && result.remoteCreationStatus.isManualSosRetryable()) {
+            scheduleRecovery(MANUAL_RECOVERY_RETRY_MILLIS)
+        }
         progressReporter.report(result.toRequestState())
         result
     }
 
-    private fun createAndPersistLocalAttempt(): LocalIncident {
+    private fun createAndPersistLocalAttempt(options: ManualSosSubmissionOptions): LocalIncident {
         val detectedAtUtc = nowUtc()
         val incident = newLocalIncident(
             localIncidentId = nextIncidentId(),
@@ -94,7 +126,10 @@ class ManualSosIncidentCoordinator(
                 updatedAtEpochMillis = detectedAtUtc.toEpochMilli(),
                 clientAlertRequestId = nextClientAlertRequestId(),
                 detectedAtUtc = detectedAtUtc.toString(),
-                remoteAlertDispatchId = null
+                remoteAlertDispatchId = null,
+                manualSeverity = options.severity.apiValue,
+                manualPriority = options.priority.apiValue,
+                ownerUserId = currentOwnerUserId()?.trim()?.takeIf { it.isNotEmpty() }
             )
         )
         return if (persisted) incident else incident.copy(
@@ -139,19 +174,49 @@ class ManualSosIncidentCoordinator(
         }
     }
 
+    private fun readPendingManualSosForCurrentOwner(): RemoteIncidentLink? {
+        val pending = remoteIncidentLinkStore.readPendingManualSos() ?: return null
+        val owner = currentOwnerUserId()?.trim()?.takeIf { it.isNotEmpty() }
+        return if (owner == null) {
+            // Keeps legacy/unit-test records usable while preventing a new owner-scoped SOS from
+            // being retried before the Rider session is restored.
+            pending.takeIf { it.ownerUserId == null }
+        } else {
+            pending.takeIf { it.ownerUserId == owner }
+        }
+    }
+
     private fun LocalIncident.toRequestState(): ManualSosRequestState = when (val status = remoteCreationStatus) {
         is IncidentRemoteCreationStatus.Success -> ManualSosRequestState.Sent
-        is IncidentRemoteCreationStatus.MissingRequiredData -> if (status.sanitizedMessage == "manual_sos_location_missing") {
-            ManualSosRequestState.LocationUnavailable
+        // Once the durable link exists, lack of network/location/runtime context is not a failed
+        // manual SOS. The worker owns delivery and the Rider does not need to press SOS again.
+        else -> if (status.isManualSosRetryable() && readPendingManualSosForCurrentOwner() != null) {
+            ManualSosRequestState.SavedOffline
         } else {
             ManualSosRequestState.RetryableFailure
         }
-        else -> ManualSosRequestState.RetryableFailure
+    }
+
+    private fun IncidentRemoteCreationStatus.isManualSosRetryable(): Boolean = when (this) {
+        is IncidentRemoteCreationStatus.Success -> false
+        is IncidentRemoteCreationStatus.NetworkUnavailable,
+        is IncidentRemoteCreationStatus.Timeout,
+        is IncidentRemoteCreationStatus.MissingRequiredData,
+        IncidentRemoteCreationStatus.Pending,
+        IncidentRemoteCreationStatus.NotRequested,
+        IncidentRemoteCreationStatus.DuplicateAttempt -> true
+        is IncidentRemoteCreationStatus.HttpError -> statusCode == 401 || statusCode == 408 || statusCode == 409 || statusCode == 429 || statusCode >= 500
+        is IncidentRemoteCreationStatus.InvalidResponse -> sanitizedMessage in setOf(
+            "access_token_invalid",
+            "manual_sos_result_persistence_failed"
+        )
     }
 
     private companion object {
         const val MANUAL_RULE_SET_VERSION = "manual-sos"
         const val MANUAL_POLICY_VERSION = "manual-sos-v1"
         const val MANUAL_CONTEXT_ID = 0L
+        const val MANUAL_RECOVERY_SAFETY_DELAY_MILLIS = 15_000L
+        const val MANUAL_RECOVERY_RETRY_MILLIS = 30_000L
     }
 }

@@ -13,7 +13,7 @@ interface OfflineQueueSyncRepository {
     suspend fun decryptPayload(item: ClaimedOfflineQueueItem): OfflineCryptoResult<OfflineSyncPayload>
     suspend fun markSent(claim: OfflineQueueClaim, ackSanitized: String, nowMillis: Long): OfflineQueueTransitionResult
     suspend fun markRetry(claim: OfflineQueueClaim, category: OfflineSyncErrorCategory, code: String?, sanitizedMessage: String?, nextAttemptAtMillis: Long, nowMillis: Long): OfflineQueueTransitionResult
-    suspend fun markNotConfigured(claim: OfflineQueueClaim, code: String?, sanitizedMessage: String?, nextAttemptAtMillis: Long, nowMillis: Long): OfflineQueueTransitionResult
+    suspend fun markNotConfigured(claim: OfflineQueueClaim, code: String?, sanitizedMessage: String?, nextAttemptAtMillis: Long?, nowMillis: Long): OfflineQueueTransitionResult
     suspend fun markPermanentFailure(claim: OfflineQueueClaim, category: OfflineSyncErrorCategory, code: String?, sanitizedMessage: String?, nowMillis: Long): OfflineQueueTransitionResult
     suspend fun hasUnfinishedWork(): Boolean
     suspend fun earliestPendingAttemptAt(nowMillis: Long): Long?

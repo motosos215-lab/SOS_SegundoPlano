@@ -37,7 +37,7 @@ class TripRemoteStartIntegrationTest {
             timingStore = timing,
             startTrip = {
                 order += "local-session"
-                TripSessionState.Active
+                TripSessionState.Active("00000000-0000-0000-0000-000000000001")
             }
         )
 
@@ -68,7 +68,7 @@ class TripRemoteStartIntegrationTest {
             },
             startTrip = {
                 localStartCalls++
-                TripSessionState.Active
+                TripSessionState.Active("00000000-0000-0000-0000-000000000001")
             }
         )
 
@@ -105,8 +105,9 @@ private class CountingTimingStore : TripTimingStore {
     var beginCalls = 0
         private set
 
-    override fun beginConfirmedTrip() {
+    override fun beginConfirmedTrip(tripSessionKey: String?) {
         beginCalls++
+        mutableStates.value = TripTimingState.Active(0L, tripSessionKey)
     }
 
     override fun clear() {

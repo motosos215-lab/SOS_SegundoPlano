@@ -4,6 +4,16 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.sos_segundoplano.domain.offline.OfflineEventType
 import com.example.sos_segundoplano.domain.offline.OfflineQueueStatus
+import com.example.sos_segundoplano.domain.offline.OfflineQueueConfig
+import com.example.sos_segundoplano.domain.offline.WallClock
+import com.example.sos_segundoplano.domain.offline.isPersisted
+import com.example.sos_segundoplano.domain.rules.GpsQualityStatus
+import com.example.sos_segundoplano.domain.rules.RiskLevel
+import com.example.sos_segundoplano.domain.validation.AlertDispatchRequest
+import com.example.sos_segundoplano.domain.validation.AlertPayloadSummary
+import com.example.sos_segundoplano.domain.validation.AlertPriority
+import com.example.sos_segundoplano.domain.validation.IncidentCause
+import com.example.sos_segundoplano.domain.validation.LocalIncident
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -12,10 +22,12 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import java.security.KeyStore
+import javax.crypto.spec.SecretKeySpec
 
 class OfflineQueueDatabaseInstrumentedTest {
     private var database: OfflineQueueDatabase? = null
@@ -127,6 +139,191 @@ class OfflineQueueDatabaseInstrumentedTest {
         assertTrue(dao.insertBundle(incident, request) is BundleInsertResult.Persisted)
     }
 
+    @Test fun migrationFromVersionOnePreservesLegacyRowsWithoutAssigningOwnerOrBundle() {
+        runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val name = "offline_queue_migration_test.db"
+        context.deleteDatabase(name)
+        context.openOrCreateDatabase(name, android.content.Context.MODE_PRIVATE, null).use { legacy ->
+            legacy.execSQL(
+                "CREATE TABLE offline_queue_items (queueItemId INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "idempotencyKey TEXT NOT NULL, eventType TEXT NOT NULL, priority INTEGER NOT NULL, " +
+                    "payloadSchemaVersion INTEGER NOT NULL, encryptedPayload BLOB NOT NULL, encryptionNonce BLOB NOT NULL, " +
+                    "encryptionKeyVersion INTEGER NOT NULL, sourceSessionId INTEGER, sourceAssessmentId INTEGER, " +
+                    "sourceEventId TEXT NOT NULL, occurredAtEpochMillis INTEGER NOT NULL, enqueuedAtEpochMillis INTEGER NOT NULL, " +
+                    "updatedAtEpochMillis INTEGER NOT NULL, lastAttemptAtEpochMillis INTEGER, nextAttemptAtEpochMillis INTEGER, " +
+                    "sentAtEpochMillis INTEGER, attemptCount INTEGER NOT NULL, status TEXT NOT NULL, claimedAtEpochMillis INTEGER, " +
+                    "claimedBy TEXT, claimToken TEXT, lastErrorCategory TEXT, lastErrorCode TEXT, " +
+                    "lastErrorMessageSanitized TEXT, ackSanitized TEXT)"
+            )
+            legacy.execSQL("CREATE UNIQUE INDEX index_offline_queue_items_idempotencyKey ON offline_queue_items(idempotencyKey)")
+            legacy.execSQL("CREATE INDEX index_offline_queue_items_status_nextAttemptAtEpochMillis_priority_occurredAtEpochMillis ON offline_queue_items(status, nextAttemptAtEpochMillis, priority, occurredAtEpochMillis)")
+            legacy.execSQL("CREATE INDEX index_offline_queue_items_claimedAtEpochMillis ON offline_queue_items(claimedAtEpochMillis)")
+            legacy.execSQL(
+                "CREATE TABLE offline_sync_errors (errorId INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, queueItemId INTEGER NOT NULL, " +
+                    "idempotencyKey TEXT NOT NULL, eventType TEXT NOT NULL, category TEXT NOT NULL, code TEXT, sanitizedMessage TEXT, " +
+                    "attemptNumber INTEGER NOT NULL, occurredAtEpochMillis INTEGER NOT NULL, isPermanent INTEGER NOT NULL)"
+            )
+            legacy.execSQL("CREATE INDEX index_offline_sync_errors_queueItemId ON offline_sync_errors(queueItemId)")
+            legacy.execSQL("CREATE INDEX index_offline_sync_errors_occurredAtEpochMillis ON offline_sync_errors(occurredAtEpochMillis)")
+            legacy.execSQL("INSERT INTO offline_queue_items (idempotencyKey, eventType, priority, payloadSchemaVersion, encryptedPayload, encryptionNonce, encryptionKeyVersion, sourceEventId, occurredAtEpochMillis, enqueuedAtEpochMillis, updatedAtEpochMillis, attemptCount, status) VALUES ('legacy:v1', 'local-incident', 20, 1, X'01', X'010203040506070809101112', 1, 'legacy', 1, 1, 1, 0, 'Pending')")
+            legacy.version = 1
+        }
+
+        val migrated = Room.databaseBuilder(context, OfflineQueueDatabase::class.java, name)
+            .addMigrations(OfflineQueueDatabase.MIGRATION_1_2, OfflineQueueDatabase.MIGRATION_2_3)
+            .build()
+        database = migrated
+        val legacy = migrated.offlineQueueDao().getByIdempotencyKey("legacy:v1")
+
+        assertNull(legacy?.ownerUserId)
+        assertNull(legacy?.bundleKey)
+        assertNull(legacy?.remoteIncidentId)
+        assertNull(legacy?.remoteAlertDispatchId)
+        assertNull(legacy?.remoteSuccessAtEpochMillis)
+        migrated.close()
+        database = null
+        context.deleteDatabase(name)
+        }
+    }
+
+    @Test fun ownerScopedBundleLookupNeverReturnsAnotherRiderOrLegacyRows() = runBlocking {
+        val dao = inMemoryDatabase().offlineQueueDao()
+        val ownerAIncident = entity("local-incident:owner-a:v1").copy(ownerUserId = "rider-a", bundleKey = "bundle-a")
+        val ownerARequest = entity("alert-dispatch-request:owner-a:v1").copy(ownerUserId = "rider-a", bundleKey = "bundle-a")
+        val ownerBIncident = entity("local-incident:owner-b:v1").copy(ownerUserId = "rider-b", bundleKey = "bundle-b")
+        val legacy = entity("local-incident:legacy:v1")
+
+        dao.insertBundle(ownerAIncident, ownerARequest)
+        dao.insertIgnore(ownerBIncident)
+        dao.insertIgnore(legacy)
+
+        assertEquals(2, dao.bundleForOwner("rider-a", "bundle-a").size)
+        assertTrue(dao.bundleForOwner("rider-b", "bundle-a").isEmpty())
+        assertEquals(listOf("bundle-a"), dao.recoverableBundleKeysForOwner("rider-a"))
+        assertEquals(listOf("bundle-b"), dao.recoverableBundleKeysForOwner("rider-b"))
+    }
+
+    @Test fun automaticBundleClaimAndReceiptAreAtomicAndOwnerScoped() = runBlocking {
+        val dao = inMemoryDatabase().offlineQueueDao()
+        val incident = entity("local-incident:atomic:v1").copy(ownerUserId = "rider-a", bundleKey = "bundle-a")
+        val request = entity("alert-dispatch-request:atomic:v1").copy(ownerUserId = "rider-a", bundleKey = "bundle-a")
+        val incomplete = entity("local-incident:incomplete:v1").copy(ownerUserId = "rider-a", bundleKey = "bundle-incomplete")
+        val otherOwner = entity("local-incident:other:v1").copy(ownerUserId = "rider-b", bundleKey = "bundle-b")
+        dao.insertBundle(incident, request)
+        dao.insertIgnore(incomplete)
+        dao.insertIgnore(otherOwner)
+
+        assertTrue(dao.claimAutomaticBundle("rider-b", "bundle-a", "worker-b", 1_000L).isEmpty())
+        assertTrue(dao.claimAutomaticBundle("rider-a", "bundle-incomplete", "worker-a", 1_000L).isEmpty())
+        val claimed = dao.claimAutomaticBundle("rider-a", "bundle-a", "worker-a", 1_000L)
+        assertEquals(2, claimed.size)
+        assertTrue(claimed.all { it.status == OfflineQueueStatus.InFlight.name })
+        assertEquals(1, claimed.map { it.claimToken }.distinct().size)
+        assertEquals(1, claimed.map { it.claimedAtEpochMillis }.distinct().size)
+        assertTrue(dao.claimAutomaticBundle("rider-a", "bundle-a", "worker-other", 1_001L).isEmpty())
+
+        val token = requireNotNull(claimed.first().claimToken)
+        assertEquals(0, dao.acknowledgeAutomaticBundle("rider-a", "bundle-a", "worker-a", "wrong", "incident-remote", "dispatch-remote", 1_100L))
+        assertTrue(dao.acknowledgeAutomaticBundleAtomically("rider-a", "bundle-a", "worker-a", token, "incident-remote", "dispatch-remote", 1_100L))
+        val sent = dao.bundleForOwner("rider-a", "bundle-a")
+        assertTrue(sent.all { it.status == OfflineQueueStatus.Sent.name && it.claimToken == null && it.claimedBy == null })
+        assertTrue(sent.all { it.remoteIncidentId == "incident-remote" && it.remoteAlertDispatchId == "dispatch-remote" && it.remoteSuccessAtEpochMillis == 1_100L })
+        assertTrue(dao.claimAutomaticBundle("rider-a", "bundle-a", "worker-restart", 2_000L).isEmpty())
+        assertEquals(listOf("bundle-a"), dao.confirmedAutomaticBundleKeysForOwner("rider-a"))
+    }
+
+    @Test fun earliestAutomaticRetryIsOwnerScopedAndUsesNearestCompleteBundle() = runBlocking {
+        val dao = inMemoryDatabase().offlineQueueDao()
+        suspend fun retryBundle(owner: String, key: String, at: Long) {
+            dao.insertBundle(
+                entity("local-incident:$key:v1").copy(ownerUserId = owner, bundleKey = key),
+                entity("alert-dispatch-request:$key:v1").copy(ownerUserId = owner, bundleKey = key)
+            )
+            val claimed = dao.claimAutomaticBundle(owner, key, "worker-$key", 1_000L)
+            dao.releaseAutomaticBundle(owner, key, "worker-$key", requireNotNull(claimed.first().claimToken), "RetryPending", "Transport", "network", "temporary", at, 1_100L)
+        }
+        retryBundle("rider-a", "later", 120_000L)
+        retryBundle("rider-a", "earlier", 30_000L)
+        retryBundle("rider-b", "other-rider", 1_000L)
+        dao.insertIgnore(entity("local-incident:legacy:v1").copy(status = OfflineQueueStatus.RetryPending.name, nextAttemptAtEpochMillis = 1L))
+
+        assertEquals(30_000L, dao.earliestAutomaticBundleRetryForOwner("rider-a"))
+        assertEquals(1_000L, dao.earliestAutomaticBundleRetryForOwner("rider-b"))
+    }
+
+    @Test fun migrationFromVersionTwoPreservesBundleAndAddsEmptyReceipt() {
+        runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val name = "offline_queue_v2_migration_test.db"
+        context.deleteDatabase(name)
+        context.openOrCreateDatabase(name, android.content.Context.MODE_PRIVATE, null).use { versionTwo ->
+            versionTwo.execSQL(
+                "CREATE TABLE offline_queue_items (queueItemId INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                    "idempotencyKey TEXT NOT NULL, eventType TEXT NOT NULL, priority INTEGER NOT NULL, payloadSchemaVersion INTEGER NOT NULL, " +
+                    "encryptedPayload BLOB NOT NULL, encryptionNonce BLOB NOT NULL, encryptionKeyVersion INTEGER NOT NULL, ownerUserId TEXT, bundleKey TEXT, " +
+                    "sourceSessionId INTEGER, sourceAssessmentId INTEGER, sourceEventId TEXT NOT NULL, occurredAtEpochMillis INTEGER NOT NULL, " +
+                    "enqueuedAtEpochMillis INTEGER NOT NULL, updatedAtEpochMillis INTEGER NOT NULL, lastAttemptAtEpochMillis INTEGER, " +
+                    "nextAttemptAtEpochMillis INTEGER, sentAtEpochMillis INTEGER, attemptCount INTEGER NOT NULL, status TEXT NOT NULL, " +
+                    "claimedAtEpochMillis INTEGER, claimedBy TEXT, claimToken TEXT, lastErrorCategory TEXT, lastErrorCode TEXT, " +
+                    "lastErrorMessageSanitized TEXT, ackSanitized TEXT)"
+            )
+            versionTwo.execSQL("CREATE UNIQUE INDEX index_offline_queue_items_idempotencyKey ON offline_queue_items(idempotencyKey)")
+            versionTwo.execSQL("CREATE INDEX index_offline_queue_items_status_nextAttemptAtEpochMillis_priority_occurredAtEpochMillis ON offline_queue_items(status, nextAttemptAtEpochMillis, priority, occurredAtEpochMillis)")
+            versionTwo.execSQL("CREATE INDEX index_offline_queue_items_claimedAtEpochMillis ON offline_queue_items(claimedAtEpochMillis)")
+            versionTwo.execSQL("CREATE INDEX index_offline_queue_items_ownerUserId_bundleKey ON offline_queue_items(ownerUserId, bundleKey)")
+            versionTwo.execSQL("CREATE TABLE offline_sync_errors (errorId INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, queueItemId INTEGER NOT NULL, idempotencyKey TEXT NOT NULL, eventType TEXT NOT NULL, category TEXT NOT NULL, code TEXT, sanitizedMessage TEXT, attemptNumber INTEGER NOT NULL, occurredAtEpochMillis INTEGER NOT NULL, isPermanent INTEGER NOT NULL)")
+            versionTwo.execSQL("CREATE INDEX index_offline_sync_errors_queueItemId ON offline_sync_errors(queueItemId)")
+            versionTwo.execSQL("CREATE INDEX index_offline_sync_errors_occurredAtEpochMillis ON offline_sync_errors(occurredAtEpochMillis)")
+            versionTwo.execSQL("INSERT INTO offline_queue_items (idempotencyKey, eventType, priority, payloadSchemaVersion, encryptedPayload, encryptionNonce, encryptionKeyVersion, ownerUserId, bundleKey, sourceEventId, occurredAtEpochMillis, enqueuedAtEpochMillis, updatedAtEpochMillis, attemptCount, status) VALUES ('local-incident:v2:v1', 'local-incident', 20, 1, X'01', X'010203040506070809101112', 1, 'rider-a', 'bundle-a', 'v2', 1, 1, 1, 0, 'RetryPending')")
+            versionTwo.version = 2
+        }
+        val migrated = Room.databaseBuilder(context, OfflineQueueDatabase::class.java, name)
+            .addMigrations(OfflineQueueDatabase.MIGRATION_1_2, OfflineQueueDatabase.MIGRATION_2_3)
+            .build()
+        database = migrated
+        val row = migrated.offlineQueueDao().getByIdempotencyKey("local-incident:v2:v1")
+        assertEquals("rider-a", row?.ownerUserId)
+        assertEquals("bundle-a", row?.bundleKey)
+        assertEquals(OfflineQueueStatus.RetryPending.name, row?.status)
+        assertNull(row?.remoteIncidentId)
+        assertNull(row?.remoteAlertDispatchId)
+        assertNull(row?.remoteSuccessAtEpochMillis)
+        migrated.close()
+        database = null
+        context.deleteDatabase(name)
+        }
+    }
+
+    @Test fun newAutomaticBundlePersistsOneOwnerAndOneStableBundleKey() = runBlocking {
+        val db = inMemoryDatabase()
+        val repository = RoomOfflineQueueRepository(
+            queueDao = db.offlineQueueDao(),
+            errorDao = db.syncErrorDao(),
+            crypto = AesGcmOfflineQueueCrypto(
+                keyVersion = 1,
+                secretKeyProvider = { SecretKeySpec(ByteArray(32) { 1 }, "AES") }
+            ),
+            serializer = OfflineQueueSerializer(),
+            clock = WallClock { 1_000L },
+            config = OfflineQueueConfig(),
+            dispatcher = Dispatchers.Unconfined,
+            currentRiderOwnerId = { "rider-a" }
+        )
+        val incident = automaticIncident()
+        val request = automaticRequest(incident)
+
+        assertTrue(repository.enqueueIncidentBundle(incident, request).isPersisted)
+        assertTrue(repository.enqueueIncidentBundle(incident, request).isPersisted)
+
+        val rows = db.offlineQueueDao().bundleForOwner("rider-a", CLIENT_INCIDENT_ID)
+        assertEquals(2, rows.size)
+        assertTrue(rows.all { it.ownerUserId == "rider-a" && it.bundleKey == CLIENT_INCIDENT_ID })
+        val restored = repository.recoverableIncidentBundleForCurrentRider(CLIENT_INCIDENT_ID)
+        assertEquals(CLIENT_INCIDENT_ID, restored?.bundleKey)
+        assertEquals("rider-a", restored?.ownerUserId)
+    }
+
     @Test fun lastAttemptAtOnlyChangesOnClaim() = runBlocking {
         val dao = inMemoryDatabase().offlineQueueDao()
         val id = dao.insertIgnore(entity("minor-event:99:v1"))
@@ -227,4 +424,52 @@ class OfflineQueueDatabaseInstrumentedTest {
         occurredAtEpochMillis = at,
         isPermanent = false
     )
+
+    private fun automaticIncident() = LocalIncident(
+        incidentId = 101L,
+        sessionId = 102L,
+        assessmentId = 103L,
+        windowId = 104L,
+        createdAtElapsedRealtimeNanos = 105L,
+        cause = IncidentCause.Timeout,
+        score = 70,
+        riskLevel = RiskLevel.High,
+        confidence = 0.9,
+        relevantOutcomes = emptyList(),
+        ruleSetVersion = "rules",
+        validationPolicyVersion = "policy",
+        gpsQuality = GpsQualityStatus.Good,
+        clientIncidentId = CLIENT_INCIDENT_ID,
+        detectedAtEpochMillis = 1_725_000_123_456L,
+        latitude = 19.4326,
+        longitude = -99.1332,
+        remoteTripId = "trip-1"
+    )
+
+    private fun automaticRequest(incident: LocalIncident) = AlertDispatchRequest(
+        requestId = 106L,
+        incidentId = incident.incidentId,
+        sessionId = incident.sessionId,
+        assessmentId = incident.assessmentId,
+        priority = AlertPriority.High,
+        reason = incident.cause,
+        createdAtElapsedRealtimeNanos = 107L,
+        score = incident.score,
+        confidence = incident.confidence,
+        payload = AlertPayloadSummary(
+            incident.sessionId,
+            incident.assessmentId,
+            incident.incidentId,
+            incident.score,
+            incident.riskLevel,
+            incident.cause,
+            "policy"
+        ),
+        clientAlertRequestId = CLIENT_ALERT_ID
+    )
+
+    private companion object {
+        const val CLIENT_INCIDENT_ID = "11111111-1111-1111-1111-111111111111"
+        const val CLIENT_ALERT_ID = "22222222-2222-2222-2222-222222222222"
+    }
 }

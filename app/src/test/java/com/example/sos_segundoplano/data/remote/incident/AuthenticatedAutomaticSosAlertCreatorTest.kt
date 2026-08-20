@@ -1,0 +1,313 @@
+package com.example.sos_segundoplano.data.remote.incident
+
+import com.example.sos_segundoplano.data.remote.trip.ActiveTripLookupResult
+import com.example.sos_segundoplano.data.remote.trip.ActiveTripRemoteResolver
+import com.example.sos_segundoplano.data.remote.trip.InMemoryRemoteTripSessionStore
+import com.example.sos_segundoplano.domain.auth.AccessToken
+import com.example.sos_segundoplano.domain.auth.AuthResult
+import com.example.sos_segundoplano.domain.auth.AuthUser
+import com.example.sos_segundoplano.domain.auth.SessionState
+import com.example.sos_segundoplano.domain.auth.UserRole
+import com.example.sos_segundoplano.domain.repository.AuthRepository
+import com.example.sos_segundoplano.domain.rules.GpsQualityStatus
+import com.example.sos_segundoplano.domain.rules.RiskLevel
+import com.example.sos_segundoplano.domain.signals.LocationSample
+import com.example.sos_segundoplano.domain.validation.AlertDispatchRequest
+import com.example.sos_segundoplano.domain.validation.AlertPayloadSummary
+import com.example.sos_segundoplano.domain.validation.AlertPriority
+import com.example.sos_segundoplano.domain.validation.IncidentCause
+import com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus
+import com.example.sos_segundoplano.domain.validation.LocalIncident
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.util.ArrayDeque
+
+class AuthenticatedAutomaticSosAlertCreatorTest {
+    @Test fun timeoutUsesCanonicalMobileSosRequestWithDurableValues() = runBlocking {
+        val remote = RecordingRemote(success())
+        val result = creator(remote).createAutomaticSosAlert(incident(IncidentCause.Timeout), request())
+
+        val sent = remote.requests.single()
+        assertEquals("CountdownTimeout", sent.incidentType)
+        assertEquals("CountdownTimeout", sent.reason)
+        assertEquals(CLIENT_INCIDENT_ID, sent.clientIncidentId)
+        assertEquals(CLIENT_ALERT_ID, sent.clientAlertRequestId)
+        assertEquals("2024-08-01T12:00:00Z", sent.detectedAtUtc)
+        assertEquals("High", sent.severity)
+        assertEquals("High", sent.priority)
+        assertEquals(IncidentRemoteCreationStatus.Success("incident-1"), result.remoteCreationStatus)
+    }
+
+    @Test fun criticalEventKeepsHighRiskAndCriticalPriority() = runBlocking {
+        val remote = RecordingRemote(success())
+        val criticalRequest = request().copy(
+            priority = AlertPriority.Critical,
+            reason = IncidentCause.CriticalPhysicalEvent
+        )
+
+        creator(remote).createAutomaticSosAlert(incident(IncidentCause.CriticalPhysicalEvent), criticalRequest)
+
+        val sent = remote.requests.single()
+        assertEquals("CriticalEvent", sent.incidentType)
+        assertEquals("High", sent.severity)
+        assertEquals("Critical", sent.priority)
+        assertEquals("CriticalEvent", sent.reason)
+    }
+
+    @Test fun userRequestedHelpUsesCanonicalMobileSosRequest() = runBlocking {
+        val remote = RecordingRemote(success())
+        creator(remote).createAutomaticSosAlert(incident(IncidentCause.UserRequestedHelp), request())
+
+        assertEquals("UserRequestedHelp", remote.requests.single().incidentType)
+        assertEquals("UserRequestedHelp", remote.requests.single().reason)
+    }
+
+    @Test fun captureLocationUsesExistingLocationWithoutQueryingProviderAndPreservesIt() = runBlocking {
+        var providerCalls = 0
+        val creator = creator(
+            RecordingRemote(success()),
+            locationProvider = ManualSosLocationProvider {
+                providerCalls++
+                error("provider must not be called")
+            }
+        )
+
+        val captured = creator.captureLocation(incident(IncidentCause.Timeout))
+
+        assertEquals(0, providerCalls)
+        assertEquals(19.4326, captured.latitude)
+        assertEquals(-99.1332, captured.longitude)
+    }
+
+    @Test fun resolveRemoteTripReturnsDurableTripBeforeSubmission() = runBlocking {
+        val resolved = creator(RecordingRemote(success())).resolveRemoteTrip(
+            incident(IncidentCause.Timeout).copy(remoteTripId = null)
+        )
+
+        assertEquals("trip-1", resolved.remoteTripId)
+        assertEquals(IncidentRemoteCreationStatus.Pending, resolved.remoteCreationStatus)
+    }
+
+    @Test fun missingLocationDoesNotSubmitHttpRequest() = runBlocking {
+        val remote = RecordingRemote(success())
+        val creator = creator(remote, locationProvider = ManualSosLocationProvider { null })
+        val located = creator.captureLocation(incident(IncidentCause.Timeout).copy(latitude = null, longitude = null))
+        val result = creator.createAutomaticSosAlert(located, request())
+
+        assertEquals(IncidentRemoteCreationStatus.MissingRequiredData("location_unavailable"), result.remoteCreationStatus)
+        assertTrue(remote.requests.isEmpty())
+    }
+
+    @Test fun createdIncidentAndDispatchRemainSuccessEvenWhenNoAttemptIsStillPrepared() = runBlocking {
+        val remote = RecordingRemote(
+            ManualSosAlertSubmissionStatus.Success("incident-1", "dispatch-1", emptyList(), ManualSosAlertSummaryDto(totalPrepared = 0))
+        )
+
+        val result = creator(remote).createAutomaticSosAlert(incident(IncidentCause.Timeout), request())
+
+        assertEquals(IncidentRemoteCreationStatus.Success("incident-1"), result.remoteCreationStatus)
+        assertEquals("dispatch-1", result.remoteAlertDispatchId)
+    }
+
+    @Test fun recoveryInputReusesEveryDurableRequestValue() = runBlocking {
+        val remote = RecordingRemote(success())
+        val input = AutomaticSosRequestInput(
+            CLIENT_INCIDENT_ID, CLIENT_ALERT_ID, 1_722_513_600_000L,
+            19.4326, -99.1332, "trip-durable", IncidentCause.Timeout, RiskLevel.High, AlertPriority.High
+        )
+
+        val result = creator(remote).submit(input)
+
+        val sent = remote.requests.single()
+        assertEquals(CLIENT_INCIDENT_ID, sent.clientIncidentId)
+        assertEquals(CLIENT_ALERT_ID, sent.clientAlertRequestId)
+        assertEquals("trip-durable", sent.tripId)
+        assertEquals("2024-08-01T12:00:00Z", sent.detectedAtUtc)
+        assertEquals(19.4326, sent.latitude, 0.0)
+        assertEquals(-99.1332, sent.longitude, 0.0)
+        assertEquals(AutomaticSosSubmissionResult.Success("incident-1", "dispatch-1"), result)
+    }
+
+
+    @Test fun automaticSuccessPublishesEmergencyLocationForMonitor() = runBlocking {
+        val publisher = RecordingLocationPublisher()
+        val result = creator(RecordingRemote(success()), emergencyLocationPublisher = publisher)
+            .createAutomaticSosAlert(incident(IncidentCause.Timeout), request())
+
+        assertEquals(IncidentRemoteCreationStatus.Success("incident-1"), result.remoteCreationStatus)
+        val snapshot = publisher.snapshots.single()
+        assertEquals("incident-1", snapshot.incidentId)
+        assertEquals(19.4326, snapshot.latitude, 0.0)
+        assertEquals(-99.1332, snapshot.longitude, 0.0)
+        assertEquals("2024-08-01T12:00:00Z", snapshot.recordedAtUtc)
+    }
+
+    @Test fun automaticSuccessRetainsRemoteAlertDispatchReceipt() = runBlocking {
+        val result = creator(RecordingRemote(success())).createAutomaticSosAlert(incident(IncidentCause.Timeout), request())
+
+        assertEquals("dispatch-1", result.remoteAlertDispatchId)
+    }
+
+
+    @Test fun transientNetworkFailureRetriesSameAutomaticRequestOnceThenSucceeds() = runTest {
+        val remote = SequencedRemote(
+            listOf(
+                ManualSosAlertSubmissionStatus.NetworkUnavailable("network_unavailable"),
+                success()
+            )
+        )
+        val result = creator(remote, transientRetryDelayMillis = 1L).submit(
+            AutomaticSosRequestInput(
+                CLIENT_INCIDENT_ID, CLIENT_ALERT_ID, 1_722_513_600_000L,
+                19.4326, -99.1332, "trip-durable", IncidentCause.Timeout, RiskLevel.High, AlertPriority.High
+            )
+        )
+
+        assertEquals(AutomaticSosSubmissionResult.Success("incident-1", "dispatch-1"), result)
+        assertEquals(2, remote.requests.size)
+        assertEquals(remote.requests[0], remote.requests[1])
+        assertEquals(CLIENT_INCIDENT_ID, remote.requests[1].clientIncidentId)
+        assertEquals(CLIENT_ALERT_ID, remote.requests[1].clientAlertRequestId)
+        assertEquals("trip-durable", remote.requests[1].tripId)
+        assertEquals(19.4326, remote.requests[1].latitude, 0.0)
+        assertEquals(-99.1332, remote.requests[1].longitude, 0.0)
+    }
+
+    @Test fun permanentHttpFailureDoesNotRetryAutomaticRequest() = runTest {
+        val remote = SequencedRemote(
+            listOf(ManualSosAlertSubmissionStatus.HttpError(400, "validation_error"))
+        )
+        val result = creator(remote, transientRetryDelayMillis = 1L).submit(
+            AutomaticSosRequestInput(
+                CLIENT_INCIDENT_ID, CLIENT_ALERT_ID, 1_722_513_600_000L,
+                19.4326, -99.1332, "trip-durable", IncidentCause.Timeout, RiskLevel.High, AlertPriority.High
+            )
+        )
+
+        assertTrue(result is AutomaticSosSubmissionResult.Failure)
+        assertEquals(1, remote.requests.size)
+    }
+
+    @Test fun automaticSubmissionHasBoundedTimeoutAndReturnsRetryableTimeout() = runTest {
+        val remote = object : ManualSosAlertRemoteDataSource {
+            override suspend fun createManualSosAlert(
+                authorization: String,
+                request: ManualSosAlertRequestDto
+            ): ManualSosAlertSubmissionStatus {
+                delay(60_000L)
+                return success()
+            }
+        }
+        val creator = creator(remote, submissionTimeoutMillis = 100L)
+
+        val result = creator.createAutomaticSosAlert(incident(IncidentCause.Timeout), request())
+
+        assertEquals(
+            IncidentRemoteCreationStatus.Timeout("automatic_sos_submission_timeout"),
+            result.remoteCreationStatus
+        )
+    }
+
+    private fun creator(
+        remote: ManualSosAlertRemoteDataSource,
+        locationProvider: ManualSosLocationProvider = ManualSosLocationProvider { location() },
+        emergencyLocationPublisher: EmergencyLocationPublisher = NoOpEmergencyLocationPublisher,
+        submissionTimeoutMillis: Long = 30_000L,
+        transientRetryDelayMillis: Long = 1_000L
+    ) = AuthenticatedAutomaticSosAlertCreator(
+        authRepository = FakeAuthRepository(),
+        remoteDataSource = remote,
+        activeTripRemoteResolver = ActiveTripRemoteResolver { ActiveTripLookupResult.NoActiveTrip },
+        remoteTripSessionStore = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("trip-1") },
+        locationProvider = locationProvider,
+        emergencyLocationPublisher = emergencyLocationPublisher,
+        submissionTimeoutMillis = submissionTimeoutMillis,
+        transientRetryDelayMillis = transientRetryDelayMillis
+    )
+
+    private fun incident(cause: IncidentCause) = LocalIncident(
+        incidentId = 1L, sessionId = 2L, assessmentId = 3L, windowId = 4L,
+        createdAtElapsedRealtimeNanos = 5L, cause = cause, score = 70, riskLevel = RiskLevel.High,
+        confidence = 0.9, relevantOutcomes = emptyList(), ruleSetVersion = "rules", validationPolicyVersion = "policy",
+        gpsQuality = GpsQualityStatus.Good, clientIncidentId = CLIENT_INCIDENT_ID,
+        detectedAtEpochMillis = 1_722_513_600_000L, latitude = 19.4326, longitude = -99.1332,
+        remoteCreationStatus = IncidentRemoteCreationStatus.Pending
+    )
+
+    private fun request() = AlertDispatchRequest(
+        requestId = 6L, incidentId = 1L, sessionId = 2L, assessmentId = 3L, priority = AlertPriority.High,
+        reason = IncidentCause.Timeout, createdAtElapsedRealtimeNanos = 7L, score = 70, confidence = 0.9,
+        payload = AlertPayloadSummary(2L, 3L, 1L, 70, RiskLevel.High, IncidentCause.Timeout, "policy"),
+        clientAlertRequestId = CLIENT_ALERT_ID
+    )
+
+    private fun success() = ManualSosAlertSubmissionStatus.Success(
+        remoteIncidentId = "incident-1", remoteAlertDispatchId = "dispatch-1",
+        notificationAttempts = listOf(ManualSosNotificationAttemptDto(status = "Prepared")),
+        summary = ManualSosAlertSummaryDto(totalPrepared = 1)
+    )
+
+    private fun location() = LocationSample(
+        latitude = 19.4326,
+        longitude = -99.1332,
+        accuracyMeters = 5f,
+        timestampMillis = 1_722_513_600_000L,
+        provider = "gps",
+        isMock = false
+    )
+
+    private class RecordingRemote(private val result: ManualSosAlertSubmissionStatus) : ManualSosAlertRemoteDataSource {
+        val requests = mutableListOf<ManualSosAlertRequestDto>()
+        override suspend fun createManualSosAlert(authorization: String, request: ManualSosAlertRequestDto): ManualSosAlertSubmissionStatus {
+            requests += request
+            return result
+        }
+    }
+
+    private class SequencedRemote(
+        results: List<ManualSosAlertSubmissionStatus>
+    ) : ManualSosAlertRemoteDataSource {
+        private val remaining = ArrayDeque(results)
+        val requests = mutableListOf<ManualSosAlertRequestDto>()
+
+        override suspend fun createManualSosAlert(
+            authorization: String,
+            request: ManualSosAlertRequestDto
+        ): ManualSosAlertSubmissionStatus {
+            requests += request
+            return if (remaining.isEmpty()) {
+                ManualSosAlertSubmissionStatus.NetworkUnavailable("no_more_results")
+            } else {
+                remaining.removeFirst()
+            }
+        }
+    }
+
+    private class RecordingLocationPublisher : EmergencyLocationPublisher {
+        val snapshots = mutableListOf<EmergencyLocationSnapshotRequestDto>()
+        override suspend fun publish(snapshot: EmergencyLocationSnapshotRequestDto): EmergencyLocationPublicationResult {
+            snapshots += snapshot
+            return EmergencyLocationPublicationResult.Published
+        }
+    }
+
+    private class FakeAuthRepository : AuthRepository {
+        override suspend fun login(email: String, password: String, rememberMe: Boolean): AuthResult<AuthUser> = error("unused")
+        override suspend fun restoreSession(): AuthResult<AuthUser?> = AuthResult.Success(null)
+        override suspend fun ensureValidAccessToken(): AuthResult<AccessToken> = AuthResult.Success(AccessToken("access-token"))
+        override suspend fun refreshSession(): AuthResult<AuthUser> = AuthResult.Success(AuthUser("rider", "rider@example.invalid", "Rider", "0", UserRole.Rider, true))
+        override suspend fun logout(): AuthResult<Unit> = AuthResult.Success(Unit)
+        override fun observeSession(): StateFlow<SessionState> = MutableStateFlow(SessionState.LoggedOut)
+    }
+
+    private companion object {
+        const val CLIENT_INCIDENT_ID = "123e4567-e89b-12d3-a456-426614174000"
+        const val CLIENT_ALERT_ID = "223e4567-e89b-12d3-a456-426614174000"
+    }
+}

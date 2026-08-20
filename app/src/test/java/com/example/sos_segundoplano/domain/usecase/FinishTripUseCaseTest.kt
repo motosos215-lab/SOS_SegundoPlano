@@ -9,7 +9,7 @@ class FinishTripUseCaseTest {
 
     @Test
     fun activeProducesIdle() {
-        assertEquals(TripSessionState.Idle, useCase(TripSessionState.Active))
+        assertEquals(TripSessionState.Idle, useCase(TripSessionState.Active("trip-session-test")))
     }
 
     @Test
@@ -19,8 +19,8 @@ class FinishTripUseCaseTest {
 
     @Test
     fun activeResultIsDeterministic() {
-        val firstResult = useCase(TripSessionState.Active)
-        val secondResult = useCase(TripSessionState.Active)
+        val firstResult = useCase(TripSessionState.Active("trip-session-test"))
+        val secondResult = useCase(TripSessionState.Active("trip-session-test"))
 
         assertEquals(firstResult, secondResult)
     }

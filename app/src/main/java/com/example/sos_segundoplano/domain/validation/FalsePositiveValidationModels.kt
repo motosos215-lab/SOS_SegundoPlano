@@ -22,6 +22,11 @@ data class FalsePositiveValidationConfig(
     val visualUpdateIntervalNanos: Long = 1_000_000_000L,
     val minimumValidationScore: Int = 40,
     val minimumConfidence: Double = 0.60,
+    // A correlated physical pattern (fall, or impact + post-event immobility + support) may be
+    // meaningful before the generic aggregate score reaches 40. This lower gate only applies after
+    // correlation; it never lets immobility or an isolated bump start a countdown by itself.
+    val correlatedCandidateMinimumScore: Int = 30,
+    val correlatedCandidateMinimumConfidence: Double = 0.50,
     val criticalScore: Int = 90,
     val criticalConfidence: Double = 0.80,
     val criticalFallSeverity: Double = 0.90,
@@ -31,6 +36,10 @@ data class FalsePositiveValidationConfig(
     val bumpMaximumScore: Int = 39,
     val brakingContinuityMaximumGapNanos: Long = 2_000_000_000L,
     val immobilityCountdownMinimumSeverity: Double = 0.50,
+    val impactImmobilityMinimumImpactSeverity: Double = 0.55,
+    val impactImmobilityDirectImpactSeverity: Double = 0.85,
+    val secondarySupportMinimumSeverity: Double = 0.30,
+    val postSafeSuppressionNanos: Long = 10_000_000_000L,
     val policyVersion: String = "false-positive-validation-v1"
 ) {
     init {
@@ -42,8 +51,10 @@ data class FalsePositiveValidationConfig(
         require(countdownDurationNanos > 0L)
         require(visualUpdateIntervalNanos > 0L)
         require(minimumValidationScore in 0..100)
+        require(correlatedCandidateMinimumScore in 0..minimumValidationScore)
         require(criticalScore in minimumValidationScore..100)
         require(minimumConfidence in 0.0..1.0)
+        require(correlatedCandidateMinimumConfidence in 0.0..minimumConfidence)
         require(criticalConfidence in minimumConfidence..1.0)
         require(criticalFallSeverity in 0.0..1.0)
         require(criticalImpactSeverity in 0.0..1.0)
@@ -52,6 +63,10 @@ data class FalsePositiveValidationConfig(
         require(bumpMaximumScore in 0 until minimumValidationScore)
         require(brakingContinuityMaximumGapNanos > 0L)
         require(immobilityCountdownMinimumSeverity in 0.0..1.0)
+        require(impactImmobilityMinimumImpactSeverity in 0.0..1.0)
+        require(impactImmobilityDirectImpactSeverity in impactImmobilityMinimumImpactSeverity..1.0)
+        require(secondarySupportMinimumSeverity in 0.0..1.0)
+        require(postSafeSuppressionNanos >= 0L)
         require(policyVersion.isNotBlank())
     }
 }
@@ -158,8 +173,13 @@ data class LocalIncident(
     val remoteTripId: String? = null,
     val clientIncidentId: String? = null,
     val remoteIncidentId: String? = null,
+    val remoteAlertDispatchId: String? = null,
     val remoteCreationStatus: IncidentRemoteCreationStatus = IncidentRemoteCreationStatus.NotRequested,
-    val deliveryStatus: AlertDeliveryStatus = AlertDeliveryStatus.Pending
+    val deliveryStatus: AlertDeliveryStatus = AlertDeliveryStatus.Pending,
+    val detectedAtEpochMillis: Long? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null
+    , val tripSessionKey: String? = null
 )
 
 data class AlertPayloadSummary(
@@ -184,7 +204,8 @@ data class AlertDispatchRequest(
     val confidence: Double,
     val deliveryStatus: AlertDeliveryStatus = AlertDeliveryStatus.Pending,
     val retryState: AlertRetryState = AlertRetryState.NotStarted,
-    val payload: AlertPayloadSummary
+    val payload: AlertPayloadSummary,
+    val clientAlertRequestId: String? = null
 )
 
 data class UserValidationResponse(
@@ -223,7 +244,12 @@ sealed interface FalsePositiveValidationState {
     ) : FalsePositiveValidationState
     data class SafeConfirmed(val metadata: ValidationMetadata, val responseId: String) : FalsePositiveValidationState
     data class HelpRequested(val metadata: ValidationMetadata, val responseId: String) : FalsePositiveValidationState
-    data class IncidentGenerated(val incident: LocalIncident, val dispatchRequest: AlertDispatchRequest, val metadata: ValidationMetadata) : FalsePositiveValidationState
+    data class IncidentDeliveryRetrying(
+        val metadata: ValidationMetadata,
+        val attempt: Int,
+        val maxAttempts: Int
+    ) : FalsePositiveValidationState
+    data class IncidentGenerated(val incident: LocalIncident, val dispatchRequest: AlertDispatchRequest, val metadata: ValidationMetadata, val bundleKey: String = incident.clientIncidentId.orEmpty()) : FalsePositiveValidationState
     data class ImmediateAlertRequested(val incident: LocalIncident, val dispatchRequest: AlertDispatchRequest, val metadata: ValidationMetadata) : FalsePositiveValidationState
     data class Stopped(val sessionId: Long?, val timestampElapsedRealtimeNanos: Long, val policyVersion: String) : FalsePositiveValidationState
     data class Error(val metadata: ValidationMetadata?, val message: String?) : FalsePositiveValidationState

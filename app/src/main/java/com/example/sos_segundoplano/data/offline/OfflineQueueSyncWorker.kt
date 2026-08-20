@@ -5,21 +5,25 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.example.sos_segundoplano.domain.offline.OfflineQueueSyncResult
 
+/** Processes only secondary/generic offline events. Emergency SOS has its own worker. */
 class OfflineQueueSyncWorker(
     appContext: Context,
     params: WorkerParameters
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result {
         val provider = OfflineQueueProvider.get(applicationContext)
-        return when (val syncResult = provider.processor.process("worker-$id")) {
-            OfflineQueueSyncResult.Completed -> Result.success()
+        val now = provider.clock.currentTimeMillis()
+        return when (val result = provider.processor.process("worker-$id")) {
+            OfflineQueueSyncResult.Completed,
             OfflineQueueSyncResult.NothingToDo -> Result.success()
+
             OfflineQueueSyncResult.RetryRequired -> Result.retry()
+
             is OfflineQueueSyncResult.DeferredUntil -> {
-                val delayMillis = syncResult.epochMillis - provider.clock.currentTimeMillis()
-                provider.scheduler.scheduleDeferredSync(delayMillis)
+                provider.scheduler.scheduleDeferredSync((result.epochMillis - now).coerceAtLeast(0L))
                 Result.success()
             }
+
             is OfflineQueueSyncResult.InitializationFailure -> Result.retry()
         }
     }

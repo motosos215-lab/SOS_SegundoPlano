@@ -11,6 +11,7 @@ import com.example.sos_segundoplano.domain.preprocessing.TimeDomain
 import com.example.sos_segundoplano.domain.signals.BatterySample
 import com.example.sos_segundoplano.domain.signals.CaptureState
 import com.example.sos_segundoplano.domain.signals.ConnectivitySample
+import com.example.sos_segundoplano.domain.signals.GpsCalibrationState
 import com.example.sos_segundoplano.domain.signals.LocationSample
 import com.example.sos_segundoplano.domain.signals.SignalAvailability
 import com.example.sos_segundoplano.domain.signals.SignalReading
@@ -29,6 +30,7 @@ interface TripSignalStore {
     val snapshots: StateFlow<TripSignalSnapshot>
     val rawEvents: RawSignalEventSink
     fun setCaptureState(state: CaptureState)
+    fun updateGpsCalibration(state: GpsCalibrationState)
     fun updateLocation(reading: SignalReading<LocationSample>)
     fun updateMobileAccelerometer(reading: SignalReading<Vector3Sample>)
     fun updateMobileGyroscope(reading: SignalReading<Vector3Sample>)
@@ -53,16 +55,25 @@ class InMemoryTripSignalStore(
     override fun setCaptureState(state: CaptureState) = mutate { it.copy(captureState = state) }
 
     @Synchronized
+    override fun updateGpsCalibration(state: GpsCalibrationState) {
+        if (state is GpsCalibrationState.Calibrating) previousLocation = null
+        mutate { it.copy(gpsCalibration = state) }
+    }
+
+    @Synchronized
     override fun updateLocation(reading: SignalReading<LocationSample>) {
         val currentLocation = reading.sample
-        val speed = if (reading.availability == SignalAvailability.Available && currentLocation != null) {
+        val calibrating = _snapshots.value.gpsCalibration is GpsCalibrationState.Calibrating
+        val speed = if (!calibrating && reading.availability == SignalAvailability.Available && currentLocation != null) {
             SpeedPolicy.resolve(currentLocation, previousLocation)
         } else {
             SignalReading(SignalAvailability.Waiting)
         }
-        previousLocation = currentLocation ?: previousLocation
+        if (!calibrating) previousLocation = currentLocation ?: previousLocation
         mutate { it.copy(location = reading, speed = speed) }
-        emitLocation(reading)
+        // Always keep the live fix as the trip/SOS primary location regardless of its horizontal
+        // accuracy. Only preprocessing and GPS-derived speed wait for the short startup gate.
+        emitLocation(if (calibrating) SignalReading(SignalAvailability.Waiting) else reading)
         emitSpeed(speed)
     }
 

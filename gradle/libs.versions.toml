@@ -12,6 +12,7 @@ kotlin = "2.2.10"
 composeBom = "2026.02.01"
 coroutines = "1.10.2"
 playServicesWearable = "19.0.0"
+playServicesCodeScanner = "16.1.0"
 healthServices = "1.1.0-alpha05"
 concurrentFuturesKtx = "1.3.0"
 listenableFuture = "1.0"
@@ -23,6 +24,7 @@ okhttp = "4.12.0"
 moshi = "1.15.2"
 googleServices = "4.5.0"
 firebaseBom = "34.16.0"
+maplibreAndroid = "13.5.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -47,6 +49,7 @@ androidx-compose-material3 = { group = "androidx.compose.material3", name = "mat
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 play-services-wearable = { group = "com.google.android.gms", name = "play-services-wearable", version.ref = "playServicesWearable" }
+play-services-code-scanner = { group = "com.google.android.gms", name = "play-services-code-scanner", version.ref = "playServicesCodeScanner" }
 androidx-health-services-client = { group = "androidx.health", name = "health-services-client", version.ref = "healthServices" }
 androidx-concurrent-futures-ktx = { group = "androidx.concurrent", name = "concurrent-futures-ktx", version.ref = "concurrentFuturesKtx" }
 guava-listenablefuture = { group = "com.google.guava", name = "listenablefuture", version.ref = "listenableFuture" }
@@ -63,6 +66,7 @@ okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver",
 moshi-kotlin = { group = "com.squareup.moshi", name = "moshi-kotlin", version.ref = "moshi" }
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
+maplibre-android = { module = "org.maplibre.gl:android-sdk", version.ref = "maplibreAndroid" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

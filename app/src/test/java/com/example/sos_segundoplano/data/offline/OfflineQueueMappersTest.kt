@@ -37,6 +37,52 @@ class OfflineQueueMappersTest {
         assertEquals("Pending", request.toSyncPayload(clock).payload.deliveryStatus)
     }
 
+    @Test fun mapsDurableAutomaticIncidentFieldsWithoutChangingTheirValues() {
+        val clientIncidentId = "11111111-1111-1111-1111-111111111111"
+        val clientAlertRequestId = "22222222-2222-2222-2222-222222222222"
+        val incident = LocalIncident(
+            incidentId = 5L,
+            sessionId = 2L,
+            assessmentId = 3L,
+            windowId = 4L,
+            createdAtElapsedRealtimeNanos = 10L,
+            cause = IncidentCause.Timeout,
+            score = 70,
+            riskLevel = RiskLevel.High,
+            confidence = 0.9,
+            relevantOutcomes = emptyList(),
+            ruleSetVersion = "rules",
+            validationPolicyVersion = "policy",
+            gpsQuality = GpsQualityStatus.Good,
+            clientIncidentId = clientIncidentId,
+            detectedAtEpochMillis = 1_725_000_123_456L,
+            latitude = 19.4326,
+            longitude = -99.1332
+        )
+        val request = AlertDispatchRequest(
+            requestId = 6L,
+            incidentId = 5L,
+            sessionId = 2L,
+            assessmentId = 3L,
+            priority = AlertPriority.High,
+            reason = IncidentCause.Timeout,
+            createdAtElapsedRealtimeNanos = 11L,
+            score = 70,
+            confidence = 0.9,
+            payload = AlertPayloadSummary(2L, 3L, 5L, 70, RiskLevel.High, IncidentCause.Timeout, "policy"),
+            clientAlertRequestId = clientAlertRequestId
+        )
+
+        val incidentPayload = incident.toSyncPayload(clock).payload
+        val requestPayload = request.toSyncPayload(clock).payload
+
+        assertEquals(clientIncidentId, incidentPayload.clientIncidentId)
+        assertEquals(1_725_000_123_456L, incidentPayload.detectedAtEpochMillis)
+        assertEquals(19.4326, incidentPayload.latitude)
+        assertEquals(-99.1332, incidentPayload.longitude)
+        assertEquals(clientAlertRequestId, requestPayload.clientAlertRequestId)
+    }
+
     private fun evidence() = com.example.sos_segundoplano.domain.validation.ValidationEvidence(
         movementContinuity = com.example.sos_segundoplano.domain.rules.MovementContinuityState.Continuing,
         gpsQuality = GpsQualityStatus.Good,

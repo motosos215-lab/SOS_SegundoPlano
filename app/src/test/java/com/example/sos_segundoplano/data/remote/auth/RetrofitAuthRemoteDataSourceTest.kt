@@ -1,6 +1,8 @@
 package com.example.sos_segundoplano.data.remote.auth
 
 import com.example.sos_segundoplano.domain.auth.AuthResult
+import com.example.sos_segundoplano.domain.auth.ActiveSessionExists
+import com.example.sos_segundoplano.domain.auth.SessionTakeoverFailure
 import com.example.sos_segundoplano.domain.auth.InvalidCredentials
 import com.example.sos_segundoplano.domain.auth.InvalidResponse
 import com.example.sos_segundoplano.domain.auth.NetworkUnavailable
@@ -41,7 +43,7 @@ class RetrofitAuthRemoteDataSourceTest {
 
         assertTrue(result is AuthResult.Success)
         val data = (result as AuthResult.Success).value
-        assertEquals("Rider", data.user.role)
+        assertEquals("Rider", data.user?.role)
         val request = server.takeRequest()
         assertEquals("/api/v1/auth/login", request.path)
         val body = request.body.readUtf8()
@@ -101,7 +103,7 @@ class RetrofitAuthRemoteDataSourceTest {
 
     @Test fun logoutAccepts204WithoutReadingBody() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(204))
-        assertTrue(source().logout(LogoutRequestDto("refresh-token")) is AuthResult.Success)
+        assertTrue(source().logout("access-token", LogoutRequestDto("refresh-token")) is AuthResult.Success)
         assertEquals("/api/v1/auth/logout", server.takeRequest().path)
     }
 
@@ -121,17 +123,73 @@ class RetrofitAuthRemoteDataSourceTest {
 
     @Test fun authApiContainsOnlyAuthorizedMethodsAndRoutes() {
         val methods = AuthApi::class.java.declaredMethods
-        assertEquals(setOf("login", "refresh", "logout"), methods.map { it.name }.toSet())
+        assertEquals(
+            setOf("login", "loginWithCode", "takeover", "refresh", "logout", "currentUser"),
+            methods.map { it.name }.toSet()
+        )
         val routes = methods.mapNotNull { it.getAnnotation(POST::class.java)?.value }.toSet()
         assertEquals(
-            setOf("api/v1/auth/login", "api/v1/auth/refresh", "api/v1/auth/logout"),
+            setOf(
+                "api/v1/auth/login",
+                "api/v1/auth/login-with-code",
+                "api/v1/auth/sessions/takeover",
+                "api/v1/auth/refresh",
+                "api/v1/auth/logout"
+            ),
             routes
         )
         val allRoutes = routes.joinToString("|")
         assertFalse(allRoutes.contains("register"))
         assertFalse(allRoutes.contains("forgot-password"))
-        assertFalse(allRoutes.contains("access-code"))
-        assertFalse(allRoutes.contains("users/me"))
+        assertFalse(allRoutes.contains("request-access-code"))
+    }
+
+    @Test fun activeMobileSessionConflictPreservesTakeoverMetadataWithoutExposingToken() = runBlocking {
+        server.enqueue(jsonResponse(409, ACTIVE_SESSION_EXISTS))
+
+        val result = source().login(
+            LoginRequestDto(
+                email = "rider@example.com",
+                password = "password",
+                rememberMe = true,
+                clientDevice = clientDevice()
+            )
+        )
+
+        assertTrue(result is ActiveSessionExists)
+        val challenge = (result as ActiveSessionExists).challenge
+        assertEquals("Samsung A34", challenge.activeSession?.deviceName)
+        assertTrue(challenge.hasActiveTrip)
+        assertEquals("trip-active", challenge.activeTrip?.id)
+        assertFalse(challenge.toString().contains("takeover-secret"))
+    }
+
+    @Test fun takeoverUsesExactEndpointAndKeepsSameClientDevice() = runBlocking {
+        server.enqueue(jsonResponse(200, LOGIN_SUCCESS_NEW_EXPIRY))
+        val request = SessionTakeoverRequestDto(
+            takeoverToken = "takeover-secret",
+            clientDevice = clientDevice(),
+            transferActiveTrip = false,
+            mobileDeviceId = null
+        )
+
+        val result = source().takeover(request)
+
+        assertTrue(result is AuthResult.Success)
+        val recorded = server.takeRequest()
+        assertEquals("/api/v1/auth/sessions/takeover", recorded.path)
+        val body = recorded.body.readUtf8()
+        assertTrue(body.contains("\"clientDeviceId\":\"11111111-1111-1111-1111-111111111111\""))
+        assertTrue(body.contains("\"transferActiveTrip\":false"))
+    }
+
+    @Test fun takeoverControlledErrorsRemainTyped() = runBlocking {
+        server.enqueue(jsonResponse(409, """{"success":false,"data":null,"error":{"code":"active_trip_transfer_required","message":"transfer required"}}"""))
+        val result = source().takeover(
+            SessionTakeoverRequestDto("token", clientDevice(), false, null)
+        )
+        assertTrue(result is SessionTakeoverFailure)
+        assertEquals("active_trip_transfer_required", (result as SessionTakeoverFailure).errorCode)
     }
 
     @Test fun secretDtosRedactPasswordAndTokensFromToString() {
@@ -170,7 +228,20 @@ class RetrofitAuthRemoteDataSourceTest {
         return RetrofitAuthRemoteDataSource(api, moshi)
     }
 
-    private fun loginRequest() = LoginRequestDto("rider@example.com", "password", false)
+    private fun loginRequest() = LoginRequestDto(
+        "rider@example.com",
+        "password",
+        false,
+        clientDevice()
+    )
+
+    private fun clientDevice() = ClientDeviceDto(
+        clientDeviceId = "11111111-1111-1111-1111-111111111111",
+        deviceName = "Samsung A34",
+        platform = "Android",
+        osVersion = "Android 16",
+        appVersion = "1.0"
+    )
 
     private fun jsonResponse(code: Int, body: String): MockResponse = MockResponse()
         .setResponseCode(code)
@@ -198,6 +269,37 @@ class RetrofitAuthRemoteDataSourceTest {
             }
         """.trimIndent()
 
+        val LOGIN_SUCCESS_NEW_EXPIRY = LOGIN_SUCCESS.replace(
+            "accessTokenExpiresAtUtc",
+            "expiresAtUtc"
+        )
+
+        val ACTIVE_SESSION_EXISTS = """
+            {
+              "success": false,
+              "data": {
+                "activeSession": {
+                  "deviceName": "Samsung A34",
+                  "platform": "Android",
+                  "lastSeenAtUtc": "2026-08-18T20:00:00Z"
+                },
+                "takeoverToken": "takeover-secret",
+                "takeoverExpiresAtUtc": "2026-08-18T20:03:00Z",
+                "hasActiveTrip": true,
+                "activeTrip": {
+                  "id": "trip-active",
+                  "status": "Active",
+                  "startedAtUtc": "2026-08-18T19:50:00Z",
+                  "mobileDeviceId": "old-mobile"
+                }
+              },
+              "error": {
+                "code": "active_session_exists",
+                "message": "An active session already exists for this user."
+              }
+            }
+        """.trimIndent()
+
         val INVALID_CREDENTIALS = """
             {"success":false,"data":null,"error":{"code":"invalid_credentials","message":"Invalid authentication credentials."}}
         """.trimIndent()
@@ -219,10 +321,14 @@ class RetrofitAuthRemoteDataSourceTest {
 private class ThrowingAuthApi : AuthApi {
     override suspend fun login(request: LoginRequestDto): Response<ApiEnvelopeDto<LoginDataDto>> =
         throw UnknownHostException("unavailable")
-
+    override suspend fun loginWithCode(request: LoginWithCodeRequestDto): Response<ApiEnvelopeDto<LoginDataDto>> =
+        throw UnknownHostException("unavailable")
+    override suspend fun takeover(request: SessionTakeoverRequestDto): Response<ApiEnvelopeDto<LoginDataDto>> =
+        throw UnknownHostException("unavailable")
     override suspend fun refresh(request: RefreshTokenRequestDto): Response<ApiEnvelopeDto<RefreshDataDto>> =
         throw UnknownHostException("unavailable")
-
-    override suspend fun logout(request: LogoutRequestDto): Response<Unit> =
+    override suspend fun logout(authorization: String, request: LogoutRequestDto): Response<Unit> =
+        throw UnknownHostException("unavailable")
+    override suspend fun currentUser(authorization: String): Response<ApiEnvelopeDto<CurrentUserDataDto>> =
         throw UnknownHostException("unavailable")
 }

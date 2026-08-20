@@ -18,6 +18,7 @@ import com.example.sos_segundoplano.data.remote.trip.TripMutationResult
 import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.domain.trip.ElapsedRealtimeClock
 import com.example.sos_segundoplano.domain.trip.TripTimingState
+import com.example.sos_segundoplano.domain.trip.TripTimingClearResult
 import com.example.sos_segundoplano.domain.trip.TripTimingStore
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,7 +32,7 @@ class TripLocalSummaryFlowTest {
     @get:Rule val composeRule = createComposeRule()
 
     @Test fun normalFinishShowsFrozenDurationAfterTimingWasCleared() {
-        val timing = SummaryFakeTimingStore(TripTimingState.Active(10_000L))
+        val timing = SummaryFakeTimingStore(TripTimingState.Active(10_000L, TEST_TRIP_SESSION_KEY))
         setActiveTrip(timing)
 
         composeRule.onNodeWithTag("finish_trip_button").performScrollTo().performClick()
@@ -43,7 +44,7 @@ class TripLocalSummaryFlowTest {
     }
 
     @Test fun returnHomeRemovesSummaryAndNewTripDoesNotReuseIt() {
-        val timing = SummaryFakeTimingStore(TripTimingState.Active(10_000L))
+        val timing = SummaryFakeTimingStore(TripTimingState.Active(10_000L, TEST_TRIP_SESSION_KEY))
         setActiveTrip(timing)
         composeRule.onNodeWithTag("finish_trip_button").performScrollTo().performClick()
 
@@ -67,8 +68,8 @@ class TripLocalSummaryFlowTest {
 
     @Test fun savedStateRestorationKeepsCompletedSummary() {
         val restorationTester = StateRestorationTester(composeRule)
-        val timing = SummaryFakeTimingStore(TripTimingState.Active(10_000L))
-        val session = InMemoryTripSessionStore(TripSessionState.Active)
+        val timing = SummaryFakeTimingStore(TripTimingState.Active(10_000L, TEST_TRIP_SESSION_KEY))
+        val session = InMemoryTripSessionStore(TripSessionState.Active(TEST_TRIP_SESSION_KEY))
         restorationTester.setContent {
             SOS_SegundoPlanoTheme {
                 MotoSosApp(
@@ -93,8 +94,8 @@ class TripLocalSummaryFlowTest {
         composeRule.setContent {
             SOS_SegundoPlanoTheme {
                 MotoSosApp(
-                    tripSessionStore = InMemoryTripSessionStore(TripSessionState.Active),
-                    tripTimingStore = SummaryFakeTimingStore(TripTimingState.Active(10_000L)),
+                    tripSessionStore = InMemoryTripSessionStore(TripSessionState.Active(TEST_TRIP_SESSION_KEY)),
+                    tripTimingStore = SummaryFakeTimingStore(TripTimingState.Active(10_000L, TEST_TRIP_SESSION_KEY)),
                     elapsedRealtimeClock = ElapsedRealtimeClock { 57_000L },
                     monitoringServiceStopper = successfulStopper(),
                     remoteTripFinisher = RemoteTripFinisher {
@@ -116,7 +117,7 @@ class TripLocalSummaryFlowTest {
         composeRule.setContent {
             SOS_SegundoPlanoTheme {
                 MotoSosApp(
-                    tripSessionStore = InMemoryTripSessionStore(TripSessionState.Active),
+                    tripSessionStore = InMemoryTripSessionStore(TripSessionState.Active(TEST_TRIP_SESSION_KEY)),
                     tripTimingStore = timing,
                     elapsedRealtimeClock = ElapsedRealtimeClock { 57_000L },
                     monitoringServiceStopper = successfulStopper()
@@ -131,10 +132,26 @@ class TripLocalSummaryFlowTest {
 private class SummaryFakeTimingStore(initial: TripTimingState) : TripTimingStore {
     private val mutableStates = MutableStateFlow(initial)
     override val states: StateFlow<TripTimingState> = mutableStates
-    override fun beginConfirmedTrip() {
-        mutableStates.value = TripTimingState.Active(57_000L)
+
+    override fun beginConfirmedTrip(tripSessionKey: String?) {
+        mutableStates.value = TripTimingState.Active(57_000L, tripSessionKey)
     }
+
     override fun clear() {
         mutableStates.value = TripTimingState.Unknown
     }
+
+    override fun clearIfMatches(tripSessionKey: String): TripTimingClearResult = when (val state = mutableStates.value) {
+        TripTimingState.Unknown -> TripTimingClearResult.AlreadyEmpty
+        is TripTimingState.Active -> when {
+            state.tripSessionKey == null -> TripTimingClearResult.LegacyUncorrelated
+            state.tripSessionKey != tripSessionKey -> TripTimingClearResult.DifferentTrip
+            else -> {
+                mutableStates.value = TripTimingState.Unknown
+                TripTimingClearResult.Cleared
+            }
+        }
+    }
 }
+
+private const val TEST_TRIP_SESSION_KEY = "00000000-0000-0000-0000-000000000001"

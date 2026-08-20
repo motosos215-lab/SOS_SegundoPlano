@@ -1,6 +1,7 @@
 package com.example.sos_segundoplano.data.offline
 
 import com.example.sos_segundoplano.domain.offline.AlertDispatchRequestSyncPayload
+import com.example.sos_segundoplano.domain.offline.ConnectivitySyncSnapshot
 import com.example.sos_segundoplano.domain.offline.LocalIncidentSyncPayload
 import com.example.sos_segundoplano.domain.offline.MinorEventSyncPayload
 import com.example.sos_segundoplano.domain.offline.OfflineEventType
@@ -22,7 +23,8 @@ class OfflineQueueSerializer {
             "confidence" to payload.payload.confidence.toString(),
             "policyVersion" to payload.payload.policyVersion,
             "occurredAtEpochMillis" to payload.payload.occurredAtEpochMillis.toString(),
-            "createdAtElapsedRealtimeNanos" to payload.payload.createdAtElapsedRealtimeNanos.toString()
+            "createdAtElapsedRealtimeNanos" to payload.payload.createdAtElapsedRealtimeNanos.toString(),
+            *connectivityFields(payload.payload.connectivity)
         )
 
         is OfflineSyncPayload.LocalIncidentPayload -> fields(
@@ -40,7 +42,14 @@ class OfflineQueueSerializer {
             "validationPolicyVersion" to payload.payload.validationPolicyVersion,
             "gpsQuality" to payload.payload.gpsQuality,
             "occurredAtEpochMillis" to payload.payload.occurredAtEpochMillis.toString(),
-            "createdAtElapsedRealtimeNanos" to payload.payload.createdAtElapsedRealtimeNanos.toString()
+            "createdAtElapsedRealtimeNanos" to payload.payload.createdAtElapsedRealtimeNanos.toString(),
+            "clientIncidentId" to payload.payload.clientIncidentId.orEmpty(),
+            "detectedAtEpochMillis" to payload.payload.detectedAtEpochMillis?.toString().orEmpty(),
+            "latitude" to payload.payload.latitude?.toString().orEmpty(),
+            "longitude" to payload.payload.longitude?.toString().orEmpty(),
+            "remoteTripId" to payload.payload.remoteTripId.orEmpty(),
+            "tripSessionKey" to payload.payload.tripSessionKey.orEmpty(),
+            *connectivityFields(payload.payload.connectivity)
         )
 
         is OfflineSyncPayload.AlertDispatchRequestPayload -> fields(
@@ -57,7 +66,9 @@ class OfflineQueueSerializer {
             "deliveryStatus" to payload.payload.deliveryStatus,
             "retryState" to payload.payload.retryState,
             "occurredAtEpochMillis" to payload.payload.occurredAtEpochMillis.toString(),
-            "createdAtElapsedRealtimeNanos" to payload.payload.createdAtElapsedRealtimeNanos.toString()
+            "createdAtElapsedRealtimeNanos" to payload.payload.createdAtElapsedRealtimeNanos.toString(),
+            "clientAlertRequestId" to payload.payload.clientAlertRequestId.orEmpty(),
+            *connectivityFields(payload.payload.connectivity)
         )
     }
 
@@ -77,7 +88,8 @@ class OfflineQueueSerializer {
                     confidence = values.double("confidence") ?: return null,
                     policyVersion = values["policyVersion"] ?: return null,
                     occurredAtEpochMillis = values.long("occurredAtEpochMillis") ?: return null,
-                    createdAtElapsedRealtimeNanos = values.long("createdAtElapsedRealtimeNanos") ?: return null
+                    createdAtElapsedRealtimeNanos = values.long("createdAtElapsedRealtimeNanos") ?: return null,
+                    connectivity = values.connectivityOrNull()
                 ),
                 schemaVersion
             )
@@ -96,7 +108,14 @@ class OfflineQueueSerializer {
                     validationPolicyVersion = values["validationPolicyVersion"] ?: return null,
                     gpsQuality = values["gpsQuality"]?.takeIf { it in GPS_QUALITIES } ?: return null,
                     occurredAtEpochMillis = values.long("occurredAtEpochMillis") ?: return null,
-                    createdAtElapsedRealtimeNanos = values.long("createdAtElapsedRealtimeNanos") ?: return null
+                    createdAtElapsedRealtimeNanos = values.long("createdAtElapsedRealtimeNanos") ?: return null,
+                    clientIncidentId = values["clientIncidentId"]?.takeIf { it.isNotBlank() },
+                    detectedAtEpochMillis = values.long("detectedAtEpochMillis"),
+                    latitude = values.doubleOrNull("latitude"),
+                    longitude = values.doubleOrNull("longitude"),
+                    remoteTripId = values["remoteTripId"]?.takeIf { it.isNotBlank() },
+                    tripSessionKey = values["tripSessionKey"]?.takeIf { it.isNotBlank() },
+                    connectivity = values.connectivityOrNull()
                 ),
                 schemaVersion
             )
@@ -114,7 +133,9 @@ class OfflineQueueSerializer {
                     deliveryStatus = values["deliveryStatus"]?.takeIf { it == "Pending" } ?: return null,
                     retryState = values["retryState"]?.takeIf { it == "NotStarted" } ?: return null,
                     occurredAtEpochMillis = values.long("occurredAtEpochMillis") ?: return null,
-                    createdAtElapsedRealtimeNanos = values.long("createdAtElapsedRealtimeNanos") ?: return null
+                    createdAtElapsedRealtimeNanos = values.long("createdAtElapsedRealtimeNanos") ?: return null,
+                    clientAlertRequestId = values["clientAlertRequestId"]?.takeIf { it.isNotBlank() },
+                    connectivity = values.connectivityOrNull()
                 ),
                 schemaVersion
             )
@@ -122,6 +143,14 @@ class OfflineQueueSerializer {
             else -> null
         }
     }.getOrNull()
+
+    private fun connectivityFields(connectivity: ConnectivitySyncSnapshot?): Array<Pair<String, String>> = arrayOf(
+        "connectivityConnected" to connectivity?.connected?.toString().orEmpty(),
+        "connectivityValidated" to connectivity?.validated?.toString().orEmpty(),
+        "connectivityMetered" to connectivity?.metered?.toString().orEmpty(),
+        "connectivityTransport" to connectivity?.transport.orEmpty(),
+        "connectivityTimestampMillis" to connectivity?.timestampMillis?.toString().orEmpty()
+    )
 
     private fun fields(vararg pairs: Pair<String, String>): ByteArray = pairs
         .joinToString(separator = "\n") { (key, value) -> "${encode(key)}=${encode(value)}" }
@@ -140,7 +169,17 @@ class OfflineQueueSerializer {
     private fun decode(value: String): String = URLDecoder.decode(value, Charsets.UTF_8.name())
     private fun Map<String, String>.long(key: String): Long? = this[key]?.toLongOrNull()
     private fun Map<String, String>.double(key: String): Double? = this[key]?.toDoubleOrNull()
+    private fun Map<String, String>.doubleOrNull(key: String): Double? = this[key]?.takeIf { it.isNotBlank() }?.toDoubleOrNull()
     private fun Map<String, String>.intOrNull(key: String): Int? = this[key]?.takeIf { it.isNotBlank() }?.toIntOrNull()
+
+    private fun Map<String, String>.connectivityOrNull(): ConnectivitySyncSnapshot? {
+        val connected = this["connectivityConnected"]?.takeIf { it.isNotBlank() }?.toBooleanStrictOrNull() ?: return null
+        val validated = this["connectivityValidated"]?.takeIf { it.isNotBlank() }?.toBooleanStrictOrNull() ?: false
+        val metered = this["connectivityMetered"]?.takeIf { it.isNotBlank() }?.toBooleanStrictOrNull() ?: false
+        val transport = this["connectivityTransport"]?.takeIf { it in CONNECTIVITY_TRANSPORTS } ?: "None"
+        val timestamp = this["connectivityTimestampMillis"]?.takeIf { it.isNotBlank() }?.toLongOrNull() ?: return null
+        return ConnectivitySyncSnapshot(connected, validated, metered, transport, timestamp)
+    }
 
     companion object {
         private val MINOR_TYPES = setOf("Bump", "RoadIrregularity")
@@ -148,5 +187,6 @@ class OfflineQueueSerializer {
         private val ALERT_PRIORITIES = setOf("Normal", "High", "Critical")
         private val RISK_LEVELS = setOf("Low", "Medium", "High", "Unknown")
         private val GPS_QUALITIES = setOf("Good", "Degraded", "Poor", "Unavailable", "Stale")
+        private val CONNECTIVITY_TRANSPORTS = setOf("Wifi", "Cellular", "Ethernet", "Vpn", "Bluetooth", "Other", "None")
     }
 }

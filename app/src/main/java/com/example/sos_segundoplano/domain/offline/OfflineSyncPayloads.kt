@@ -1,5 +1,13 @@
 package com.example.sos_segundoplano.domain.offline
 
+data class ConnectivitySyncSnapshot(
+    val connected: Boolean,
+    val validated: Boolean,
+    val metered: Boolean,
+    val transport: String,
+    val timestampMillis: Long
+)
+
 data class MinorEventSyncPayload(
     val eventId: Long,
     val sessionId: Long,
@@ -10,7 +18,8 @@ data class MinorEventSyncPayload(
     val confidence: Double,
     val policyVersion: String,
     val occurredAtEpochMillis: Long,
-    val createdAtElapsedRealtimeNanos: Long
+    val createdAtElapsedRealtimeNanos: Long,
+    val connectivity: ConnectivitySyncSnapshot? = null
 )
 
 data class LocalIncidentSyncPayload(
@@ -26,7 +35,14 @@ data class LocalIncidentSyncPayload(
     val validationPolicyVersion: String,
     val gpsQuality: String,
     val occurredAtEpochMillis: Long,
-    val createdAtElapsedRealtimeNanos: Long
+    val createdAtElapsedRealtimeNanos: Long,
+    val clientIncidentId: String? = null,
+    val detectedAtEpochMillis: Long? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val remoteTripId: String? = null,
+    val tripSessionKey: String? = null,
+    val connectivity: ConnectivitySyncSnapshot? = null
 )
 
 data class AlertDispatchRequestSyncPayload(
@@ -41,7 +57,9 @@ data class AlertDispatchRequestSyncPayload(
     val deliveryStatus: String,
     val retryState: String,
     val occurredAtEpochMillis: Long,
-    val createdAtElapsedRealtimeNanos: Long
+    val createdAtElapsedRealtimeNanos: Long,
+    val clientAlertRequestId: String? = null,
+    val connectivity: ConnectivitySyncSnapshot? = null
 )
 
 sealed interface OfflineSyncPayload {
@@ -51,6 +69,7 @@ sealed interface OfflineSyncPayload {
     val sourceSessionId: Long?
     val sourceAssessmentId: Long?
     val occurredAtEpochMillis: Long
+    val connectivity: ConnectivitySyncSnapshot?
 
     data class MinorEventPayload(
         val payload: MinorEventSyncPayload,
@@ -61,6 +80,7 @@ sealed interface OfflineSyncPayload {
         override val sourceSessionId: Long = payload.sessionId
         override val sourceAssessmentId: Long = payload.assessmentId
         override val occurredAtEpochMillis: Long = payload.occurredAtEpochMillis
+        override val connectivity: ConnectivitySyncSnapshot? = payload.connectivity
     }
 
     data class LocalIncidentPayload(
@@ -68,10 +88,11 @@ sealed interface OfflineSyncPayload {
         override val schemaVersion: Int = 1
     ) : OfflineSyncPayload {
         override val eventType: OfflineEventType = OfflineEventType.LocalIncident
-        override val sourceEventId: String = payload.incidentId.toString()
+        override val sourceEventId: String = payload.clientIncidentId?.takeIf { it.isNotBlank() } ?: payload.incidentId.toString()
         override val sourceSessionId: Long = payload.sessionId
         override val sourceAssessmentId: Long = payload.assessmentId
         override val occurredAtEpochMillis: Long = payload.occurredAtEpochMillis
+        override val connectivity: ConnectivitySyncSnapshot? = payload.connectivity
     }
 
     data class AlertDispatchRequestPayload(
@@ -79,9 +100,10 @@ sealed interface OfflineSyncPayload {
         override val schemaVersion: Int = 1
     ) : OfflineSyncPayload {
         override val eventType: OfflineEventType = OfflineEventType.AlertDispatchRequest
-        override val sourceEventId: String = payload.requestId.toString()
+        override val sourceEventId: String = payload.clientAlertRequestId?.takeIf { it.isNotBlank() } ?: payload.requestId.toString()
         override val sourceSessionId: Long = payload.sessionId
         override val sourceAssessmentId: Long = payload.assessmentId
         override val occurredAtEpochMillis: Long = payload.occurredAtEpochMillis
+        override val connectivity: ConnectivitySyncSnapshot? = payload.connectivity
     }
 }

@@ -33,6 +33,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -48,7 +49,12 @@ dependencies {
     implementation(libs.androidx.health.services.client)
     implementation(libs.androidx.concurrent.futures.ktx)
     implementation(libs.guava.listenablefuture)
+    implementation(project(":wear-protocol"))
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
