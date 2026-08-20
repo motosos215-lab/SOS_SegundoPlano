@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -65,7 +66,8 @@ class RiderMonitorFeedbackNotificationFactory(
         PendingIntent.getActivity(
             appContext,
             notificationId(payload.notificationDeliveryAttemptId),
-            Intent(appContext, MainActivity::class.java).apply {
+            Intent().apply {
+                component = ComponentName(appContext, MainActivity::class.java)
                 flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                 putExtra(EXTRA_OPEN_RIDER_MESSAGES, true)
             },
