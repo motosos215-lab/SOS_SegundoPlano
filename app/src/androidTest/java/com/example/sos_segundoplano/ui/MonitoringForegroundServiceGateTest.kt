@@ -98,8 +98,8 @@ class MonitoringForegroundServiceGateTest {
             startTrip = { currentState ->
                 startTripCallCount++
                 when (currentState) {
-                    TripSessionState.Idle -> TripSessionState.Active
-                    TripSessionState.Active -> TripSessionState.Active
+                    TripSessionState.Idle -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
+                    is TripSessionState.Active -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
                 }
             }
         )
@@ -126,8 +126,8 @@ class MonitoringForegroundServiceGateTest {
             startTrip = { currentState ->
                 startTripCallCount++
                 when (currentState) {
-                    TripSessionState.Idle -> TripSessionState.Active
-                    TripSessionState.Active -> TripSessionState.Active
+                    TripSessionState.Idle -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
+                    is TripSessionState.Active -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
                 }
             }
         )
@@ -153,8 +153,8 @@ class MonitoringForegroundServiceGateTest {
             startTrip = { currentState ->
                 startTripCallCount++
                 when (currentState) {
-                    TripSessionState.Idle -> TripSessionState.Active
-                    TripSessionState.Active -> TripSessionState.Active
+                    TripSessionState.Idle -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
+                    is TripSessionState.Active -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
                 }
             }
         )
@@ -177,8 +177,8 @@ class MonitoringForegroundServiceGateTest {
             startTrip = { currentState ->
                 startTripCallCount++
                 when (currentState) {
-                    TripSessionState.Idle -> TripSessionState.Active
-                    TripSessionState.Active -> TripSessionState.Active
+                    TripSessionState.Idle -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
+                    is TripSessionState.Active -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
                 }
             }
         )
@@ -202,8 +202,8 @@ class MonitoringForegroundServiceGateTest {
             startTrip = { currentState ->
                 startTripCallCount++
                 when (currentState) {
-                    TripSessionState.Idle -> TripSessionState.Active
-                    TripSessionState.Active -> TripSessionState.Active
+                    TripSessionState.Idle -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
+                    is TripSessionState.Active -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
                 }
             }
         )
@@ -285,8 +285,8 @@ class MonitoringForegroundServiceGateTest {
         onOpenNotificationSettings: () -> Unit = {},
         startTrip: (TripSessionState) -> TripSessionState = { currentState ->
             when (currentState) {
-                TripSessionState.Idle -> TripSessionState.Active
-                TripSessionState.Active -> TripSessionState.Active
+                TripSessionState.Idle -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
+                is TripSessionState.Active -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
             }
         }
     ) {

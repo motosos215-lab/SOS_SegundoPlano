@@ -5,6 +5,8 @@ import com.example.sos_segundoplano.domain.offline.OfflineEventSink
 import com.example.sos_segundoplano.domain.offline.OfflineQueueEnqueueResult
 import com.example.sos_segundoplano.domain.offline.OfflineSyncErrorCategory
 import com.example.sos_segundoplano.domain.rules.RiskLevel
+import com.example.sos_segundoplano.domain.sos.MobileSosPriority
+import com.example.sos_segundoplano.domain.sos.MobileSosSeverity
 import com.example.sos_segundoplano.domain.validation.AlertDispatchRequest
 import com.example.sos_segundoplano.domain.validation.IncidentCause
 import com.example.sos_segundoplano.domain.validation.IncidentRemoteCreationStatus
@@ -54,8 +56,35 @@ class ManualSosIncidentCoordinatorTest {
         val link = links.read("123e4567-e89b-12d3-a456-426614174041")
         assertEquals("223e4567-e89b-12d3-a456-426614174041", link?.clientAlertRequestId)
         assertEquals("2026-08-11T15:55:00Z", link?.detectedAtUtc)
+        assertEquals("Unknown", link?.manualSeverity)
+        assertEquals("High", link?.manualPriority)
         assertNotNull(UUID.fromString(requireNotNull(link?.clientIncidentId)))
         assertNotNull(UUID.fromString(requireNotNull(link?.clientAlertRequestId)))
+    }
+
+    @Test fun selectedManualClassificationIsPersistedBeforeRemoteSubmission() = runBlocking {
+        val links = InMemoryRemoteIncidentLinkStore()
+        val coordinator = ManualSosIncidentCoordinator(
+            remoteCreator = CapturingRemoteCreator(),
+            offlineEventSink = CapturingOfflineEventSink(),
+            remoteIncidentLinkStore = links,
+            incidentStore = InMemoryBoundedValidationStore(4),
+            nextIncidentId = { 47L },
+            nextClientIncidentId = { "123e4567-e89b-12d3-a456-426614174047" },
+            nextClientAlertRequestId = { "223e4567-e89b-12d3-a456-426614174047" },
+            nowUtc = { Instant.parse("2026-08-11T16:01:00Z") }
+        )
+
+        coordinator.requestManualSos(
+            ManualSosSubmissionOptions(
+                severity = MobileSosSeverity.High,
+                priority = MobileSosPriority.Critical
+            )
+        )
+
+        val link = links.read("123e4567-e89b-12d3-a456-426614174047")
+        assertEquals("High", link?.manualSeverity)
+        assertEquals("Critical", link?.manualPriority)
     }
 
     @Test fun offlineQueueFailureDoesNotBlockDurableRemoteIncidentFlow() = runBlocking {
@@ -117,6 +146,48 @@ class ManualSosIncidentCoordinatorTest {
         val link = links.read("123e4567-e89b-12d3-a456-426614174043")
         assertEquals("223e4567-e89b-12d3-a456-426614174043", link?.clientAlertRequestId)
         assertEquals("2026-08-11T15:57:00Z", link?.detectedAtUtc)
+    }
+
+
+    @Test fun offlineManualSosIsDurableReportsSavedOfflineAndSchedulesRecovery() = runBlocking {
+        val links = InMemoryRemoteIncidentLinkStore()
+        val scheduled = mutableListOf<Long>()
+        val states = mutableListOf<ManualSosRequestState>()
+        val coordinator = ManualSosIncidentCoordinator(
+            remoteCreator = CapturingRemoteCreator(failFirst = true),
+            offlineEventSink = CapturingOfflineEventSink(),
+            remoteIncidentLinkStore = links,
+            incidentStore = InMemoryBoundedValidationStore(4),
+            nextIncidentId = { 48L },
+            nextClientIncidentId = { "123e4567-e89b-12d3-a456-426614174048" },
+            nextClientAlertRequestId = { "223e4567-e89b-12d3-a456-426614174048" },
+            nowUtc = { Instant.parse("2026-08-20T16:00:00Z") },
+            currentOwnerUserId = { "rider-48" },
+            scheduleRecovery = scheduled::add
+        )
+
+        val first = coordinator.requestManualSos(
+            progressReporter = ManualSosProgressReporter(states::add)
+        )
+
+        assertEquals(IncidentRemoteCreationStatus.NetworkUnavailable("fixture_offline"), first.remoteCreationStatus)
+        assertEquals(ManualSosRequestState.SavedOffline, states.last())
+        assertEquals("rider-48", links.readPendingManualSos()?.ownerUserId)
+        assertEquals(listOf(15_000L, 30_000L), scheduled)
+    }
+
+    @Test fun backgroundManualRecoveryNeverCreatesANewSosWhenNothingIsPending() = runBlocking {
+        val remote = CapturingRemoteCreator()
+        val coordinator = ManualSosIncidentCoordinator(
+            remoteCreator = remote,
+            offlineEventSink = CapturingOfflineEventSink(),
+            remoteIncidentLinkStore = InMemoryRemoteIncidentLinkStore(),
+            incidentStore = InMemoryBoundedValidationStore(4),
+            currentOwnerUserId = { "rider-empty" }
+        )
+
+        assertEquals(null, coordinator.retryPendingManualSos())
+        assertEquals(0, remote.incidents.size)
     }
 
     @Test fun concurrentDoubleTapJoinsOneLogicalManualSos() = runBlocking {

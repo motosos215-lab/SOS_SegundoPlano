@@ -5,6 +5,7 @@ import com.example.sos_segundoplano.data.remote.monitor.DeclineMonitorAlertReque
 import com.example.sos_segundoplano.data.remote.monitor.MonitorAlertAcknowledgementDto
 import com.example.sos_segundoplano.data.remote.monitor.MonitorAlertDetailDataDto
 import com.example.sos_segundoplano.data.remote.monitor.MonitorAlertHistoryDataDto
+import com.example.sos_segundoplano.data.remote.monitor.MonitorAlertLocationDataDto
 import com.example.sos_segundoplano.data.remote.monitor.MonitorAlertStatusDataDto
 import com.example.sos_segundoplano.data.remote.monitor.MonitorAlertsRemoteDataSource
 import com.example.sos_segundoplano.data.remote.monitor.MonitorAlertsRemoteResult
@@ -25,21 +26,56 @@ import com.example.sos_segundoplano.domain.monitor.MonitorAlertsRepository
 import com.example.sos_segundoplano.domain.monitor.MonitorAlertsResult
 import com.example.sos_segundoplano.domain.monitor.NotificationDeliveryAttemptId
 import com.example.sos_segundoplano.domain.repository.AuthRepository
+import com.example.sos_segundoplano.features.history.HistoryDiagnostics
 
 class DefaultMonitorAlertsRepository(
     private val authRepository: AuthRepository,
     private val remote: MonitorAlertsRemoteDataSource
 ) : MonitorAlertsRepository {
-    override suspend fun listAlerts(): MonitorAlertsResult<List<MonitorAlertAcknowledgement>> = monitorCall { remote.list(it) }.alerts()
+    override suspend fun listAlerts(): MonitorAlertsResult<List<MonitorAlertAcknowledgement>> {
+        val remoteResult = monitorCall { remote.list(it) }
+        when (remoteResult) {
+            is MonitorAlertsRemoteResult.Success -> {
+                val alerts = remoteResult.data.alerts
+                HistoryDiagnostics.debug(
+                    HistoryDiagnostics.monitorApiSuccess(
+                        pageNumber = remoteResult.data.pageNumber,
+                        pageSize = remoteResult.data.pageSize,
+                        totalCount = remoteResult.data.totalCount,
+                        receivedCount = alerts.size,
+                        hasPending = alerts.any { it.status == "Pending" },
+                        hasViewed = alerts.any { it.status == "Viewed" },
+                        hasAcknowledged = alerts.any { it.status == "Acknowledged" },
+                        hasDeclined = alerts.any { it.status == "Declined" },
+                        hasDeliveryAttempt = alerts.any { !it.notificationDeliveryAttemptId.isNullOrBlank() }
+                    )
+                )
+                val mapped = alerts.mapNotNull { it.toHistoryDomain() }
+                HistoryDiagnostics.debug(
+                    HistoryDiagnostics.monitorMapping(
+                        receivedCount = alerts.size,
+                        mappedCount = mapped.size,
+                        hasAcknowledged = mapped.any { it.status == "Acknowledged" }
+                    )
+                )
+                return MonitorAlertsResult.Success(mapped)
+            }
+            is MonitorAlertsRemoteResult.Failure -> {
+                HistoryDiagnostics.debug(HistoryDiagnostics.apiFailure("monitor_history", remoteResult.statusCode, remoteResult.message))
+                return MonitorAlertsResult.Failure(remoteResult.statusCode, remoteResult.errorCode, remoteResult.message)
+            }
+        }
+    }
     override suspend fun getAlerts() = monitorCall { remote.list(it) }.historyOpaque()
     override suspend fun getAlert(id: NotificationDeliveryAttemptId) = monitorCall { remote.detail(it, id.value) }.detail()
     override suspend fun getStatus(id: NotificationDeliveryAttemptId) = monitorCall { remote.status(it, id.value) }.status()
-    override suspend fun getLocation(id: NotificationDeliveryAttemptId) = monitorCall { remote.location(it, id.value) }.opaque()
+    override suspend fun getLocation(id: NotificationDeliveryAttemptId) = monitorCall { remote.location(it, id.value) }.locationOpaque()
+    override suspend fun getLocationStatus(id: NotificationDeliveryAttemptId) = monitorCall { remote.location(it, id.value) }.locationStatus()
     override suspend fun markViewed(id: NotificationDeliveryAttemptId) = monitorCall { remote.view(it, id.value) }.opaque()
     override suspend fun acknowledge(id: NotificationDeliveryAttemptId, responseType: String, message: String) =
         monitorCall { remote.acknowledge(it, id.value, AcknowledgeMonitorAlertRequestDto(responseType, message)) }.detail()
     override suspend fun decline(id: NotificationDeliveryAttemptId, reason: String) =
-        monitorCall { remote.decline(it, id.value, DeclineMonitorAlertRequestDto(message = reason.takeIf { it.isNotBlank() })) }.detail()
+        monitorCall { remote.decline(it, id.value, DeclineMonitorAlertRequestDto(reason = reason)) }.detail()
 
     private suspend fun <T> monitorCall(call: suspend (String) -> MonitorAlertsRemoteResult<T>): MonitorAlertsRemoteResult<T> {
         val role = when (val state = authRepository.observeSession().value) {
@@ -59,6 +95,16 @@ class DefaultMonitorAlertsRepository(
 
     private fun MonitorAlertsRemoteResult<Any>.opaque(): MonitorAlertsResult<MonitorAlertOpaquePayload> = when (this) {
         is MonitorAlertsRemoteResult.Success -> MonitorAlertsResult.Success(MonitorAlertOpaquePayload(data))
+        is MonitorAlertsRemoteResult.Failure -> MonitorAlertsResult.Failure(statusCode, errorCode, message)
+    }
+
+    private fun MonitorAlertsRemoteResult<MonitorAlertLocationDataDto>.locationOpaque(): MonitorAlertsResult<MonitorAlertOpaquePayload> = when (this) {
+        is MonitorAlertsRemoteResult.Success -> MonitorAlertsResult.Success(MonitorAlertOpaquePayload(data))
+        is MonitorAlertsRemoteResult.Failure -> MonitorAlertsResult.Failure(statusCode, errorCode, message)
+    }
+
+    private fun MonitorAlertsRemoteResult<MonitorAlertLocationDataDto>.locationStatus(): MonitorAlertsResult<MonitorAlertStatusLocation?> = when (this) {
+        is MonitorAlertsRemoteResult.Success -> MonitorAlertsResult.Success(data.resolvedLocation()?.toDomain())
         is MonitorAlertsRemoteResult.Failure -> MonitorAlertsResult.Failure(statusCode, errorCode, message)
     }
 
@@ -117,4 +163,16 @@ private fun MonitorAlertStatusDataDto.toDomain() = MonitorAlertStatus(
     overallStatus = overallStatus,
     requiresAttention = requiresAttention,
     lastUpdatedAtUtc = lastUpdatedAtUtc
+)
+
+private fun com.example.sos_segundoplano.data.remote.monitor.MonitorAlertStatusLocationDto.toDomain() = MonitorAlertStatusLocation(
+    available = available,
+    latitude = latitude,
+    longitude = longitude,
+    accuracyMeters = accuracyMeters,
+    source = source,
+    recordedAtUtc = recordedAtUtc,
+    receivedAtUtc = receivedAtUtc,
+    isActive = isActive,
+    isStale = isStale
 )

@@ -4,6 +4,8 @@ import com.example.sos_segundoplano.domain.auth.AccessToken
 import com.example.sos_segundoplano.domain.auth.AuthSessionIdentity
 import com.example.sos_segundoplano.domain.auth.AuthResult
 import com.example.sos_segundoplano.domain.auth.AuthUser
+import com.example.sos_segundoplano.domain.auth.InvalidResponse
+import com.example.sos_segundoplano.domain.auth.SessionTakeoverChallenge
 import com.example.sos_segundoplano.domain.auth.SessionExpired
 import com.example.sos_segundoplano.domain.auth.SessionState
 import com.example.sos_segundoplano.domain.auth.authenticatedIdentityOrNull
@@ -11,9 +13,16 @@ import kotlinx.coroutines.flow.StateFlow
 
 interface AuthRepository {
     suspend fun login(email: String, password: String, rememberMe: Boolean): AuthResult<AuthUser>
+    suspend fun takeover(challenge: SessionTakeoverChallenge): AuthResult<AuthUser> =
+        InvalidResponse(sanitizedMessage = "session_takeover_not_supported")
     suspend fun restoreSession(): AuthResult<AuthUser?>
     suspend fun ensureValidAccessToken(): AuthResult<AccessToken>
     suspend fun refreshSession(): AuthResult<AuthUser>
+    suspend fun validateCurrentSession(): AuthResult<AuthUser> = when (val state = observeSession().value) {
+        is SessionState.Authenticated -> AuthResult.Success(state.user)
+        is SessionState.Refreshing -> AuthResult.Success(state.user)
+        else -> SessionExpired
+    }
     suspend fun logout(): AuthResult<Unit>
     suspend fun logoutIfCurrent(expectedSession: AuthSessionIdentity): AuthResult<Unit> =
         if (observeSession().value.authenticatedIdentityOrNull() == expectedSession) {

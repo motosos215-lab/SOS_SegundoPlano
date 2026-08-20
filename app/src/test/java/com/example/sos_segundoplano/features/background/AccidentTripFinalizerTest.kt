@@ -27,14 +27,19 @@ class AccidentTripFinalizerTest {
     }
 
     @Test fun safeConfirmedKeepsTripTimingWhilePersistedAccidentClearsIt() {
-        var timingState: TripTimingState = TripTimingState.Active(1_000L)
-        val finalizer = AccidentTripFinalizer { timingState = TripTimingState.Unknown }
+        var timingState: TripTimingState = TripTimingState.Active(1_000L, TRIP_SESSION_A)
+        var finishedBundleKey: String? = null
+        val finalizer = AccidentTripFinalizer { bundleKey ->
+            finishedBundleKey = bundleKey
+            timingState = TripTimingState.Unknown
+        }
 
         finalizer.onValidationStateChanged(FalsePositiveValidationState.SafeConfirmed(metadata(), "safe-timing"))
         assertTrue(timingState is TripTimingState.Active)
 
-        finalizer.onValidationStateChanged(incidentGenerated(IncidentCause.Timeout))
+        finalizer.onValidationStateChanged(incidentGenerated(IncidentCause.Timeout, BUNDLE_A))
         assertEquals(TripTimingState.Unknown, timingState)
+        assertEquals(BUNDLE_A, finishedBundleKey)
     }
 
     @Test fun helpRequestedDoesNotFinishBeforePersistence() {
@@ -47,33 +52,36 @@ class AccidentTripFinalizerTest {
     }
 
     @Test fun incidentGeneratedFinishesTripOncePerIncident() {
-        var finishCount = 0
-        val finalizer = AccidentTripFinalizer { finishCount++ }
-        val state = incidentGenerated(IncidentCause.UserRequestedHelp)
+        val finishedBundleKeys = mutableListOf<String>()
+        val finalizer = AccidentTripFinalizer(finishedBundleKeys::add)
+        val state = incidentGenerated(IncidentCause.UserRequestedHelp, BUNDLE_A)
 
         finalizer.onValidationStateChanged(state)
         finalizer.onValidationStateChanged(state)
 
-        assertEquals(1, finishCount)
+        assertEquals(listOf(BUNDLE_A), finishedBundleKeys)
     }
 
     @Test fun timeoutIncidentGeneratedFinishesTripOnce() {
-        var finishCount = 0
-        val finalizer = AccidentTripFinalizer { finishCount++ }
+        val finishedBundleKeys = mutableListOf<String>()
+        val finalizer = AccidentTripFinalizer(finishedBundleKeys::add)
 
-        finalizer.onValidationStateChanged(incidentGenerated(IncidentCause.Timeout))
+        finalizer.onValidationStateChanged(incidentGenerated(IncidentCause.Timeout, BUNDLE_A))
 
-        assertEquals(1, finishCount)
+        assertEquals(listOf(BUNDLE_A), finishedBundleKeys)
     }
 
     @Test fun immediateAlertRequestedFinishesBecauseItIsPostPersistence() {
-        var finishCount = 0
-        val finalizer = AccidentTripFinalizer { finishCount++ }
+        val finishedBundleKeys = mutableListOf<String>()
+        val finalizer = AccidentTripFinalizer(finishedBundleKeys::add)
         val incident = incident(IncidentCause.CriticalPhysicalEvent)
 
+        finalizer.onValidationStateChanged(
+            FalsePositiveValidationState.IncidentGenerated(incident, dispatch(incident), metadata(), BUNDLE_A)
+        )
         finalizer.onValidationStateChanged(FalsePositiveValidationState.ImmediateAlertRequested(incident, dispatch(incident), metadata()))
 
-        assertEquals(1, finishCount)
+        assertEquals(listOf(BUNDLE_A), finishedBundleKeys)
     }
 
     @Test fun errorDoesNotFinishTripOrClaimSuccess() {
@@ -86,20 +94,24 @@ class AccidentTripFinalizerTest {
     }
 
     @Test fun resetAllowsNewTripToFinishForSameLocalIds() {
-        var finishCount = 0
-        val finalizer = AccidentTripFinalizer { finishCount++ }
-        val state = incidentGenerated(IncidentCause.Timeout)
+        val finishedBundleKeys = mutableListOf<String>()
+        val finalizer = AccidentTripFinalizer(finishedBundleKeys::add)
+        val firstState = incidentGenerated(IncidentCause.Timeout, BUNDLE_A)
+        val secondState = incidentGenerated(IncidentCause.Timeout, BUNDLE_B)
 
-        finalizer.onValidationStateChanged(state)
+        finalizer.onValidationStateChanged(firstState)
         finalizer.reset()
-        finalizer.onValidationStateChanged(state)
+        finalizer.onValidationStateChanged(secondState)
 
-        assertEquals(2, finishCount)
+        assertEquals(listOf(BUNDLE_A, BUNDLE_B), finishedBundleKeys)
     }
 
-    private fun incidentGenerated(cause: IncidentCause): FalsePositiveValidationState.IncidentGenerated {
+    private fun incidentGenerated(
+        cause: IncidentCause,
+        bundleKey: String
+    ): FalsePositiveValidationState.IncidentGenerated {
         val incident = incident(cause)
-        return FalsePositiveValidationState.IncidentGenerated(incident, dispatch(incident), metadata())
+        return FalsePositiveValidationState.IncidentGenerated(incident, dispatch(incident), metadata(), bundleKey)
     }
 
     private fun incident(cause: IncidentCause) = LocalIncident(
@@ -150,4 +162,10 @@ class AccidentTripFinalizerTest {
         origin = ValidationOrigin.System,
         policyVersion = "false-positive-validation-v1"
     )
+
+    private companion object {
+        const val BUNDLE_A = "bundle-A"
+        const val BUNDLE_B = "bundle-B"
+        const val TRIP_SESSION_A = "trip-session-A"
+    }
 }

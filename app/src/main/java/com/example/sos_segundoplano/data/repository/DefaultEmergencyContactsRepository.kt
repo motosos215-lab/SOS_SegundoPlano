@@ -21,6 +21,9 @@ class DefaultEmergencyContactsRepository(
     private val authRepository: AuthRepository,
     private val remote: EmergencyContactsRemoteDataSource
 ) : EmergencyContactsRepository {
+    override suspend fun list(): EmergencyContactsResult<List<EmergencyContact>> =
+        riderCall { authorization -> remote.list(authorization) }.mapContacts()
+
     override suspend fun create(request: CreateEmergencyContact): EmergencyContactsResult<EmergencyContact> =
         riderCall { authorization -> remote.create(authorization, request.toDto()) }.mapContact()
 
@@ -56,6 +59,19 @@ class DefaultEmergencyContactsRepository(
     private fun CreateEmergencyContact.toDto() = CreateEmergencyContactRequestDto(fullName, relationship, phoneNumber, email, priority, permissions.toDto(), saveMode)
     private fun EmergencyContactPermissions.toDto() = EmergencyContactPermissionsDto(canViewRealTimeLocation, canReceiveCriticalAlerts, canViewIncidentHistory, canViewVitalSigns)
     private fun EmergencyContactPermissionsDto.toDomain() = EmergencyContactPermissions(canViewRealTimeLocation, canReceiveCriticalAlerts, canViewIncidentHistory, canViewVitalSigns)
+
+
+    private fun EmergencyContactsRemoteResult<List<EmergencyContactDto>>.mapContacts(): EmergencyContactsResult<List<EmergencyContact>> = when (this) {
+        is EmergencyContactsRemoteResult.Success -> {
+            val contacts = data.mapNotNull { it.toDomain() }
+            if (data.isNotEmpty() && contacts.isEmpty()) {
+                EmergencyContactsResult.Failure(200, null, "response_contract_incomplete")
+            } else {
+                EmergencyContactsResult.Success(contacts)
+            }
+        }
+        is EmergencyContactsRemoteResult.Failure -> EmergencyContactsResult.Failure(statusCode, errorCode, message)
+    }
 
     private fun EmergencyContactsRemoteResult<EmergencyContactDto>.mapContact(): EmergencyContactsResult<EmergencyContact> = when (this) {
         is EmergencyContactsRemoteResult.Success -> {

@@ -11,7 +11,6 @@ import android.os.Bundle
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import com.example.sos_segundoplano.data.signals.TripSignalStore
-import com.example.sos_segundoplano.domain.rules.RuleEngineConfig
 import com.example.sos_segundoplano.domain.signals.LocationSample
 import com.example.sos_segundoplano.domain.signals.SignalAvailability
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -26,7 +25,7 @@ fun interface ManualSosLocationProvider {
 class TripSignalManualSosLocationProvider(
     private val store: TripSignalStore,
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
-    private val maxAgeMillis: Long = RuleEngineConfig().gpsMaxAgeNanos / NANOS_PER_MILLI,
+    private val maxAgeMillis: Long = EMERGENCY_LOCATION_MAX_AGE_MILLIS,
     private val currentLocationProvider: CurrentManualSosLocationProvider = UnavailableCurrentManualSosLocationProvider,
     private val currentLocationTimeoutMillis: Long = CURRENT_LOCATION_TIMEOUT_MILLIS
 ) : ManualSosLocationProvider {
@@ -50,8 +49,7 @@ class TripSignalManualSosLocationProvider(
     }
 
     private companion object {
-        const val NANOS_PER_MILLI = 1_000_000L
-        const val CURRENT_LOCATION_TIMEOUT_MILLIS = 10_000L
+        const val CURRENT_LOCATION_TIMEOUT_MILLIS = 5_000L
     }
 }
 
@@ -75,6 +73,12 @@ class AndroidCurrentManualSosLocationProvider(
             val providers = selectProviders()
             if (providers.isEmpty()) {
                 continuation.resume(null)
+                return@suspendCancellableCoroutine
+            }
+            // Emergency delivery should not wait for a brand-new callback when Android already has
+            // a recent real fix. Accuracy does not gate SOS; age/validity/mock status do.
+            recentLastKnownLocation(providers)?.let { cached ->
+                continuation.resume(cached)
                 return@suspendCancellableCoroutine
             }
             val listeners = mutableListOf<LocationListener>()
@@ -123,6 +127,29 @@ class AndroidCurrentManualSosLocationProvider(
         ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
+    private fun recentLastKnownLocation(providers: List<String>): LocationSample? {
+        val now = System.currentTimeMillis()
+        return providers.asSequence()
+            .mapNotNull { provider ->
+                val location = try {
+                    locationManager.getLastKnownLocation(provider)
+                } catch (_: SecurityException) {
+                    null
+                } catch (_: IllegalArgumentException) {
+                    null
+                }
+                location?.toSample(provider)
+            }
+            .filter { sample ->
+                isValidRealLocation(
+                    sample,
+                    ageMillis = now - sample.timestampMillis,
+                    maxAgeMillis = EMERGENCY_LOCATION_MAX_AGE_MILLIS
+                )
+            }
+            .maxByOrNull { it.timestampMillis }
+    }
+
     private fun selectProviders(): List<String> {
         val providers = locationManager.getProviders(true)
         return listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
@@ -142,10 +169,12 @@ class AndroidCurrentManualSosLocationProvider(
     )
 
     private companion object {
-        const val CURRENT_LOCATION_TIMEOUT_MILLIS = 10_000L
-        val MAX_LOCATION_AGE_MILLIS = RuleEngineConfig().gpsMaxAgeNanos / 1_000_000L
+        const val CURRENT_LOCATION_TIMEOUT_MILLIS = 5_000L
+        const val MAX_LOCATION_AGE_MILLIS = EMERGENCY_LOCATION_MAX_AGE_MILLIS
     }
 }
+
+internal const val EMERGENCY_LOCATION_MAX_AGE_MILLIS = 30_000L
 
 internal fun isValidRealLocation(sample: LocationSample, ageMillis: Long, maxAgeMillis: Long): Boolean =
     ageMillis in 0..maxAgeMillis &&

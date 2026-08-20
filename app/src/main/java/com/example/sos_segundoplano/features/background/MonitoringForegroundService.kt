@@ -9,7 +9,13 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import com.example.sos_segundoplano.data.remote.incident.IncidentRemoteProvider
+import com.example.sos_segundoplano.core.auth.AuthProvider
 import com.example.sos_segundoplano.data.remote.trip.TripRemoteSessionProvider
+import com.example.sos_segundoplano.data.route.TripRouteProvider
+import com.example.sos_segundoplano.data.offline.OfflineQueueProvider
+import com.example.sos_segundoplano.domain.offline.OfflineQueueSyncResult
+import com.example.sos_segundoplano.domain.auth.SessionRevoked
 import com.example.sos_segundoplano.data.signals.TripSignalCaptureCoordinator
 import com.example.sos_segundoplano.data.trip.TripSessionStoreProvider
 import com.example.sos_segundoplano.data.trip.TripTimingStoreProvider
@@ -24,6 +30,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class MonitoringForegroundService : Service() {
@@ -37,12 +45,26 @@ class MonitoringForegroundService : Service() {
         TripSignalCaptureCoordinator(applicationContext)
     }
     private val accidentTripFinalizer: AccidentTripFinalizer by lazy {
-        AccidentTripFinalizer(::finishTripAfterAccident)
+        AccidentTripFinalizer(::requestTripFinishAfterAccident)
+    }
+    private val accidentTripTermination: AccidentTripTerminationCoordinator by lazy {
+        val dependencies = TripRemoteSessionProvider.get(applicationContext)
+        AccidentTripTerminationCoordinator(
+            remoteTripFinisher = dependencies.finisher,
+            hasActiveRemoteTrip = {
+                !dependencies.store.remoteTripId.value.isNullOrBlank()
+            },
+            stopMonitoring = ::stopMonitoringAfterAccident
+        )
     }
     private var notificationScope: CoroutineScope? = null
     private var notificationCollector: Job? = null
     private var tripReconciliationScope: CoroutineScope? = null
     private var tripReconciliationJob: Job? = null
+    private var accidentTerminationScope: CoroutineScope? = null
+    private var accidentTerminationJob: Job? = null
+    private var sessionLivenessScope: CoroutineScope? = null
+    private var sessionLivenessJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -70,18 +92,31 @@ class MonitoringForegroundService : Service() {
         }
 
         return try {
+            // Re-bind production SOS dependencies at the actual monitoring start boundary. Application
+            // initialization already does this, but the service must be self-healing after process
+            // recreation/test installs so automatic SOS can never remain wired to a NoOp sink/creator.
+            IncidentRemoteProvider.initialize(applicationContext)
+            FalsePositiveValidationCoordinatorProvider.setAutomaticSosAlertCreator(
+                IncidentRemoteProvider.automaticSosAlertCreator(applicationContext)
+            )
+            FalsePositiveValidationCoordinatorProvider.setOfflineEventSink(
+                OfflineQueueProvider.get(applicationContext).repository
+            )
             FalsePositiveValidationCoordinatorProvider.setNotifier(WearValidationStatusNotifier(applicationContext))
             FalsePositiveValidationCoordinatorProvider.setLogger(AndroidFalsePositiveValidationLogger)
             promoteToForeground(notificationFactory.buildMonitoringNotification())
             val recoveryStart = intent.getBooleanExtra(EXTRA_RECOVERY_START, false)
             if (!recoveryStart) reconcileRemoteTrip()
             captureCoordinator.start()
+            val tripSession = (TripSessionStoreProvider.store.states.value as? TripSessionState.Active)
+                ?: TripSessionStoreProvider.store.beginTripSession()
             if (!recoveryStart || TripTimingStoreProvider.store.states.value !is com.example.sos_segundoplano.domain.trip.TripTimingState.Active) {
-                TripTimingStoreProvider.store.beginConfirmedTrip()
+                TripTimingStoreProvider.store.beginConfirmedTrip(tripSession.tripSessionKey)
             }
-            TripSessionStoreProvider.store.setState(TripSessionState.Active)
+            TripRouteProvider.get(applicationContext).recorder.start()
             accidentTripFinalizer.reset()
             startNotificationUpdates()
+            startSessionLivenessChecks()
             START_NOT_STICKY
         } catch (_: SecurityException) {
             stopSelf(startId)
@@ -94,15 +129,22 @@ class MonitoringForegroundService : Service() {
         notificationScope?.cancel()
         tripReconciliationJob?.cancel()
         tripReconciliationScope?.cancel()
+        accidentTerminationJob?.cancel()
+        accidentTerminationScope?.cancel()
+        sessionLivenessJob?.cancel()
+        sessionLivenessScope?.cancel()
         notificationCollector = null
         notificationScope = null
         tripReconciliationJob = null
         tripReconciliationScope = null
+        accidentTerminationJob = null
+        accidentTerminationScope = null
+        sessionLivenessJob = null
+        sessionLivenessScope = null
         notificationManager.cancel(MonitoringNotificationFactory.EMERGENCY_NOTIFICATION_ID)
         stopForegroundNotification()
+        TripRouteProvider.get(applicationContext).recorder.stopAndScheduleFinalSync()
         captureCoordinator.stop()
-        TripTimingStoreProvider.store.clear()
-        TripSessionStoreProvider.store.setState(TripSessionState.Idle)
         super.onDestroy()
     }
 
@@ -115,9 +157,41 @@ class MonitoringForegroundService : Service() {
         }
     }
 
-    private fun finishTripAfterAccident() {
-        TripTimingStoreProvider.store.clear()
+    private fun requestTripFinishAfterAccident(bundleKey: String) {
+        if (accidentTerminationJob != null) return
+        val nextScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        accidentTerminationScope = nextScope
+        accidentTerminationJob = nextScope.launch {
+            // The durable bundle claim is shared with WorkManager; never finish directly here.
+            if (OfflineQueueProvider.get(applicationContext).automaticTripFinalizationProcessor
+                    .processBundle(bundleKey, "service-auto-finish") == OfflineQueueSyncResult.Completed) {
+                stopMonitoringAfterAccident()
+            }
+        }
+    }
+
+    private fun stopMonitoringAfterAccident() {
+        // Durable trip state was already reconciled by AutomaticTripFinalizationProcessor.
         stopSelf()
+    }
+
+    private fun startSessionLivenessChecks() {
+        if (sessionLivenessJob != null) return
+        val nextScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        sessionLivenessScope = nextScope
+        sessionLivenessJob = nextScope.launch {
+            val authRepository = AuthProvider.get(applicationContext)
+            while (isActive) {
+                if (authRepository.validateCurrentSession() === SessionRevoked) {
+                    // Backend invalidated this sid because the mobile session was replaced. Stop
+                    // sensor/routing work on the old phone immediately; the UI will return to login
+                    // from the same SessionState transition when it is visible.
+                    stopSelf()
+                    break
+                }
+                delay(SESSION_LIVENESS_INTERVAL_MILLIS)
+            }
+        }
     }
 
     private fun startNotificationUpdates() {
@@ -184,6 +258,7 @@ class MonitoringForegroundService : Service() {
         const val EXTRA_ASSESSMENT_ID = "com.example.sos_segundoplano.extra.ASSESSMENT_ID"
         const val EXTRA_RESPONSE_ID = "com.example.sos_segundoplano.extra.RESPONSE_ID"
         const val EXTRA_RECOVERY_START = "com.example.sos_segundoplano.extra.RECOVERY_START"
+        private const val SESSION_LIVENESS_INTERVAL_MILLIS = 10_000L
 
         fun createStartIntent(context: Context, recoveryStart: Boolean = false): Intent = Intent(context, MonitoringForegroundService::class.java)
             .setAction(ACTION_START_MONITORING)
@@ -206,6 +281,7 @@ private object AndroidFalsePositiveValidationLogger : FalsePositiveValidationLog
 private fun com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.shouldShowEmergencyNotification(): Boolean = when (this) {
     is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.CountdownActive,
     is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.HelpRequested,
+    is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.IncidentDeliveryRetrying,
     is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.IncidentGenerated,
     is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.ImmediateAlertRequested,
     is com.example.sos_segundoplano.domain.validation.FalsePositiveValidationState.Error -> true

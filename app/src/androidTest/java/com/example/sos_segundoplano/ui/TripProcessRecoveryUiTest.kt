@@ -95,8 +95,8 @@ class TripProcessRecoveryUiTest {
     private class FakeTimingStore : TripTimingStore {
         private val mutableStates = MutableStateFlow<TripTimingState>(TripTimingState.Unknown)
         override val states: StateFlow<TripTimingState> = mutableStates
-        override fun beginConfirmedTrip() {
-            mutableStates.value = TripTimingState.Active(1_000L)
+        override fun beginConfirmedTrip(tripSessionKey: String?) {
+            mutableStates.value = TripTimingState.Active(1_000L, tripSessionKey)
         }
         override fun clear() {
             mutableStates.value = TripTimingState.Unknown

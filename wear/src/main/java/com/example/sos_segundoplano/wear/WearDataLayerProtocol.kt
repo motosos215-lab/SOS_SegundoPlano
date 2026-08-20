@@ -31,6 +31,8 @@ object WearDataLayerProtocol {
         putString("status", snapshot.status.toProtocol())
         putString("accelerometerStatus", snapshot.accelerometerStatus.toProtocol())
         snapshot.accelerometer?.let { putVector("accelerometer", it) }
+        putString("linearAccelerationStatus", snapshot.linearAccelerationStatus.toProtocol())
+        snapshot.linearAcceleration?.let { putVector("linearAcceleration", it) }
         putString("gyroscopeStatus", snapshot.gyroscopeStatus.toProtocol())
         snapshot.gyroscope?.let { putVector("gyroscope", it) }
         putString("heartRateStatus", snapshot.heartRateStatus.toProtocol())
@@ -55,6 +57,15 @@ object WearDataLayerProtocol {
     fun decodeValidationStatus(bytes: ByteArray): ValidationStatus {
         val map = runCatching { DataMap.fromByteArray(bytes) }.getOrNull() ?: return ValidationStatus("idle")
         return decodeValidationStatusMap(map)
+    }
+
+    fun decodeValidationStatusOrNull(bytes: ByteArray): ValidationStatus? {
+        val map = runCatching { DataMap.fromByteArray(bytes) }.getOrNull() ?: return null
+        if (map.getInt("protocolVersion", -1) != PROTOCOL_VERSION) return null
+        val status = decodeValidationStatusMap(map)
+        if (status.state.isBlank()) return null
+        if (status.isCountdownActive && (status.sessionId == null || status.assessmentId == null || status.remainingMillis == null || status.remainingMillis < 0L)) return null
+        return status
     }
 
     fun encodeValidationResponseMap(action: String, sessionId: Long, assessmentId: Long, responseId: String): DataMap = DataMap().apply {

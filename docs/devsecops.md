@@ -1,56 +1,106 @@
-# DevSecOps
+# DevSecOps — MotoSOS Android Segundo Plano
 
 ## Objetivo
 
-Mantener una base automatizada para construir, probar y revisar seguridad antes de integrar cambios.
+Evitar que un cambio de aplicación, configuración o dependencia llegue a `main` sin evidencia de compilación, pruebas y controles de seguridad.
 
-## Pipeline inicial
+## Workflows
 
-El workflow `.github/workflows/android-ci.yml` ejecuta:
+### Android CI — `.github/workflows/android-ci.yml`
 
-- `testDebugUnitTest`
-- `lintDebug`
-- `assembleDebug`
-- publicacion del reporte de Android Lint como artifact
+En push a ramas protegidas y Pull Requests:
 
-El workflow `.github/workflows/security-scan.yml` ejecuta:
+1. checkout
+2. restaura `app/google-services.json` desde `GOOGLE_SERVICES_JSON_B64`
+3. JDK 17
+4. Gradle setup + wrapper validation
+5. `:app:compileDebugKotlin`
+6. `:app:testDebugUnitTest`
+7. `:app:lintDebug`
+8. `:app:assembleDebug`
+9. conserva reportes como artifacts por 14 días
 
-- escaneo de secretos con Gitleaks
+### Gitleaks — `.github/workflows/security-scan.yml`
 
-## Testing estatico
+Escanea el historial disponible del repositorio para detectar secretos versionados.
 
-Controles iniciales:
+### CodeQL — `.github/workflows/codeql.yml`
 
-- Android Lint para errores Android, permisos, manifest y recursos
-- revision de secretos en CI
-- validacion del Gradle Wrapper
+Analiza Java/Kotlin en PR, push y semanalmente. Usa build manual de `:app:compileDebugKotlin` para que el análisis observe Kotlin/K2 compilado.
 
-Controles recomendados para siguientes iteraciones:
+### Dependency Review — `.github/workflows/dependency-review.yml`
 
-- Detekt para analisis estatico Kotlin
-- Ktlint o Spotless para formato
-- Dependency Check, Snyk o Dependabot para dependencias
-- Semgrep o CodeQL para reglas de seguridad adicionales
+En Pull Requests rechaza cambios de dependencias con vulnerabilidades de severidad `high` o superior según la información disponible en GitHub Dependency Graph.
 
-## Testing dinamico
+### Dependabot — `.github/dependabot.yml`
 
-Controles iniciales:
+Revisión semanal de:
 
-- pruebas unitarias JVM
-- pruebas instrumentadas Android existentes como base
+- Gradle
+- GitHub Actions
 
-Controles recomendados para siguientes iteraciones:
+## Secretos
 
-- pruebas de permisos moviles
-- pruebas de servicio en segundo plano
-- pruebas de cola offline
-- pruebas de sensores y simulacion de incidentes
-- pruebas de vinculacion con smartwatch
+No versionar:
 
-## Criterio minimo para merge
+- `app/google-services.json`
+- `local.properties`
+- `secrets.properties`
+- `*.jks` / `*.keystore`
+- access/refresh tokens
+- FCM tokens
+- contraseñas
 
-Todo cambio debe compilar y pasar:
+Secret requerido por CI:
 
-```bash
-./gradlew testDebugUnitTest lintDebug assembleDebug
+`GOOGLE_SERVICES_JSON_B64`
+
+Debe contener el `google-services.json` del proyecto codificado en Base64. Los workflows nunca imprimen su contenido.
+
+## Seguridad de flujos críticos
+
+Antes de merge se debe comprobar:
+
+- SOS manual independiente de ML
+- SOS automático conserva countdown/confirmación
+- IDs idempotentes se reutilizan en retry
+- cierre de viaje offline queda durable antes de cerrar localmente
+- WorkManager acepta Wi‑Fi o cellular mediante `NetworkType.CONNECTED`
+- no existe un mapeo remoto no certificado de `MinorEvent` hacia el batch offline
+- JWT/tokens/coordenadas sensibles no aparecen en logs nuevos
+- `PendingIntent` sensible permanece explícito e immutable
+
+## CodeQL + Kotlin/K2
+
+En una revisión anterior, CodeQL reportó `java/android/implicit-pendingintents` sobre un `PendingIntent` que el código construye con `ComponentName(appContext, MainActivity::class.java)` y `FLAG_IMMUTABLE`. La revisión manual lo clasificó como probable falso positivo asociado con el análisis Kotlin 2/K2.
+
+Si vuelve a aparecer:
+
+1. no debilitar el código para “hacer pasar” el scanner;
+2. verificar en el código actual que el Intent sea explícito y el PendingIntent immutable;
+3. revisar la traza exacta del alert;
+4. documentar la evidencia en el PR;
+5. no suprimir/dismiss sin evidencia reproducible.
+
+Referencias históricas de seguimiento: `github/codeql#20153` y `github/codeql#21915`.
+
+## Criterio mínimo de PR
+
+```powershell
+.\gradlew.bat :app:compileDebugKotlin --console=plain --no-daemon
+.\gradlew.bat :app:testDebugUnitTest --console=plain --no-daemon
+.\gradlew.bat :app:lintDebug --console=plain --no-daemon --no-configuration-cache --max-workers=2
+.\gradlew.bat :app:assembleDebug --console=plain --no-daemon
 ```
+
+Además:
+
+- Gitleaks PASS
+- Dependency Review PASS o hallazgo justificado/corregido
+- CodeQL revisado
+- diff sin secretos/artefactos generados
+- evidencia manual para cambios en SOS, red, permisos o background processing
+
+## Política de merge
+
+Los workflows preparan evidencia; no autorizan por sí solos el merge. El merge se realiza sólo después de revisión humana y autorización del responsable del proyecto.

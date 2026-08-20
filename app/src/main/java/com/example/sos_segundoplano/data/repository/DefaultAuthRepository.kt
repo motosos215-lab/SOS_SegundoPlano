@@ -4,10 +4,13 @@ import com.example.sos_segundoplano.data.remote.auth.AuthRemoteDataSource
 import com.example.sos_segundoplano.data.remote.auth.AuthUserDto
 import com.example.sos_segundoplano.data.remote.auth.LoginDataDto
 import com.example.sos_segundoplano.data.remote.auth.LoginRequestDto
+import com.example.sos_segundoplano.data.remote.auth.SessionTakeoverRequestDto
+import com.example.sos_segundoplano.data.remote.auth.toDto
 import com.example.sos_segundoplano.data.remote.auth.LogoutRequestDto
 import com.example.sos_segundoplano.data.remote.auth.RefreshDataDto
 import com.example.sos_segundoplano.data.remote.auth.RefreshTokenRequestDto
 import com.example.sos_segundoplano.domain.auth.AccessDenied
+import com.example.sos_segundoplano.domain.auth.ActiveSessionExists
 import com.example.sos_segundoplano.domain.auth.AccessToken
 import com.example.sos_segundoplano.domain.auth.AuthClock
 import com.example.sos_segundoplano.domain.auth.AuthFailure
@@ -21,6 +24,9 @@ import com.example.sos_segundoplano.domain.auth.RateLimited
 import com.example.sos_segundoplano.domain.auth.RemoteLogoutFailed
 import com.example.sos_segundoplano.domain.auth.ServerFailure
 import com.example.sos_segundoplano.domain.auth.SessionExpired
+import com.example.sos_segundoplano.domain.auth.SessionRevoked
+import com.example.sos_segundoplano.domain.auth.SessionTakeoverChallenge
+import com.example.sos_segundoplano.domain.auth.SessionTakeoverFailure
 import com.example.sos_segundoplano.domain.auth.SessionSecrets
 import com.example.sos_segundoplano.domain.auth.SessionState
 import com.example.sos_segundoplano.domain.auth.SessionStorageFailureReason
@@ -29,6 +35,7 @@ import com.example.sos_segundoplano.domain.auth.SessionStoreResult
 import com.example.sos_segundoplano.domain.auth.StorageFailure
 import com.example.sos_segundoplano.domain.auth.Unauthorized
 import com.example.sos_segundoplano.domain.auth.UserRole
+import com.example.sos_segundoplano.data.local.auth.ClientDeviceInfoProvider
 import com.example.sos_segundoplano.domain.repository.AuthRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,6 +53,16 @@ class DefaultAuthRepository(
     private val remoteDataSource: AuthRemoteDataSource,
     private val sessionStore: SessionStore,
     private val clock: AuthClock,
+    private val clientDeviceInfoProvider: ClientDeviceInfoProvider = ClientDeviceInfoProvider {
+        com.example.sos_segundoplano.domain.auth.ClientDeviceInfo(
+            clientDeviceId = "00000000-0000-0000-0000-000000000000",
+            deviceName = "Android",
+            platform = "Android",
+            osVersion = "Android",
+            appVersion = "unknown"
+        )
+    },
+    private val linkedMobileDeviceIdForAccount: (String) -> String? = { null },
     private val expirationMargin: Duration = DEFAULT_EXPIRATION_MARGIN
 ) : AuthRepository {
     private val refreshMutex = Mutex()
@@ -71,14 +88,52 @@ class DefaultAuthRepository(
         val request = LoginRequestDto(
             email = email.trim(),
             password = password,
-            rememberMe = rememberMe
+            rememberMe = rememberMe,
+            clientDevice = clientDeviceInfoProvider.current().toDto()
         )
         return when (val remoteResult = remoteDataSource.login(request)) {
             is AuthResult.Success -> when (val validated = validateLoginData(remoteResult.value, rememberMe)) {
                 is AuthResult.Success -> establishSession(validated.value, loginGeneration)
                 is AuthFailure -> clearRejectedLoginPayload(validated, loginGeneration)
             }
+            is ActiveSessionExists -> finishFailedLogin(
+                remoteResult.copy(
+                    challenge = remoteResult.challenge.copy(
+                        accountEmail = request.email,
+                        rememberMe = rememberMe,
+                        transferDeviceAvailable = !remoteResult.challenge.hasActiveTrip ||
+                            !linkedMobileDeviceIdForAccount(request.email).isNullOrBlank()
+                    )
+                ),
+                loginGeneration
+            )
             is AuthFailure -> finishFailedLogin(remoteResult, loginGeneration)
+        }
+    }
+
+    override suspend fun takeover(challenge: SessionTakeoverChallenge): AuthResult<AuthUser> {
+        val takeoverGeneration = sessionMutationMutex.withLock { ++sessionGeneration }
+        val mobileDeviceId = if (challenge.hasActiveTrip) {
+            linkedMobileDeviceIdForAccount(challenge.accountEmail)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return SessionTakeoverFailure(
+                    errorCode = "device_not_available",
+                    sanitizedMessage = "linked_mobile_device_missing"
+                )
+        } else {
+            null
+        }
+        val request = SessionTakeoverRequestDto(
+            takeoverToken = challenge.takeoverToken,
+            clientDevice = clientDeviceInfoProvider.current().toDto(),
+            transferActiveTrip = challenge.hasActiveTrip,
+            mobileDeviceId = mobileDeviceId
+        )
+        return when (val remoteResult = remoteDataSource.takeover(request)) {
+            is AuthResult.Success -> when (val validated = validateLoginData(remoteResult.value, challenge.rememberMe)) {
+                is AuthResult.Success -> establishSession(validated.value, takeoverGeneration)
+                is AuthFailure -> clearRejectedLoginPayload(validated, takeoverGeneration)
+            }
+            is AuthFailure -> finishFailedLogin(remoteResult, takeoverGeneration)
         }
     }
 
@@ -130,6 +185,32 @@ class DefaultAuthRepository(
         return refreshWithLock(snapshot)
     }
 
+    override suspend fun validateCurrentSession(): AuthResult<AuthUser> {
+        val snapshot = currentSession ?: return SessionExpired
+        val accessToken = when (val token = ensureValidAccessToken()) {
+            is AuthResult.Success -> token.value.reveal()
+            is AuthFailure -> return token
+        }
+        return when (val remote = remoteDataSource.currentUser(accessToken)) {
+            is AuthResult.Success -> {
+                val validated = remote.value.toDomain()
+                    ?: return InvalidResponse(sanitizedMessage = "auth_user_invalid")
+                if (validated.id != snapshot.user.id || validated.role != snapshot.user.role) {
+                    sessionMutationMutex.withLock {
+                        if (currentSession === snapshot) expireAndReturnLocked(SessionRevoked) else SessionExpired
+                    }
+                } else {
+                    AuthResult.Success(snapshot.user)
+                }
+            }
+            SessionRevoked,
+            is Unauthorized -> sessionMutationMutex.withLock {
+                if (currentSession === snapshot) expireAndReturnLocked(SessionRevoked) else SessionExpired
+            }
+            is AuthFailure -> remote
+        }
+    }
+
     override suspend fun logout(): AuthResult<Unit> {
         val localLogout = withContext(NonCancellable) {
             sessionMutationMutex.withLock {
@@ -147,7 +228,10 @@ class DefaultAuthRepository(
             }
         }
         val remoteResult = localLogout.session?.let {
-            remoteDataSource.logout(LogoutRequestDto(it.secrets.refreshToken()))
+            remoteDataSource.logout(
+                accessToken = it.secrets.accessToken(),
+                request = LogoutRequestDto(it.secrets.refreshToken())
+            )
         } ?: AuthResult.Success(Unit)
         localLogout.storageFailure?.let { return StorageFailure(it) }
         return when (remoteResult) {
@@ -215,6 +299,10 @@ class DefaultAuthRepository(
                 if (currentSession !== latest) return@applyLock SessionExpired
                 applyRefreshLocked(latest, remoteResult.value)
             }
+            SessionRevoked -> sessionMutationMutex.withLock revokedLock@{
+                if (currentSession !== latest) return@revokedLock SessionExpired
+                expireAndReturnLocked(SessionRevoked)
+            }
             is Unauthorized,
             is InvalidCredentials -> sessionMutationMutex.withLock unauthorizedLock@{
                 if (currentSession !== latest) return@unauthorizedLock SessionExpired
@@ -241,7 +329,7 @@ class DefaultAuthRepository(
             ?: return expireAndReturnLocked(InvalidResponse(sanitizedMessage = "access_token_missing"))
         val refreshToken = data.refreshToken.takeIf { it.isNotBlank() }
             ?: return expireAndReturnLocked(InvalidResponse(sanitizedMessage = "refresh_token_missing"))
-        val expiresAt = parseFutureInstant(data.accessTokenExpiresAtUtc)
+        val expiresAt = data.expirationUtc()?.let(::parseFutureInstant)
             ?: return expireAndReturnLocked(InvalidResponse(sanitizedMessage = "access_token_expiration_invalid"))
         val refreshed = AuthSession(
             secrets = SessionSecrets(accessToken, refreshToken),
@@ -285,12 +373,16 @@ class DefaultAuthRepository(
         AuthResult.Success(session.user)
     }
 
-    private fun validateLoginData(data: LoginDataDto, rememberMe: Boolean): AuthResult<AuthSession> {
+    private suspend fun validateLoginData(data: LoginDataDto, rememberMe: Boolean): AuthResult<AuthSession> {
         if (data.accessToken.isBlank()) return InvalidResponse(sanitizedMessage = "access_token_missing")
         if (data.refreshToken.isBlank()) return InvalidResponse(sanitizedMessage = "refresh_token_missing")
-        val expiresAt = parseFutureInstant(data.accessTokenExpiresAtUtc)
+        val expiresAt = data.expirationUtc()?.let(::parseFutureInstant)
             ?: return InvalidResponse(sanitizedMessage = "access_token_expiration_invalid")
-        val user = data.user.toDomain()
+        val userDto = data.user ?: when (val currentUser = remoteDataSource.currentUser(data.accessToken)) {
+            is AuthResult.Success -> currentUser.value
+            is AuthFailure -> return currentUser
+        }
+        val user = userDto.toDomain()
             ?: return InvalidResponse(sanitizedMessage = "auth_user_invalid")
         validateDomainUser(user)?.let { return it }
         return AuthResult.Success(

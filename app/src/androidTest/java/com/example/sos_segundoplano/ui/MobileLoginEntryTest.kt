@@ -27,7 +27,8 @@ import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.domain.repository.AuthRepository
 import com.example.sos_segundoplano.features.auth.InitialSessionRestoration
 import com.example.sos_segundoplano.features.auth.MotoSosRoot
-import com.example.sos_segundoplano.features.monitor.MonitorHomePlaceholderScreen
+import com.example.sos_segundoplano.features.monitor.MonitorAlertsUiState
+import com.example.sos_segundoplano.features.monitor.MonitorHomeScreen
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -149,18 +150,26 @@ class MobileLoginEntryTest {
         var riderCompositionCount = 0
         setRoot(
             repository = repository,
-            monitorContent = { MonitorHomePlaceholderScreen(onLogout = {}) },
+            monitorContent = {
+                MonitorHomeScreen(
+                    state = MonitorAlertsUiState.Ready,
+                    onRetry = {},
+                    onAcknowledge = {},
+                    onDecline = {},
+                    onLogout = {}
+                )
+            },
             authenticatedContent = {
                 riderCompositionCount++
                 MotoSosApp(
-                    tripSessionStore = InMemoryTripSessionStore(TripSessionState.Active)
+                    tripSessionStore = InMemoryTripSessionStore(TripSessionState.Active("00000000-0000-0000-0000-000000000001"))
                 )
             }
         )
 
-        composeRule.onNodeWithText("Modo Monitor").assertIsDisplayed()
-        composeRule.onNodeWithText("Sesión Monitor activa").assertIsDisplayed()
-        composeRule.onNodeWithText("Cerrar sesión").assertIsDisplayed()
+        composeRule.onNodeWithTag("monitor_home_screen").assertIsDisplayed()
+        composeRule.onNodeWithText("Panel de monitoreo").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Cerrar sesión").assertCountEquals(0)
         composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
         composeRule.onAllNodesWithTag("monitoring_readiness_card").assertCountEquals(0)
         composeRule.onAllNodesWithTag("rider_sos_screen").assertCountEquals(0)
@@ -175,14 +184,22 @@ class MobileLoginEntryTest {
         setRoot(
             repository = repository,
             monitorContent = {
-                MonitorHomePlaceholderScreen(onLogout = { repository.logoutForTest() })
+                MonitorHomeScreen(
+                    state = MonitorAlertsUiState.Ready,
+                    onRetry = {},
+                    onAcknowledge = {},
+                    onDecline = {},
+                    onLogout = { repository.logoutForTest() }
+                )
             }
         )
 
-        composeRule.onNodeWithText("Cerrar sesión").performClick()
+        composeRule.onAllNodesWithText("Cerrar sesión").assertCountEquals(0)
+        composeRule.onNodeWithTag("monitor_bottom_profile").performClick()
+        composeRule.onNodeWithTag("monitor_profile_logout").assertIsDisplayed().performClick()
 
         composeRule.onNodeWithTag("login_screen").assertIsDisplayed()
-        composeRule.onAllNodesWithText("Modo Monitor").assertCountEquals(0)
+        composeRule.onAllNodesWithTag("monitor_home_screen").assertCountEquals(0)
     }
 
     @Test

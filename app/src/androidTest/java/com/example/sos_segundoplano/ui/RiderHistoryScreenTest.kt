@@ -51,16 +51,16 @@ class RiderHistoryScreenTest {
         composeRule.onNodeWithText("No hay registros todavía.").assertIsDisplayed()
     }
 
-    @Test fun compactCardShowsApproximateRouteWhenBothLocationsExist() {
+    @Test fun compactCardDoesNotInventRouteFromEndpoints() {
         setContent(
             trips = listOf(
                 RiderTripHistoryItem("Finished", "2026-08-12T16:00:00Z", "2026-08-12T17:30:00Z",
                     RiderTripHistoryLocation(19.4326, -99.1332), RiderTripHistoryLocation(19.4350, -99.1360))
             ), incidents = emptyList()
         )
-        composeRule.onNodeWithContentDescription("Trayecto aproximado entre inicio y fin").assertIsDisplayed()
-        composeRule.onAllNodesWithText("Abrir inicio en mapa").assertCountEquals(0)
-        composeRule.onAllNodesWithText("Abrir destino en mapa").assertCountEquals(0)
+        composeRule.onNodeWithContentDescription("Recorrido real aún no disponible").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Abrir inicio en Google Maps").assertCountEquals(0)
+        composeRule.onAllNodesWithText("Abrir final en Google Maps").assertCountEquals(0)
         composeRule.onNodeWithContentDescription("Ver detalle del viaje").performClick()
         composeRule.onNodeWithText("Detalle del viaje").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Volver al historial").performClick()

@@ -50,6 +50,7 @@ fun MotoBottomBar(
     onHomeSelected: () -> Unit = {},
     onTripsSelected: () -> Unit = {},
     onSosSelected: () -> Unit = {},
+    onMapSelected: () -> Unit = {},
     onProfileSelected: () -> Unit = {},
     containerColor: Color = MotoSurface,
     contentColor: Color = MotoTextSecondary,
@@ -113,7 +114,7 @@ fun MotoBottomBar(
                 assetSize = 44.dp,
                 selected = selectedItem == MotoBottomBarItem.Map,
                 enabled = MotoBottomBarItem.Map in enabledItems,
-                onClick = {},
+                onClick = onMapSelected,
                 testTag = "bottom_nav_map",
                 contentColor = contentColor,
                 selectedColor = selectedColor

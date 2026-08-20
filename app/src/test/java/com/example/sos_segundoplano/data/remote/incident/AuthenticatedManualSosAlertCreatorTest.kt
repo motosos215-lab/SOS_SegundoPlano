@@ -37,7 +37,7 @@ class AuthenticatedManualSosAlertCreatorTest {
         assertEquals("remote-trip-1", result.remoteTripId)
         assertEquals("incident-fixture-1", result.remoteIncidentId)
         assertEquals("ManualSos", remote.requests.single().incidentType)
-        assertEquals("High", remote.requests.single().severity)
+        assertEquals("Unknown", remote.requests.single().severity)
         assertEquals("High", remote.requests.single().priority)
         assertEquals("ManualSos", remote.requests.single().reason)
         assertEquals(19.4326, remote.requests.single().latitude, 0.0)
@@ -46,6 +46,21 @@ class AuthenticatedManualSosAlertCreatorTest {
         assertEquals(RemoteIncidentSyncState.Created, persisted?.syncState)
         assertEquals("incident-fixture-1", persisted?.remoteIncidentId)
         assertEquals("dispatch-fixture-1", persisted?.remoteAlertDispatchId)
+    }
+
+    @Test fun selectedManualClassificationIsSentExactlyAndSurvivesDurableLink() = runBlocking {
+        val links = pendingLinks(manualSeverity = "High", manualPriority = "Critical")
+        val remote = FakeManualSosRemoteDataSource(success())
+        val creator = creator(
+            remote = remote,
+            links = links,
+            tripStore = InMemoryRemoteTripSessionStore().apply { setRemoteTripId("remote-trip-1") }
+        )
+
+        creator.createManualSosAlert(incident())
+
+        assertEquals("High", remote.requests.single().severity)
+        assertEquals("Critical", remote.requests.single().priority)
     }
 
     @Test fun missingTripReconcilesAndMissingActiveTripDoesNotPost() = runBlocking {
@@ -223,7 +238,10 @@ class AuthenticatedManualSosAlertCreatorTest {
         nowEpochMillis = { 1_723_392_901_000L }
     )
 
-    private fun pendingLinks(): InMemoryRemoteIncidentLinkStore = InMemoryRemoteIncidentLinkStore().apply {
+    private fun pendingLinks(
+        manualSeverity: String? = null,
+        manualPriority: String? = null
+    ): InMemoryRemoteIncidentLinkStore = InMemoryRemoteIncidentLinkStore().apply {
         save(
             RemoteIncidentLink(
                 localIncidentId = 1L,
@@ -233,7 +251,9 @@ class AuthenticatedManualSosAlertCreatorTest {
                 syncState = RemoteIncidentSyncState.Pending,
                 updatedAtEpochMillis = 1_723_392_900_000L,
                 clientAlertRequestId = CLIENT_ALERT_ID,
-                detectedAtUtc = DETECTED_AT
+                detectedAtUtc = DETECTED_AT,
+                manualSeverity = manualSeverity,
+                manualPriority = manualPriority
             )
         )
     }

@@ -5,6 +5,7 @@ import com.example.sos_segundoplano.domain.auth.AuthResult
 import com.example.sos_segundoplano.domain.auth.InvalidResponse
 import com.example.sos_segundoplano.domain.auth.NetworkUnavailable
 import com.example.sos_segundoplano.domain.auth.Timeout
+import com.example.sos_segundoplano.data.validation.AutoIncidentDiagnostics
 import com.example.sos_segundoplano.data.remote.trip.ActiveTripLookupResult
 import com.example.sos_segundoplano.data.remote.trip.ActiveTripRemoteResolver
 import com.example.sos_segundoplano.data.remote.trip.RemoteTripSessionStore
@@ -48,6 +49,7 @@ class AuthenticatedIncidentRemoteCreator(
             ?.let { existing ->
                 val remoteIncidentId = requireNotNull(existing.remoteIncidentId)
                 val remoteTripId = requireNotNull(existing.remoteTripId)
+                AutoIncidentDiagnostics.remoteContext(remoteTripPresent = true, locationPresent = false)
                 return incident.copy(
                     remoteTripId = remoteTripId,
                     clientIncidentId = existing.clientIncidentId,
@@ -76,12 +78,18 @@ class AuthenticatedIncidentRemoteCreator(
         val persistedRemoteTripId = remoteTripSessionStore?.remoteTripId?.value
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
+        AutoIncidentDiagnostics.remoteContext(
+            remoteTripPresent = persistedRemoteTripId != null,
+            locationPresent = false
+        )
         val remoteTripId = persistedRemoteTripId ?: when (val trip = activeTripRemoteResolver.resolveActiveTrip()) {
             is ActiveTripLookupResult.Found -> trip.remoteTripId
             ActiveTripLookupResult.NoActiveTrip -> return incident.copy(
                 clientIncidentId = clientIncidentId,
                 remoteCreationStatus = IncidentRemoteCreationStatus.MissingRequiredData("active_remote_trip_missing")
-            ).also { logger.incidentCreationFailed() }
+            ).also {
+                logger.incidentCreationFailed()
+            }
             is ActiveTripLookupResult.HttpError -> return incident.copy(
                 clientIncidentId = clientIncidentId,
                 remoteCreationStatus = IncidentRemoteCreationStatus.HttpError(trip.statusCode, "trip_lookup_failed")
@@ -192,18 +200,14 @@ class AuthenticatedIncidentRemoteCreator(
                 IncidentCause.ManualSos -> "ManualSos"
             },
             riskLevel = riskLevel.name,
+            score = score,
+            confidence = confidence,
+            gpsQuality = gpsQuality.name,
+            ruleSetVersion = ruleSetVersion,
+            validationPolicyVersion = validationPolicyVersion,
             occurredAtUtc = occurredAtUtc.toString(),
             location = null,
-            evidenceSummary = if (hasAssessmentEvidence) {
-                IncidentEvidenceSummaryDto(
-                    assessmentId = assessmentId,
-                    windowId = windowId,
-                    triggeredRules = relevantOutcomes.map { it.ruleId.name },
-                    hasLocation = false
-                )
-            } else {
-                null
-            }
+            evidenceSummary = null
         )
     }
 

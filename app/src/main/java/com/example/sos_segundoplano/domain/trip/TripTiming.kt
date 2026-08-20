@@ -5,7 +5,7 @@ import java.util.Locale
 
 sealed interface TripTimingState {
     data object Unknown : TripTimingState
-    data class Active(val startedAtElapsedRealtimeMillis: Long) : TripTimingState
+    data class Active(val startedAtElapsedRealtimeMillis: Long, val tripSessionKey: String? = null) : TripTimingState
 }
 
 fun interface ElapsedRealtimeClock {
@@ -14,9 +14,11 @@ fun interface ElapsedRealtimeClock {
 
 interface TripTimingStore {
     val states: StateFlow<TripTimingState>
-    fun beginConfirmedTrip()
+    fun beginConfirmedTrip(tripSessionKey: String? = null)
     fun clear()
+    fun clearIfMatches(tripSessionKey: String): TripTimingClearResult = TripTimingClearResult.LegacyUncorrelated
 }
+enum class TripTimingClearResult { Cleared, AlreadyEmpty, DifferentTrip, LegacyUncorrelated }
 
 object TripDurationFormatter {
     fun format(state: TripTimingState, nowElapsedRealtimeMillis: Long): String? {

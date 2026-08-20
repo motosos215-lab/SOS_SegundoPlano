@@ -10,6 +10,31 @@ sealed interface SignalAvailability {
     data class Error(val reason: String? = null) : SignalAvailability
 }
 
+
+sealed interface GpsCalibrationState {
+    data object Idle : GpsCalibrationState
+
+    data class Calibrating(
+        val currentAccuracyMeters: Float? = null,
+        val bestAccuracyMeters: Float? = null,
+        val consecutiveAccurateSamples: Int = 0,
+        val requiredAccurateSamples: Int = 3,
+        val targetAccuracyMeters: Float = 20f
+    ) : GpsCalibrationState
+
+    data class Ready(
+        val achievedAccuracyMeters: Float?,
+        val consecutiveAccurateSamples: Int,
+        val targetAccuracyMeters: Float = 20f,
+        val completion: GpsCalibrationCompletion = GpsCalibrationCompletion.AccurateSamples
+    ) : GpsCalibrationState
+}
+
+enum class GpsCalibrationCompletion {
+    AccurateSamples,
+    Timeout
+}
+
 sealed interface CaptureState {
     data object Idle : CaptureState
     data object Starting : CaptureState
@@ -110,6 +135,7 @@ data class WearableSample(
 
 data class TripSignalSnapshot(
     val location: SignalReading<LocationSample> = SignalReading(SignalAvailability.Waiting),
+    val gpsCalibration: GpsCalibrationState = GpsCalibrationState.Idle,
     val mobileAccelerometer: SignalReading<Vector3Sample> = SignalReading(SignalAvailability.Waiting),
     val mobileGyroscope: SignalReading<Vector3Sample> = SignalReading(SignalAvailability.Waiting),
     val speed: SignalReading<SpeedSample> = SignalReading(SignalAvailability.Waiting),

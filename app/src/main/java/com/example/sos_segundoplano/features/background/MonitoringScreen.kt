@@ -13,11 +13,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -37,10 +39,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.sos_segundoplano.R
-import com.example.sos_segundoplano.domain.offline.OfflineQueueSummary
 import com.example.sos_segundoplano.domain.rules.RiskAssessmentState
 import com.example.sos_segundoplano.domain.rules.RiskLevel
 import com.example.sos_segundoplano.domain.signals.CaptureState
+import com.example.sos_segundoplano.domain.signals.GpsCalibrationState
 import com.example.sos_segundoplano.domain.signals.TripSignalSnapshot
 import com.example.sos_segundoplano.domain.signals.WearableSample
 import com.example.sos_segundoplano.domain.signals.WearableStatus
@@ -69,12 +71,18 @@ fun MonitoringScreen(
     modifier: Modifier = Modifier,
     snapshot: TripSignalSnapshot = TripSignalSnapshot(),
     riskAssessmentState: RiskAssessmentState = RiskAssessmentState.Idle,
-    offlineQueueSummary: OfflineQueueSummary = OfflineQueueSummary(),
     tripTimingStates: StateFlow<TripTimingState>? = null,
     elapsedRealtimeClock: ElapsedRealtimeClock = AndroidElapsedRealtimeClock,
     onFinishTrip: () -> Unit = {},
+    onHomeSelected: () -> Unit = {},
+    onTripsSelected: () -> Unit = {},
     onSosSelected: () -> Unit = {},
-    isFinishTripEnabled: Boolean = true
+    onMapSelected: () -> Unit = {},
+    onProfileSelected: () -> Unit = {},
+    onMessagesSelected: () -> Unit = {},
+    unreadMessageCount: Int = 0,
+    isFinishTripEnabled: Boolean = true,
+    isFinishingTrip: Boolean = false
 ) {
     val timingState = tripTimingStates?.let { states ->
         states.collectAsState().value
@@ -89,14 +97,29 @@ fun MonitoringScreen(
             MotoTopBar(
                 title = stringResource(R.string.monitoring_title),
                 subtitle = stringResource(R.string.active_trip),
-                navigationIcon = MotoTopBarIcon.Back
+                navigationIcon = MotoTopBarIcon.Back,
+                showNotificationsIcon = true,
+                notificationsIcon = MotoTopBarIcon.Message,
+                notificationBadgeCount = unreadMessageCount,
+                onNavigationClick = onHomeSelected,
+                onNotificationsClick = onMessagesSelected
             )
         },
         bottomBar = {
             MotoBottomBar(
                 selectedItem = MotoBottomBarItem.Home,
-                enabledItems = setOf(MotoBottomBarItem.Home, MotoBottomBarItem.Sos),
-                onSosSelected = onSosSelected
+                enabledItems = setOf(
+                    MotoBottomBarItem.Home,
+                    MotoBottomBarItem.Trips,
+                    MotoBottomBarItem.Sos,
+                    MotoBottomBarItem.Map,
+                    MotoBottomBarItem.Profile
+                ),
+                onHomeSelected = onHomeSelected,
+                onTripsSelected = onTripsSelected,
+                onSosSelected = onSosSelected,
+                onMapSelected = onMapSelected,
+                onProfileSelected = onProfileSelected
             )
         }
     ) { innerPadding ->
@@ -121,7 +144,6 @@ fun MonitoringScreen(
             Spacer(modifier = Modifier.height(8.dp))
             MonitoringStatusPanel(snapshot.captureState)
             RiskScorePanel(riskAssessmentState)
-            OfflineQueuePanel(offlineQueueSummary)
             MetricsGrid(snapshot)
             WearablePanel(snapshot.wearable)
             Spacer(modifier = Modifier.height(8.dp))
@@ -139,8 +161,17 @@ fun MonitoringScreen(
                 ),
                 border = BorderStroke(1.5.dp, MotoAlert)
             ) {
+                if (isFinishingTrip) {
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .padding(end = 10.dp)
+                            .size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = MotoAlert
+                    )
+                }
                 Text(
-                    text = stringResource(R.string.finish_trip),
+                    text = stringResource(if (isFinishingTrip) R.string.trip_finishing else R.string.finish_trip),
                     color = MotoAlert,
                     softWrap = true,
                     textAlign = TextAlign.Center
@@ -219,27 +250,6 @@ private fun RiskScorePanel(state: RiskAssessmentState) {
 }
 
 @Composable
-private fun OfflineQueuePanel(summary: OfflineQueueSummary) {
-    if (summary.unsentCount == 0 && summary.sentCount == 0 && summary.permanentFailureCount == 0 && summary.syncErrorCount == 0) return
-    val status = when {
-        summary.permanentFailureCount > 0 -> stringResource(R.string.offline_queue_sync_error, summary.permanentFailureCount)
-        summary.notConfiguredCount > 0 -> stringResource(R.string.offline_queue_not_configured, summary.notConfiguredCount)
-        summary.retryPendingCount > 0 -> stringResource(R.string.offline_queue_waiting_connection, summary.retryPendingCount)
-        summary.pendingCount > 0 || summary.inFlightCount > 0 -> stringResource(R.string.offline_queue_pending, summary.unsentCount)
-        else -> stringResource(R.string.offline_queue_confirmed)
-    }
-    Text(
-        text = status,
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("offline_queue_status"),
-        style = MaterialTheme.typography.bodySmall,
-        color = if (summary.permanentFailureCount > 0) MotoAlert else MaterialTheme.colorScheme.onSurface,
-        textAlign = TextAlign.Center
-    )
-}
-
-@Composable
 private fun MetricsGrid(snapshot: TripSignalSnapshot) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(
@@ -315,6 +325,7 @@ private fun WearablePanel(wearable: WearableSample) {
 }
 
 private fun speedValue(snapshot: TripSignalSnapshot): String {
+    if (snapshot.gpsCalibration is GpsCalibrationState.Calibrating) return "Calibrando GPS"
     val speed = com.example.sos_segundoplano.domain.signals.SpeedPolicy
         .metersPerSecondToKilometersPerHour(snapshot.speed.sample?.metersPerSecond)
         ?: return availabilityText(snapshot.speed.availability)
@@ -322,7 +333,7 @@ private fun speedValue(snapshot: TripSignalSnapshot): String {
 }
 
 private fun speedUnit(snapshot: TripSignalSnapshot): String? =
-    if (snapshot.speed.sample == null) null else "km/h"
+    if (snapshot.gpsCalibration is GpsCalibrationState.Calibrating || snapshot.speed.sample == null) null else "km/h"
 
 private fun batteryValue(snapshot: TripSignalSnapshot): String =
     snapshot.phoneBattery.sample?.let { "${it.percentage}%" } ?: availabilityText(snapshot.phoneBattery.availability)
@@ -332,18 +343,24 @@ private fun connectivityValue(snapshot: TripSignalSnapshot): String {
     if (!sample.connected) return "Sin conexión"
     val transport = when (sample.transport) {
         com.example.sos_segundoplano.domain.signals.NetworkTransport.Wifi -> "Wi-Fi"
-        com.example.sos_segundoplano.domain.signals.NetworkTransport.Cellular -> "Celular"
+        com.example.sos_segundoplano.domain.signals.NetworkTransport.Cellular -> "Datos móviles"
         com.example.sos_segundoplano.domain.signals.NetworkTransport.Ethernet -> "Ethernet"
         com.example.sos_segundoplano.domain.signals.NetworkTransport.Vpn -> "VPN"
         com.example.sos_segundoplano.domain.signals.NetworkTransport.Bluetooth -> "Bluetooth"
-        com.example.sos_segundoplano.domain.signals.NetworkTransport.Other -> "Otra"
+        com.example.sos_segundoplano.domain.signals.NetworkTransport.Other -> "Otra red"
         com.example.sos_segundoplano.domain.signals.NetworkTransport.None -> "Sin red"
     }
-    return if (sample.validated) "Internet disponible" else "$transport sin internet"
+    return if (sample.validated) transport else "$transport sin internet"
 }
 
 private fun gpsAccuracyValue(snapshot: TripSignalSnapshot): String {
-    val sample = snapshot.location.sample ?: return when (snapshot.location.availability) {
+    val calibration = snapshot.gpsCalibration
+    val sample = snapshot.location.sample
+    if (calibration is GpsCalibrationState.Calibrating) {
+        val accuracy = sample?.accuracyMeters?.takeIf { it.isFinite() && it >= 0f }
+        return accuracy?.let { "Calibrando · ± ${it.toInt()} m" } ?: "Calibrando GPS"
+    }
+    if (sample == null) return when (snapshot.location.availability) {
         com.example.sos_segundoplano.domain.signals.SignalAvailability.Disabled -> "GPS desactivado"
         com.example.sos_segundoplano.domain.signals.SignalAvailability.PermissionMissing -> "Permiso de ubicación faltante"
         else -> "Esperando GPS"
@@ -352,6 +369,34 @@ private fun gpsAccuracyValue(snapshot: TripSignalSnapshot): String {
 }
 
 private fun gpsAccuracyClassification(snapshot: TripSignalSnapshot): String? {
+    when (val calibration = snapshot.gpsCalibration) {
+        is GpsCalibrationState.Calibrating -> {
+            return "${calibration.consecutiveAccurateSamples}/${calibration.requiredAccurateSamples} · objetivo ≤${calibration.targetAccuracyMeters.toInt()} m"
+        }
+        is GpsCalibrationState.Ready -> {
+            val classification = com.example.sos_segundoplano.domain.signals.GpsAccuracyPolicy
+                .classify(snapshot.location.sample?.accuracyMeters)
+            if (calibration.completion == com.example.sos_segundoplano.domain.signals.GpsCalibrationCompletion.Timeout) {
+                return when (classification) {
+                    com.example.sos_segundoplano.domain.signals.GpsAccuracyClassification.Excellent -> "GPS listo · Aproximada, ahora excelente"
+                    com.example.sos_segundoplano.domain.signals.GpsAccuracyClassification.High -> "GPS listo · Aproximada, ahora alta"
+                    com.example.sos_segundoplano.domain.signals.GpsAccuracyClassification.Medium -> "GPS listo · Precisión aproximada"
+                    com.example.sos_segundoplano.domain.signals.GpsAccuracyClassification.Low,
+                    com.example.sos_segundoplano.domain.signals.GpsAccuracyClassification.VeryLow -> "GPS listo · Precisión aproximada"
+                    null -> "GPS listo · Esperando ubicación"
+                }
+            }
+            return when (classification) {
+                com.example.sos_segundoplano.domain.signals.GpsAccuracyClassification.Excellent -> "GPS listo · Excelente"
+                com.example.sos_segundoplano.domain.signals.GpsAccuracyClassification.High -> "GPS listo · Alta"
+                com.example.sos_segundoplano.domain.signals.GpsAccuracyClassification.Medium -> "GPS listo · Media"
+                com.example.sos_segundoplano.domain.signals.GpsAccuracyClassification.Low -> "GPS listo · Baja"
+                com.example.sos_segundoplano.domain.signals.GpsAccuracyClassification.VeryLow -> "GPS listo · Muy baja"
+                null -> "GPS listo"
+            }
+        }
+        GpsCalibrationState.Idle -> Unit
+    }
     val classification = com.example.sos_segundoplano.domain.signals.GpsAccuracyPolicy
         .classify(snapshot.location.sample?.accuracyMeters) ?: return null
     return when (classification) {

@@ -29,6 +29,14 @@ class EmergencyContactsApiTest {
         assertEquals("{}", invite.body.readUtf8())
     }
 
+    @Test fun listUsesCanonicalPathAndMapsContacts() = runBlocking {
+        server.enqueue(json(200, """{"success":true,"data":{"contacts":[{"id":"contact-1","userId":"rider-1","fullName":"Monitor MotoSOS","relationship":"Contacto de emergencia","phoneNumber":"+525555555555","email":"monitor@example.com","priority":1,"invitationStatus":"Linked","linkingCode":null,"linkingCodeExpiresAtUtc":null,"linkedUserId":"monitor-1","permissions":{"canViewRealTimeLocation":true,"canReceiveCriticalAlerts":true,"canViewIncidentHistory":false,"canViewVitalSigns":false},"isPrimary":true,"isActive":true,"createdAtUtc":"2026-08-11T00:00:00Z","updatedAtUtc":"2026-08-11T00:00:00Z","invitedAtUtc":"2026-08-11T00:00:00Z","linkedAtUtc":"2026-08-11T01:00:00Z","revokedAtUtc":null}]},"error":null}"""))
+        val response = api().list("Bearer rider")
+        assertEquals("/api/v1/emergency-contacts", server.takeRequest().path)
+        assertEquals("Monitor MotoSOS", response.body()?.data?.contacts?.single()?.fullName)
+        assertEquals("Linked", response.body()?.data?.contacts?.single()?.invitationStatus)
+    }
+
     @Test fun invitationAndAcceptUseCodeAndMapContact() = runBlocking {
         server.enqueue(json(200, """{"success":true,"data":{"invitation":{"driverFullName":"Rider","contactFullName":"Monitor","permissions":{"canViewRealTimeLocation":true,"canReceiveCriticalAlerts":true,"canViewIncidentHistory":false,"canViewVitalSigns":false},"expiresAtUtc":"2026-08-12T00:00:00Z","status":"Invited"}},"error":null}"""))
         server.enqueue(json(200, contactResponse("Linked")))

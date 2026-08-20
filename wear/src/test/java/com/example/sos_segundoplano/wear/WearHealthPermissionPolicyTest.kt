@@ -78,6 +78,28 @@ class WearHealthPermissionPolicyTest {
         )
     }
 
+    @Test fun healthForegroundCaptureCanProceedOnlyWhenHealthPermissionIsGranted() {
+        assertEquals(
+            null,
+            WearSignalForegroundService.captureBlockedStatus(WearPermissionStatus.Granted)
+        )
+        assertEquals(
+            WearCaptureStatus.PermissionRequired,
+            WearSignalForegroundService.captureBlockedStatus(WearPermissionStatus.PermissionRequired)
+        )
+    }
+
+    @Test fun revokedHealthForegroundPermissionUsesCanonicalPermissionRequiredState() {
+        assertEquals(
+            WearCaptureStatus.PermissionRequired,
+            WearSignalForegroundService.captureBlockedStatus(WearPermissionStatus.PermissionRequired)
+        )
+        assertEquals(
+            WearCaptureStatus.PermanentlyDenied,
+            WearSignalForegroundService.captureBlockedStatus(WearPermissionStatus.PermanentlyDenied)
+        )
+    }
+
     @Test fun permanentlyDeniedPermissionProducesExplicitStatus() {
         val required = listOf(WearHealthPermissionPolicy.READ_HEART_RATE)
 

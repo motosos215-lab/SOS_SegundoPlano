@@ -1,4 +1,4 @@
-package com.example.sos_segundoplano.ui
+ackage com.example.sos_segundoplano.ui
 
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -19,6 +19,9 @@ import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissio
 import com.example.sos_segundoplano.core.permissions.BackgroundLocationPermissionStatusProvider
 import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatus
 import com.example.sos_segundoplano.core.permissions.BluetoothRequirementStatusProvider
+import com.example.sos_segundoplano.data.remote.trip.FinishTripRequestDto
+import com.example.sos_segundoplano.data.remote.trip.RemoteTripFinisher
+import com.example.sos_segundoplano.data.remote.trip.TripMutationResult
 import com.example.sos_segundoplano.domain.model.TripSessionState
 import com.example.sos_segundoplano.ui.theme.SOS_SegundoPlanoTheme
 import org.junit.Assert.assertEquals
@@ -68,7 +71,7 @@ class TripFinishFlowTest {
             finishTrip = { currentState ->
                 finishTripCallCount++
                 when (currentState) {
-                    TripSessionState.Active -> TripSessionState.Idle
+                    is TripSessionState.Active -> TripSessionState.Idle
                     TripSessionState.Idle -> TripSessionState.Idle
                 }
             }
@@ -106,7 +109,7 @@ class TripFinishFlowTest {
             finishTrip = { currentState ->
                 finishTripCallCount++
                 when (currentState) {
-                    TripSessionState.Active -> TripSessionState.Idle
+                    is TripSessionState.Active -> TripSessionState.Idle
                     TripSessionState.Idle -> TripSessionState.Idle
                 }
             }
@@ -119,6 +122,51 @@ class TripFinishFlowTest {
         composeRule.onNodeWithTag("monitoring_screen").assertIsDisplayed()
         composeRule.onAllNodesWithTag("home_screen").assertCountEquals(0)
         composeRule.onNodeWithTag("monitoring_stop_failure_dialog").assertIsDisplayed()
+    }
+
+
+    @Test
+    fun remoteFinishFailureKeepsMonitoringAndOffersRetryBeforeStoppingCapture() {
+        val stopper = FakeMonitoringServiceStopper(MonitoringServiceStopResult.Stopped)
+        val finisher = FakeTripFinishRemoteFinisher(TripMutationResult.NetworkUnavailable("network_unavailable"))
+
+        setAppContent(
+            monitoringServiceStopper = stopper,
+            remoteTripFinisher = finisher,
+        )
+
+        startAndFinishTrip()
+
+        composeRule.waitForIdle()
+        assertEquals(1, finisher.invocationCount)
+        assertEquals(0, stopper.invocationCount)
+        composeRule.onNodeWithTag("monitoring_screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("remote_trip_finish_failure_dialog").assertIsDisplayed()
+    }
+
+    @Test
+    fun monitoringStopRetryAfterRemoteSuccessDoesNotFinishRemoteTwice() {
+        val stopper = FakeMonitoringServiceStopper(MonitoringServiceStopResult.Failed)
+        val finisher = FakeTripFinishRemoteFinisher(TripMutationResult.Success("remote-trip-1", "Finished"))
+
+        setAppContent(
+            monitoringServiceStopper = stopper,
+            remoteTripFinisher = finisher,
+        )
+
+        startAndFinishTrip()
+        composeRule.waitForIdle()
+        assertEquals(1, finisher.invocationCount)
+        assertEquals(1, stopper.invocationCount)
+        composeRule.onNodeWithTag("monitoring_stop_failure_dialog").assertIsDisplayed()
+
+        stopper.updateResult(MonitoringServiceStopResult.Stopped)
+        composeRule.onNodeWithTag("retry_monitoring_stop_button").performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(1, finisher.invocationCount)
+        assertEquals(2, stopper.invocationCount)
+        assertSummaryThenReturnHome()
     }
 
     @Test
@@ -250,9 +298,10 @@ class TripFinishFlowTest {
         monitoringServiceStarter: MonitoringServiceStarter =
             FakeTripFinishMonitoringServiceStarter(MonitoringServiceStartResult.Started),
         monitoringServiceStopper: MonitoringServiceStopper,
+        remoteTripFinisher: RemoteTripFinisher? = null,
         finishTrip: (TripSessionState) -> TripSessionState = { currentState ->
             when (currentState) {
-                TripSessionState.Active -> TripSessionState.Idle
+                is TripSessionState.Active -> TripSessionState.Idle
                 TripSessionState.Idle -> TripSessionState.Idle
             }
         }
@@ -265,6 +314,7 @@ class TripFinishFlowTest {
                     bluetoothRequirementStatusProvider = bluetoothProvider,
                     monitoringServiceStarter = monitoringServiceStarter,
                     monitoringServiceStopper = monitoringServiceStopper,
+                    remoteTripFinisher = remoteTripFinisher,
                     finishTripUseCase = finishTrip
                 )
             }
@@ -355,5 +405,17 @@ private class FakeMonitoringServiceStopper(
 
     fun updateResult(newResult: MonitoringServiceStopResult) {
         currentResult = newResult
+    }
+}
+
+private class FakeTripFinishRemoteFinisher(
+    var result: TripMutationResult,
+) : RemoteTripFinisher {
+    var invocationCount: Int = 0
+        private set
+
+    override suspend fun finishTrip(request: FinishTripRequestDto): TripMutationResult {
+        invocationCount++
+        return result
     }
 }

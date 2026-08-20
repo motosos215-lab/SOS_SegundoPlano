@@ -47,7 +47,7 @@ class PushTokenFoundationTest {
 
     @Test fun tokenIsNeverPrintedByStateOrDiagnostics() {
         val text = PushTokenState(FIRST_FAKE_TOKEN, FIRST_FAKE_TOKEN).toString()
-        val diagnostic = PushDiagnostics.tokenUpdated()
+        val diagnostic = PushDiagnostics.onNewToken(tokenPresent = true)
 
         assertFalse(text.contains(FIRST_FAKE_TOKEN))
         assertFalse(diagnostic.contains(FIRST_FAKE_TOKEN))

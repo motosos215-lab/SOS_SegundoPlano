@@ -8,6 +8,7 @@ import com.example.sos_segundoplano.domain.preprocessing.SignalSourceId
 import com.example.sos_segundoplano.domain.preprocessing.TimeDomain
 import com.example.sos_segundoplano.domain.signals.BatterySample
 import com.example.sos_segundoplano.domain.signals.ConnectivitySample
+import com.example.sos_segundoplano.domain.signals.GpsCalibrationState
 import com.example.sos_segundoplano.domain.signals.LocationSample
 import com.example.sos_segundoplano.domain.signals.NetworkTransport
 import com.example.sos_segundoplano.domain.signals.SignalAvailability
@@ -75,6 +76,20 @@ class RawSignalEventStoreTest {
 
         assertEquals(SignalKind.Battery, sink.eventsList[0].signalKind)
         assertEquals(SignalKind.Connectivity, sink.eventsList[1].signalKind)
+    }
+
+
+    @Test fun uncalibratedStartupGpsIsVisibleButNotFedIntoRiskPreprocessing() {
+        val sink = CapturingRawEvents()
+        val store = InMemoryTripSignalStore(rawEvents = sink, phoneTimeNanos = { 5L }, wallClockMillis = { 1L })
+        store.updateGpsCalibration(GpsCalibrationState.Calibrating(targetAccuracyMeters = 20f))
+
+        store.updateLocation(SignalReading(SignalAvailability.Available, location(1_000L, 0.0)))
+
+        assertTrue(store.snapshots.value.location.sample != null)
+        val locationEvent = sink.eventsList.first { it.signalKind == SignalKind.Location }
+        assertEquals(SignalAvailability.Waiting, locationEvent.availability)
+        assertNull(locationEvent.value)
     }
 
     @Test fun locationEmitsLocationAndDerivedSpeedWithoutNormalizingCoordinates() {

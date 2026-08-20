@@ -120,8 +120,8 @@ class BackgroundLocationPermissionGateTest {
             startTrip = { currentState ->
                 startTripCallCount++
                 when (currentState) {
-                    TripSessionState.Idle -> TripSessionState.Active
-                    TripSessionState.Active -> TripSessionState.Active
+                    TripSessionState.Idle -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
+                    is TripSessionState.Active -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
                 }
             }
         )
@@ -159,8 +159,8 @@ class BackgroundLocationPermissionGateTest {
         },
         startTrip: (TripSessionState) -> TripSessionState = { currentState ->
             when (currentState) {
-                TripSessionState.Idle -> TripSessionState.Active
-                TripSessionState.Active -> TripSessionState.Active
+                TripSessionState.Idle -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
+                is TripSessionState.Active -> TripSessionState.Active("00000000-0000-0000-0000-000000000001")
             }
         }
     ) {

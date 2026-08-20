@@ -96,12 +96,19 @@ class OfflineQueueSyncProcessor(
 
             is OfflineEventTransportResult.NotConfigured -> {
                 val now = currentTimeOrFailure() ?: attemptNow
-                val nextAttemptAt = policy.nextRetryAt(now, item.item.attemptCount, null)
-                if (transitionApplied(repository.markNotConfigured(item.claim, "not_configured", result.sanitizedMessage, nextAttemptAt, now))) {
-                    ItemResult.Deferred(nextAttemptAt)
-                } else {
-                    ItemResult.Done
-                }
+                // There is no certified backend contract for generic secondary events. Pause the
+                // row durably without creating an endless WorkManager retry loop. A future backend
+                // implementation can explicitly requeue these rows.
+                transitionApplied(
+                    repository.markNotConfigured(
+                        item.claim,
+                        "not_configured",
+                        result.sanitizedMessage,
+                        nextAttemptAtMillis = null,
+                        nowMillis = now
+                    )
+                )
+                ItemResult.Done
             }
         }
     }

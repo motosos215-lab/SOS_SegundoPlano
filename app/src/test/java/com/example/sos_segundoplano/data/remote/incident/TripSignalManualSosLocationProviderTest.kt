@@ -33,6 +33,39 @@ class TripSignalManualSosLocationProviderTest {
         assertEquals(0, fallbackRequests)
     }
 
+    @Test fun defaultEmergencyWindowAcceptsRecentPrimaryFixForFastSos() = runBlocking {
+        val store = InMemoryTripSignalStore()
+        val sample = location(timestampMillis = 10_000L).copy(accuracyMeters = 85f)
+        store.updateLocation(SignalReading(SignalAvailability.Available, sample))
+        var fallbackRequests = 0
+
+        val result = TripSignalManualSosLocationProvider(
+            store = store,
+            nowEpochMillis = { 39_000L },
+            currentLocationProvider = CurrentManualSosLocationProvider {
+                fallbackRequests++
+                location(timestampMillis = 39_000L)
+            }
+        ).currentRealLocation()
+
+        assertEquals(sample, result)
+        assertEquals(0, fallbackRequests)
+    }
+
+    @Test fun primaryEmergencyLocationDoesNotRequireHighAccuracy() = runBlocking {
+        val store = InMemoryTripSignalStore()
+        val coarseButValid = location(timestampMillis = 10_000L).copy(accuracyMeters = 150f)
+        store.updateLocation(SignalReading(SignalAvailability.Available, coarseButValid))
+
+        val result = TripSignalManualSosLocationProvider(
+            store = store,
+            nowEpochMillis = { 12_000L },
+            maxAgeMillis = 5_000L
+        ).currentRealLocation()
+
+        assertEquals(coarseButValid, result)
+    }
+
     @Test fun usesCurrentAndroidLocationWhenSnapshotIsUnavailableOrStale() = runBlocking {
         val fallback = location(timestampMillis = 14_000L)
         val store = InMemoryTripSignalStore().apply {

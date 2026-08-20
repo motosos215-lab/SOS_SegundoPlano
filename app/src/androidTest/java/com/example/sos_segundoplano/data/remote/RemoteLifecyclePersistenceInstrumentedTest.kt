@@ -85,7 +85,9 @@ class RemoteLifecyclePersistenceInstrumentedTest {
             syncState = RemoteIncidentSyncState.Pending,
             updatedAtEpochMillis = 3456L,
             clientAlertRequestId = "223e4567-e89b-12d3-a456-426614174009",
-            detectedAtUtc = "2026-08-11T15:55:00Z"
+            detectedAtUtc = "2026-08-11T15:55:00Z",
+            manualSeverity = "High",
+            manualPriority = "Critical"
         )
 
         assertTrue(first.save(pending))

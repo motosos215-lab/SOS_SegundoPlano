@@ -14,7 +14,8 @@
 
     <application
         android:allowBackup="false"
-        android:icon="@drawable/ic_wear_notification"
+        android:icon="@drawable/ic_motosos_shield"
+        android:roundIcon="@drawable/ic_motosos_shield"
         android:label="@string/app_name"
         android:theme="@style/Theme.MotoSOS.Wear">
         <meta-data
@@ -22,13 +23,17 @@
             android:value="false" />
 
         <activity
-            android:name=".WearPermissionActivity"
+            android:name=".WearMainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".WearPermissionActivity"
+            android:exported="false" />
 
         <service
             android:name=".WearSignalForegroundService"
@@ -51,6 +56,19 @@
                 <data
                     android:host="*"
                     android:pathPrefix="/motosos/validation"
+                    android:scheme="wear" />
+            </intent-filter>
+        </service>
+
+        <!-- RPC responses for the companion's handshake/status/snapshot requests. -->
+        <service
+            android:name=".MotoSosWearRpcService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.REQUEST_RECEIVED" />
+                <data
+                    android:host="*"
+                    android:pathPrefix="/motosos/v1"
                     android:scheme="wear" />
             </intent-filter>
         </service>

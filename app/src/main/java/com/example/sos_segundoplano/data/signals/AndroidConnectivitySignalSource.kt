@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import com.example.sos_segundoplano.domain.signals.ConnectivityPolicy
 import com.example.sos_segundoplano.domain.signals.NetworkTransport
 import com.example.sos_segundoplano.domain.signals.SignalAvailability
@@ -19,14 +18,14 @@ class AndroidConnectivitySignalSource(
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) = publish(network)
         override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) = publish(network)
-        override fun onLost(network: Network) = publish(null)
-        override fun onUnavailable() = publish(null)
+        override fun onLost(network: Network) = publish(connectivityManager.activeNetwork)
+        override fun onUnavailable() = publish(connectivityManager.activeNetwork)
     }
 
     override fun start() {
         if (started) return
         try {
-            connectivityManager.registerNetworkCallback(NetworkRequest.Builder().build(), callback)
+            connectivityManager.registerDefaultNetworkCallback(callback)
             started = true
             publish(connectivityManager.activeNetwork)
         } catch (_: SecurityException) {

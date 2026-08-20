@@ -51,3 +51,13 @@ data class RemoteLogoutFailed(
     val errorCode: String?,
     val sanitizedMessage: String?
 ) : AuthFailure
+
+
+data class ActiveSessionExists(val challenge: SessionTakeoverChallenge) : AuthFailure
+
+data class SessionTakeoverFailure(
+    val errorCode: String?,
+    val sanitizedMessage: String?
+) : AuthFailure
+
+data object SessionRevoked : AuthFailure

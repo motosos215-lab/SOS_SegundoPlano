@@ -150,6 +150,22 @@ class TripStartResourcesResolverTest {
         }
     }
 
+    @Test fun startLocationIsSentEvenWhenHorizontalAccuracyIsCoarse() = runBlocking {
+        val coarseButValid = location(timestampMillis = 1_723_456_000_000L).copy(accuracyMeters = 150f)
+        var request: StartTripRequestDto? = null
+        val starter = DefaultResolvedRemoteTripStarter(
+            AuthenticatedTripStartResourcesResolver(FakeAuthRepository(), FakeResourceDataSource(TripStartResourceLookupResult.Success(listOf(vehicle("vehicle", primary = true))), TripStartResourceLookupResult.Success(listOf(device("mobile", "MobileApp", primary = true))))),
+            RemoteTripStarter { request = it; TripMutationResult.Success("remote-trip", "Active") },
+            ManualSosLocationProvider { coarseButValid }
+        )
+
+        starter.startTrip()
+
+        assertEquals(150.0, request?.startLocation?.accuracyMeters)
+        assertEquals(coarseButValid.latitude, request?.startLocation?.latitude)
+        assertEquals(coarseButValid.longitude, request?.startLocation?.longitude)
+    }
+
     @Test fun startIncludesValidatedLocationAndUtcTimestamp() = runBlocking {
         val location = location(timestampMillis = 1_723_456_000_000L)
         var request: StartTripRequestDto? = null
