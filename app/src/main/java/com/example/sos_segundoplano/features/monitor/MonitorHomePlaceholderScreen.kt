@@ -1046,7 +1046,7 @@ private fun MonitorBottomBar(selected: MonitorTab, onSelect: (MonitorTab) -> Uni
         tonalElevation = 0.dp
     ) {
         MonitorBottomItem(MonitorTab.Home, selected, R.drawable.ic_nav_home, "Inicio", "monitor_bottom_home", onSelect)
-        MonitorBottomItem(MonitorTab.Incidents, selected, R.drawable.ic_alert_warning, "Incidentes", "monitor_bottom_incidents", onSelect)
+        MonitorBottomItem(MonitorTab.Incidents, selected, R.drawable.ic_motosos_notification, "Incidentes", "monitor_bottom_incidents", onSelect)
         MonitorBottomItem(MonitorTab.Map, selected, R.drawable.ic_location_pin, "Mapa", "monitor_bottom_map", onSelect)
         MonitorBottomItem(MonitorTab.Profile, selected, R.drawable.ic_nav_profile, "Perfil", "monitor_bottom_profile", onSelect)
     }
@@ -1078,7 +1078,7 @@ private fun androidx.compose.foundation.layout.RowScope.MonitorBottomItem(
                 } else {
                     if (compact) 43.dp else 48.dp
                 },
-                tint = if (iconRes == R.drawable.ic_alert_warning || iconRes == R.drawable.ic_time_history) null else color
+                tint = if (iconRes == R.drawable.ic_motosos_notification) null else color
             )
         },
         label = {

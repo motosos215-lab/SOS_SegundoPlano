@@ -21,11 +21,41 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Restore Firebase configuration
+        env:
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON_B64" ]; then
+            printf '%s\n' 'GOOGLE_SERVICES_JSON_B64 is not configured' >&2
+            exit 1
+          fi
+          if ! printf '%s' "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > app/google-services.json; then
+            printf '%s\n' 'Firebase configuration could not be restored' >&2
+            exit 1
+          fi
+          if [ ! -s app/google-services.json ]; then
+            printf '%s\n' 'Firebase configuration is empty' >&2
+            exit 1
+          fi
+
+      - name: Set up JDK
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set Gradle permissions
+        run: chmod +x ./gradlew
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3
         with:
           languages: java-kotlin
-          build-mode: none
+          build-mode: manual
+
+      - name: Build Kotlin for CodeQL
+        run: ./gradlew :app:compileDebugKotlin --no-daemon
 
       - name: Analyze
         uses: github/codeql-action/analyze@f3712979fa5f215279b101dd0a2e3bdfb4353324 # v3
